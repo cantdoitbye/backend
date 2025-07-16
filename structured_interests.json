@@ -1,0 +1,182 @@
+{
+    "Arts & Culture": [
+        "Painting",
+        "Sculpture",
+        "Photography",
+        "Music",
+        "Dance",
+        "Theater",
+        "Literature",
+        "Fashion Design",
+        "Film & Cinema"
+    ],
+    "Technology & Science": [
+        "Computing",
+        "Electronics & Gadgets",
+        "Space Exploration",
+        "Physics",
+        "Biology",
+        "Engineering",
+        "Green Technology",
+        "Cybersecurity"
+    ],
+    "Lifestyle & Hobbies": [
+        "Cooking",
+        "Home Improvement",
+        "Gardening",
+        "Travel",
+        "Pet Care",
+        "Fashion & Beauty",
+        "Health & Fitness",
+        "Personal Finance"
+    ],
+    "Sports & Recreation": [
+        "Individual Sports",
+        "Team Sports",
+        "Adventure Sports",
+        "Martial Arts",
+        "Esports & Gaming",
+        "Outdoor Activities",
+        "Water Sports"
+    ],
+    "Business & Career": [
+        "Entrepreneurship",
+        "Marketing & Sales",
+        "Leadership",
+        "Finance",
+        "Product Management",
+        "Human Resources",
+        "Freelancing"
+    ],
+    "Education & Learning": [
+        "Online Learning",
+        "Language Learning",
+        "STEM Education",
+        "Test Preparation",
+        "Vocational Skills",
+        "Soft Skills",
+        "EdTech"
+    ],
+    "Politics & Current Events": [
+        "National Politics",
+        "International Affairs",
+        "Social Issues",
+        "Local Issues",
+        "Activism"
+    ],
+    "Relationships & Community": [
+        "Parenting",
+        "Mental Health",
+        "Dating & Relationships",
+        "Spirituality",
+        "Volunteerism"
+    ],
+    "Entertainment & Pop Culture": [
+        "TV & Streaming",
+        "Books & Literature",
+        "Celebrities",
+        "Comedy",
+        "Events & Festivals"
+    ],
+    "Food & Drink": [
+        "Cuisines",
+        "Beverages",
+        "Diet & Nutrition",
+        "Food Photography",
+        "Food Business"
+    ],
+    "Nature & Environment": [
+        "Wildlife Conservation",
+        "Ecosystems",
+        "Sustainable Practices",
+        "Climate Change",
+        "Outdoor Adventure"
+    ],
+    "DIY & Crafts": [
+        "Handmade Crafts",
+        "Upcycling",
+        "Home Projects",
+        "Paper Crafts"
+    ],
+    "Health & Wellness": [
+        "Physical Wellness",
+        "Mental Wellness",
+        "Alternative Medicine",
+        "Holistic Living"
+    ],
+    "Animals & Pets": [
+        "Pet Training",
+        "Animal Care",
+        "Exotic Animals",
+        "Animal Welfare"
+    ],
+    "Home & Interior Design": [
+        "Interior Decorating",
+        "DIY Home Projects",
+        "Feng Shui & Vastu",
+        "Home Technology"
+    ],
+    "Automobiles & Vehicles": [
+        "Automobile Technology",
+        "Motorcycle Enthusiasts",
+        "Vintage Cars",
+        "Eco-Friendly Vehicles"
+    ],
+    "Personal Development": [
+        "Self-Improvement",
+        "Communication Skills",
+        "Productivity",
+        "Confidence Building"
+    ],
+    "Finance & Investing": [
+        "Stock Market",
+        "Cryptocurrency",
+        "Financial Independence",
+        "Real Estate Investing"
+    ],
+    "Photography & Videography": [
+        "Camera Techniques",
+        "Editing",
+        "Videography",
+        "Portraits",
+        "Landscapes",
+        "Wildlife",
+        "Street Photography"
+    ],
+    "Gaming & Esports": [
+        "PC Gaming",
+        "Console Gaming",
+        "Mobile Gaming",
+        "Esports Tournaments"
+    ],
+    "Fashion & Style": [
+        "Men\u2019s Fashion",
+        "Women\u2019s Fashion",
+        "Seasonal Trends",
+        "Sustainable Fashion"
+    ],
+    "Parenting & Family": [
+        "Pregnancy & Newborns",
+        "Child Development",
+        "Parenting Tips",
+        "Family Travel"
+    ],
+    "Social Media & Digital Marketing": [
+        "Content Creation",
+        "Digital Advertising",
+        "Branding",
+        "Analytics"
+    ],
+    "Travel & Tourism": [
+        "Adventure Travel",
+        "Cultural Travel",
+        "Budget Travel",
+        "Luxury Travel"
+    ],
+    "History & Philosophy": [
+        "Ancient Civilizations",
+        "Modern History",
+        "Philosophy & Ethics",
+        "Mythology & Folklore"
+    ]
+}

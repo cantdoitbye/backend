@@ -1,0 +1,34 @@
+docker run -d   --publish=7474:7474 --publish=7687:7687   --volume=$HOME/neo4j/data:/data   neo4j
+
+docker run --name datavault003 -e POSTGRES_PASSWORD=ooumphdatavault003 -p 5432:5432 -v pgdata:/var/lib/postgresql/data -d postgres
+
+docker run -d --name redis-container -p 6379:6379 redis redis-server --requirepass ooumphmemoriDB003
+
+
+docker run -d -p 9000:9000 -p 9001:9001 -v /root/ooumph-media:/data quay.io/minio/minio server /data --console-address ":9001" --access-key ooumphmedia --secret-key ooumphMedia001
+
+docker run -d \
+  --name minio \
+  -p 9000:9000 \
+  -p 9001:9001 \
+  -v /root/ooumph-media:/data \
+  -e "MINIO_ROOT_USER=ooumphmedia" \
+  -e "MINIO_ROOT_PASSWORD=ooumphMedia001" \
+  quay.io/minio/minio server /data --console-address ":9001"
+
+
+
+sudo chown 472:472 /var/lib/grafana
+
+docker run --rm \
+  --volume=$HOME/neo4j/data:/data \
+  --volume=$HOME/neo4j/backups:/backups \
+  neo4j \
+  neo4j-admin database dump neo4j --to-path=/backups
+
+  ls -lh $HOME/neo4j/backups
+
+  docker start grafana
+
+
+  tar -czvf ./minio_backup_$(date +%Y%m%d).tar.gz -C /root ooumph-media

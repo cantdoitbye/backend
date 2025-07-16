@@ -1,0 +1,42 @@
+gunicorn --bind 0.0.0.0:8000 socialooumph.wsgi
+deactivate
+
+
+[Unit]
+Description=gunicorn daemon
+Requires=gunicorn.socket
+After=network.target
+
+[Service]
+User=root
+Group=www-data
+WorkingDirectory=/root/ooumph_social_backend_neo4j
+ExecStart=/root/ooumph_social_backend_neo4j/oenv/bin/gunicorn \
+          --access-logfile - \
+          --workers 3 \
+          --bind unix:/run/gunicorn.sock \
+          socialooumph.wsgi:application
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl start gunicorn.socket
+sudo systemctl enable gunicorn.socket
+
+sudo systemctl status gunicorn.socket
+
+file /run/gunicorn.sock
+
+sudo journalctl -u gunicorn.socket
+
+curl --unix-socket /run/gunicorn.sock localhost
+
+sudo systemctl status gunicorn
+
+sudo journalctl -u gunicorn
+
+sudo systemctl daemon-reload
+sudo systemctl restart gunicorn
+
+sudo apt-get install libpq-dev

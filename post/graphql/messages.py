@@ -1,0 +1,26 @@
+from django.utils.translation import gettext_lazy as _
+
+class PostMessages:
+    POST_CREATED = _("Your post has been successfully created.")
+    POST_UPDATED = _("Your post has been successfully updated.")
+    POST_DELETED=_("Your post has been successfully deleted.")
+    POST_COMMENT_CREATED = _("Your comment has been successfully created.")
+    POST_COMMENT_UPDATED = _("Your comment has been successfully updated.")
+    POST_COMMENT_DELETED=_("Your comment has been successfully deleted.")
+    POST_REACTION_CREATED = _("Your reaction has been successfully created.")
+    POST_REACTION_UPDATED = _("Your reaction has been successfully updated.")
+    POST_REACTION_DELETED=_("Your reaction has been successfully deleted.")
+    POST_REVIEW_CREATED = _("Your review has been successfully created.")
+    POST_REVIEW_UPDATED = _("Your review has been successfully updated.")
+    POST_REVIEW_DELETED=_("Your review has been successfully deleted.")
+    POST_TAG_CREATED = _("Your tag has been successfully created.")
+    POST_TAG_UPDATED = _("Your tag has been successfully updated.")
+    POST_TAG_DELETED=_("Your tag has been successfully deleted.")
+    POST_VIEW=_("You have viewed the post.")
+    POST_SHARE=_("You have share the post")
+    POST_SAVED=_("You have saved the post")
+    POST_UNSAVED=_("You have unsave the post")
+    POST_PINNED=_("You have pin the post")
+    POST_UNPINNED=_("You have unpinned the post")
+    POST_DELETE_PERMISSION_DENIED=_("You do not have permission to delete this post.")
+

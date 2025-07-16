@@ -1,0 +1,14 @@
+Get-Process | Where-Object { $_.ProcessName -like '*celery*' }
+celery -A socialooumph worker --loglevel=info
+celery -A socialooumph worker 
+Stop-Process -Name celery -Force
+
+
+Linux 
+
+sudo systemctl restart celery
+sudo systemctl status celery
+ps aux | grep 'celery worker'
+kill -9 PID
+
+celery -A your_project_name worker --loglevel=info

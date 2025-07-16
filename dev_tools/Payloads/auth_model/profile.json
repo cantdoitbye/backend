@@ -1,0 +1,74 @@
+mutation {
+    createProfile(
+        gender: "Male"
+        deviceId: "12345"
+        fcmToken: "abcde12345"
+        bio: "This is a sample bio"
+        repoScore: 10.0
+        designation: "Software Developer"
+        worksat: "Tech Company"
+        phoneNumber: "123-456-7890"
+        born: "1990-01-01T00:00:00"
+        school: "Sample High School"
+        college: "Sample University"
+        livesIn: "Sample City"
+        gmailId: "sample@gmail.com"
+        fbId: "sample_fb"
+        instaId: "sample_insta"
+        linkedinId: "sample_linkedin"
+        appleId: "sample_apple"
+        vibersCount: 50.0
+        cumulativeVibescore: 100.0
+        intelligenceScore: 80.0
+        appealScore: 70.0
+        socialScore: 90.0
+        humanScore: 85.0
+        profilePic: "http://example.com/profile_pic.jpg"
+        professionalLife: "Working in tech"
+        interests: "Coding, Reading"
+        isEmailVerified: true
+        isPhoneVerified: false
+        lastEmailOtp: "123456"
+        lastPhoneOtp: "654321"
+        aiCommenting: false
+        usernameUpdated: true
+    ) {
+        profile {
+            userId
+            gender
+            deviceId
+            fcmToken
+            bio
+            repoScore
+            designation
+            worksat
+            phoneNumber
+            born
+            school
+            college
+            livesIn
+            gmailId
+            fbId
+            instaId
+            linkedinId
+            appleId
+            vibersCount
+            cumulativeVibescore
+            intelligenceScore
+            appealScore
+            socialScore
+            humanScore
+            profilePic
+            professionalLife
+            interests
+            isEmailVerified
+            isPhoneVerified
+            lastEmailOtp
+            lastPhoneOtp
+            aiCommenting
+            usernameUpdated
+        }
+        success
+        message
+    }
+}
