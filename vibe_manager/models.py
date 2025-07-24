@@ -176,7 +176,7 @@ class ServiceVibe(models.Model):
     weightage_seq = models.IntegerField()  # Service Excellence Quotient
     weightage_srq = models.IntegerField()  # Service Reliability Quotient
     weightage_ssq = models.IntegerField()  # Service Social Quotient
-    weightage_suq = models.IntegerProperty()  # Service User Experience Quotient
+    weightage_suq = models.IntegerField()  # Service User Experience Quotient
     
     def __str__(self):
         return f"Service Vibe: {self.name_of_vibe}"

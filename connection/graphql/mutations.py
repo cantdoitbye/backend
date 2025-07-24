@@ -1,3 +1,24 @@
+"""Connection GraphQL Mutations
+
+This module contains all GraphQL mutations for managing user connections in the social platform.
+It provides functionality for creating, updating, and deleting connections between users,
+as well as managing connection circles and relationships.
+
+The module includes both legacy (v1) and new (v2) implementations of connection mutations,
+with v2 providing enhanced features and improved data structures.
+
+Key Features:
+- Connection creation and management
+- Circle-based relationship categorization (Inner, Outer, Universal)
+- Bidirectional and unidirectional relationship support
+- Real-time notifications for connection events
+- Connection statistics tracking
+- Authorization and permission checks
+
+Author: Development Team
+Version: 2.0
+"""
+
 import graphene
 from graphene import Mutation
 from graphql import GraphQLError
@@ -19,6 +40,31 @@ import asyncio
 from connection.services.notification_service import NotificationService
 
 class CreateConnection(Mutation):
+    """Legacy Connection Creation Mutation (Deprecated)
+    
+    Creates a new connection request between two users using the legacy connection system.
+    This mutation is deprecated in favor of CreateConnectionV2 which provides enhanced
+    features and better data structure.
+    
+    Features:
+    - Prevents duplicate connection requests
+    - Creates circle-based relationships
+    - Sends push notifications to receiver
+    - Updates connection statistics
+    - Supports Inner, Outer, and Universal circles
+    
+    Returns:
+        connection (ConnectionType): The created connection object
+        success (Boolean): Whether the operation was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: For various business logic violations
+    
+    Note:
+        This mutation is deprecated. Use CreateConnectionV2 instead.
+    """
     connection = graphene.Field(ConnectionType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -29,6 +75,15 @@ class CreateConnection(Mutation):
     @handle_graphql_connection_errors
     @login_required
     def mutate(self, info, input):
+        """Execute the connection creation mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (CreateConnectionInput): Input data for creating connection
+            
+        Returns:
+            CreateConnection: Mutation result with connection data
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -95,6 +150,32 @@ class CreateConnection(Mutation):
 
 
 class UpdateConnection(Mutation):
+    """Legacy Connection Update Mutation
+    
+    Updates the status of an existing connection request (accept, reject, cancel).
+    Handles authorization checks and updates connection statistics accordingly.
+    
+    Supported Operations:
+    - Accept connection request (updates circle counts)
+    - Reject connection request
+    - Cancel sent connection request
+    
+    Features:
+    - Authorization validation (only receiver can accept/reject)
+    - Connection statistics updates
+    - Circle count management
+    - Push notifications for status changes
+    - Prevents duplicate status updates
+    
+    Returns:
+        connection (ConnectionType): The updated connection object
+        success (Boolean): Whether the operation was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: For authorization failures or invalid operations
+    """
     connection = graphene.Field(ConnectionType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -105,6 +186,15 @@ class UpdateConnection(Mutation):
     @handle_graphql_connection_errors
     @login_required
     def mutate(self, info, input):
+        """Execute the connection update mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (UpdateConnectionInput): Input data for updating connection
+            
+        Returns:
+            UpdateConnection: Mutation result with updated connection data
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -214,6 +304,27 @@ class UpdateConnection(Mutation):
             return UpdateConnection(connection=None, success=False, message=message)
 
 class DeleteConnection(Mutation):
+    """Connection Deletion Mutation
+    
+    Permanently deletes a connection between two users. This operation removes
+    the connection record and all associated data from the database.
+    
+    Features:
+    - Complete connection removal
+    - Authorization checks
+    - Cascade deletion of related data
+    
+    Returns:
+        success (Boolean): Whether the deletion was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If connection not found or deletion fails
+        
+    Warning:
+        This operation is irreversible. Use with caution.
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -223,6 +334,15 @@ class DeleteConnection(Mutation):
     @handle_graphql_connection_errors        
     @login_required
     def mutate(self, info, input):
+        """Execute the connection deletion mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (DeleteInput): Input data containing connection UID to delete
+            
+        Returns:
+            DeleteConnection: Mutation result with success status
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -239,8 +359,34 @@ class DeleteConnection(Mutation):
             return DeleteConnection(success=False, message=message)
 
 
-# Note:- Optimisation and review needed
 class UpdateConnectionRelationOrCircle(Mutation):
+    """Legacy Connection Relationship/Circle Update Mutation
+    
+    Updates the relationship type or circle classification of an existing accepted connection.
+    Only works with connections that have been accepted by both parties.
+    
+    Features:
+    - Circle type modification (Inner, Outer, Universal)
+    - Sub-relationship updates
+    - Connection statistics recalculation
+    - Authorization for both connection parties
+    
+    Circle Types:
+    - Inner: Close personal connections
+    - Outer: Professional or acquaintance connections  
+    - Universal: Public or broad network connections
+    
+    Returns:
+        success (Boolean): Whether the update was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If connection not accepted or user unauthorized
+        
+    Note:
+        Requires optimization and review as indicated in original code.
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -250,6 +396,15 @@ class UpdateConnectionRelationOrCircle(Mutation):
     @handle_graphql_connection_errors       
     @login_required
     def mutate(self, info, input):
+        """Execute the connection relationship/circle update mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (UpdateConnectionRelationOrCircleInput): Input data for updating relationship
+            
+        Returns:
+            UpdateConnectionRelationOrCircle: Mutation result with success status
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -310,6 +465,35 @@ class UpdateConnectionRelationOrCircle(Mutation):
 
 
 class CreateConnectionV2(Mutation):
+    """Enhanced Connection Creation Mutation (V2)
+    
+    Creates a new connection request using the improved V2 connection system.
+    This version provides enhanced features including bidirectional relationships,
+    improved data structures, and better relationship management.
+    
+    Key Improvements over V1:
+    - Enhanced relationship directionality support
+    - Improved circle management with user-specific relations
+    - Better data structure for scalability
+    - Advanced relationship modification tracking
+    - Feature flag protection for gradual rollout
+    
+    Features:
+    - Bidirectional and unidirectional relationship support
+    - Advanced circle management with CircleV2
+    - Relationship modification count tracking
+    - Duplicate connection prevention
+    - Connection statistics updates
+    
+    Returns:
+        connection (ConnectionType): The created connection object (currently None)
+        success (Boolean): Whether the operation was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated or feature not enabled
+        Exception: For various business logic violations
+    """
     connection = graphene.Field(ConnectionType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -320,6 +504,15 @@ class CreateConnectionV2(Mutation):
     @handle_graphql_connection_errors
     @login_required
     def mutate(self, info, input):
+        """Execute the V2 connection creation mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (CreateConnectionInputV2): Input data for creating V2 connection
+            
+        Returns:
+            CreateConnectionV2: Mutation result with connection data
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -401,6 +594,34 @@ class CreateConnectionV2(Mutation):
 
 
 class UpdateConnectionV2(Mutation):
+    """Enhanced Connection Update Mutation (V2)
+    
+    Updates the status of a V2 connection request with simplified logic
+    compared to the legacy version. Focuses on core status changes without
+    complex statistics management.
+    
+    Supported Operations:
+    - Accept connection request
+    - Reject connection request  
+    - Cancel sent connection request
+    
+    Features:
+    - Simplified authorization logic
+    - Basic status validation
+    - Streamlined update process
+    - Error handling and messaging
+    
+    Returns:
+        success (Boolean): Whether the operation was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: For authorization failures or invalid operations
+        
+    Note:
+        Connection field is commented out, indicating simplified return structure.
+    """
     # connection = graphene.Field(ConnectionType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -411,6 +632,15 @@ class UpdateConnectionV2(Mutation):
     @handle_graphql_connection_errors
     @login_required
     def mutate(self, info, input):
+        """Execute the V2 connection update mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (UpdateConnectionInput): Input data for updating V2 connection
+            
+        Returns:
+            UpdateConnectionV2: Mutation result with success status
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -462,6 +692,35 @@ class UpdateConnectionV2(Mutation):
 
 
 class UpdateConnectionRelationOrCircleV2(Mutation):
+    """Enhanced Connection Relationship/Circle Update Mutation (V2)
+    
+    Updates relationship types and circles for V2 connections with advanced features
+    including modification count limits and bidirectional relationship handling.
+    
+    Key Features:
+    - Modification count tracking (max 4 changes per user)
+    - Bidirectional relationship synchronization
+    - Unidirectional relationship support
+    - Advanced circle management with CircleV2
+    - User-specific relationship data
+    
+    Relationship Types:
+    - Bidirectional: Changes affect both users symmetrically
+    - Unidirectional: Changes affect only the initiating user
+    
+    Limitations:
+    - Maximum 4 relationship modifications per user per connection
+    - Only works with accepted connections
+    - Requires authorization from connection participants
+    
+    Returns:
+        success (Boolean): Whether the update was successful
+        message (String): Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If connection not accepted, user unauthorized, or modification limit exceeded
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -471,6 +730,15 @@ class UpdateConnectionRelationOrCircleV2(Mutation):
     @handle_graphql_connection_errors       
     @login_required
     def mutate(self, info, input):
+        """Execute the V2 connection relationship/circle update mutation.
+        
+        Args:
+            info: GraphQL execution info containing user context
+            input (UpdateConnectionRelationOrCircleInputV2): Input data for updating V2 relationship
+            
+        Returns:
+            UpdateConnectionRelationOrCircleV2: Mutation result with success status
+        """
         try:
             user = info.context.user
             if user.is_anonymous:
@@ -529,6 +797,23 @@ class UpdateConnectionRelationOrCircleV2(Mutation):
 
 
 class Mutation(graphene.ObjectType):
+    """Legacy Connection Mutations Schema
+    
+    Contains all legacy (V1) connection mutations with mixed V1/V2 support.
+    This schema is maintained for backward compatibility while transitioning
+    to the new V2 system.
+    
+    Available Mutations:
+    - send_connection: Legacy connection creation (deprecated)
+    - send_connection_v2: New V2 connection creation (recommended)
+    - update_connection: Legacy connection updates
+    - delete_connection: Connection deletion (shared between V1/V2)
+    - update_connection_relation_or_circle: Legacy relationship updates
+    
+    Migration Path:
+    - Use send_connection_v2 instead of send_connection
+    - Consider MutationV2 schema for full V2 experience
+    """
     # send_connection=CreateConnection.Field()
     send_connection = CreateConnection.Field(
         description="⚠️ Deprecated! Use sendConnectionV2 instead."
@@ -541,6 +826,28 @@ class Mutation(graphene.ObjectType):
 
 
 class MutationV2(graphene.ObjectType):
+    """Enhanced Connection Mutations Schema (V2)
+    
+    Contains all V2 connection mutations providing the latest features
+    and improved functionality for connection management.
+    
+    Available Mutations:
+    - send_connection: V2 connection creation with enhanced features
+    - update_connection: V2 connection updates with simplified logic
+    - delete_connection: Connection deletion (shared with V1)
+    - update_connection_relation_or_circle: V2 relationship updates with advanced features
+    
+    Key Improvements:
+    - Enhanced relationship directionality
+    - Advanced circle management
+    - Modification count tracking
+    - Improved data structures
+    - Better scalability
+    
+    Recommended Usage:
+    Use this schema for new implementations requiring the latest
+    connection management features.
+    """
     send_connection=CreateConnectionV2.Field()
     update_connection=UpdateConnectionV2.Field()
     delete_connection=DeleteConnection.Field()

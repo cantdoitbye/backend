@@ -54,7 +54,7 @@ def generate_presigned_url(image_id, user):
             endpoint=extract_hostname(settings.AWS_S3_ENDPOINT_URL),
             access_key=settings.AWS_ACCESS_KEY_ID,
             secret_key=settings.AWS_SECRET_ACCESS_KEY,
-            secure=False
+            secure=True
         )
         try:
             url = client.presigned_get_object(settings.AWS_STORAGE_BUCKET_NAME, image.file.name)

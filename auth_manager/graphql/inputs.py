@@ -24,12 +24,20 @@ class CreateUserInput(graphene.InputObjectType):
     email = custom_graphql_validator.String.add_option("email", "CreateUser")(required=True)
     password = custom_graphql_validator.String.add_option("password", "CreateUser")(required=True)
     user_type=custom_graphql_validator.String.add_option("userType", "CreateUser")(required=False)
+    invite_token = custom_graphql_validator.String.add_option("inviteToken", "CreateUser")(required=False)
+
 
 class CreateUserInputV2(graphene.InputObjectType):
     email = custom_graphql_validator.String.add_option("email", "CreateUserV2")(required=True)
     password = custom_graphql_validator.String.add_option("password", "CreateUserV2")(required=True)
     user_type=custom_graphql_validator.String.add_option("userType", "CreateUserV2")(required=False)
     invite_token=custom_graphql_validator.String.add_option("inviteToken", "CreateUserV2")(required=False)
+
+class SocialLoginInput(graphene.InputObjectType):
+    provider = graphene.String(required=True)  # 'google' or 'facebook'
+    access_token = graphene.String(required=True)
+    invite_token = custom_graphql_validator.String.add_option("inviteToken", "SocialLogin")(required=False)
+
 
 
 

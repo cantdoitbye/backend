@@ -50,25 +50,95 @@ from auth_manager.services.email_template import generate_payload
 from auth_manager.redis import *
 
 class UploadContactType(DjangoObjectType):
+    """
+    GraphQL type for UploadContact model.
+    
+    Represents uploaded contact information in the GraphQL schema,
+    providing access to contact data fields through GraphQL queries.
+    
+    Meta:
+        model: UploadContact Django model
+    """
     class Meta:
         model = UploadContact
 
 class OTPType(DjangoObjectType):
+    """
+    GraphQL type for OTP (One-Time Password) model.
+    
+    Represents OTP records in the GraphQL schema, used for
+    authentication and verification processes.
+    
+    Meta:
+        model: OTP Django model
+    """
     class Meta:
         model = OTP
 
 
 class InviteType(DjangoObjectType):
+    """
+    GraphQL type for Invite model.
+    
+    Represents invitation records in the GraphQL schema,
+    exposing all fields for invite management operations.
+    
+    Meta:
+        model: Invite Django model
+        fields: All model fields are exposed
+    """
     class Meta:
         model = Invite
         fields = "__all__"
 
 class OTPPurpose(GrapheneEnum):
+    """
+    GraphQL enum for OTP purpose types.
+    
+    Defines the different purposes for which OTPs can be generated,
+    mapping to the underlying OtpPurposeEnum values.
+    
+    Values:
+        FORGET_PASSWORD: OTP for password reset functionality
+        EMAIL_VERIFICATION: OTP for email address verification
+        OTHER: OTP for other miscellaneous purposes
+    """
     FORGET_PASSWORD = OtpPurposeEnum.FORGET_PASSWORD.value
     EMAIL_VERIFICATION = OtpPurposeEnum.EMAIL_VERIFICATION.value
     OTHER = OtpPurposeEnum.OTHER.value
 
 class CreateUser(Mutation):
+    """
+    Creates a new user account with authentication tokens.
+    
+    This mutation handles user registration by creating accounts in both
+    Django's User model and Neo4j's Users node, then generates JWT tokens
+    for immediate authentication.
+    
+    Args:
+        input (CreateUserInput): User creation data containing:
+            - email: User's email address (used as username)
+            - password: User's password
+            - user_type: Type of user account (defaults to "personal")
+    
+    Returns:
+        CreateUser: Response containing:
+            - user: Created user object from Neo4j
+            - token: JWT access token
+            - refresh_token: JWT refresh token
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user already exists in Django or Neo4j
+        Exception: For validation errors or database issues
+    
+    Note:
+        - Validates email and password before creation
+        - Creates user in both Django (SQLite) and Neo4j databases
+        - Automatically generates authentication tokens
+        - Sets user_type in Neo4j node
+    """
     user = graphene.Field(UserType)
     token = graphene.String()
     refresh_token = graphene.String()
@@ -84,6 +154,8 @@ class CreateUser(Mutation):
             email = input.get('email')
             password=input.get('password')
             user_type = input.get("user_type", "personal")
+            invite_token = input.get('invite_token')
+
             user_validations.validate_create_user_inputs(email=email,password=password)
             # Check if user exists in SQLite
             if User.objects.filter(email=email).exists():
@@ -91,6 +163,39 @@ class CreateUser(Mutation):
             
             if Users.nodes.get_or_none(email=email):
                 raise GraphQLError(f"User with email {email} already exists in Neo4j")
+            invite = None
+            secondary_user = None
+            if invite_token:    
+                invite = Invite.objects.filter(invite_token=invite_token, is_deleted=False).first()
+
+                if not invite:
+                    return CreateUser(
+                        user=None,
+                        token=None,
+                        refresh_token=None,
+                        success=False,
+                        message="Please provide a correct token."
+                    )
+
+                # Check if the invite is expired
+                if invite.expiry_date < timezone.now():
+                    return CreateUser(
+                        user=None,
+                        token=None,
+                        refresh_token=None,
+                        success=False,
+                        message="This invite link has expired."
+                    )
+                
+                secondary_user = invite.inviter
+                if not secondary_user:
+                    return CreateUser(
+                        user=None,
+                        token=None,
+                        refresh_token=None,
+                        success=False,
+                        message="Inviter not found."
+                    )
 
             user=User.objects.create(
                 username=email,
@@ -105,6 +210,51 @@ class CreateUser(Mutation):
             user_node.save()
             user=UserType.from_neomodel(user_node)
 
+            # Process invite
+            if invite and secondary_user:
+                try:
+                    secondary_user_node = Users.nodes.get(user_id=str(secondary_user.id))
+                    
+                    # Create connection between inviter and new user
+                    connection = ConnectionV2(
+                        connection_status="Accepted",
+                    )
+                    connection.save()
+                    connection.receiver.connect(secondary_user_node)
+                    connection.created_by.connect(user_node)
+                   
+                    user_node.connectionv2.connect(connection)
+                    secondary_user_node.connectionv2.connect(connection)
+
+                    # Create circle relationship
+                    circle_choice = CircleV2(
+                        initial_sub_relation="friend",
+                        initial_directionality="Unidirectional",
+                        user_relations={
+                            user_node.uid: {
+                                "sub_relation": "friend",
+                                "circle_type": "Outer",
+                                "sub_relation_modification_count": 0
+                            },
+                            secondary_user_node.uid: {
+                                "sub_relation": "Friend",
+                                "circle_type": "Outer",
+                                "sub_relation_modification_count": 0
+                            }
+                        }
+                    )
+                    circle_choice.save()
+                    connection.circle.connect(circle_choice)
+
+                    invite.usage_count += 1
+                    invite.last_used_timestamp = timezone.now()
+                    invite.login_users.add(user)
+                    invite.save()
+                    
+                except Exception as e:
+                    # Log the error but don't fail the user creation
+                    print(f"Error processing invite connection: {e}")
+
 
             return CreateUser(user=user, token=token,refresh_token =refresh_token,success=True,message=UserMessages.ACCOUNT_CREATED)
         except Exception as error:
@@ -113,6 +263,46 @@ class CreateUser(Mutation):
 
 
 class CreateProfile(Mutation):
+    """
+    Creates a user profile with detailed personal information.
+    
+    This mutation creates a comprehensive user profile in Neo4j with
+    personal, professional, and preference data. Requires superuser
+    privileges and prevents duplicate profile creation.
+    
+    Args:
+        input (CreateProfileInput): Profile data containing:
+            - gender: User's gender
+            - device_id: Device identifier
+            - fcm_token: Firebase Cloud Messaging token
+            - bio: User biography
+            - designation: Job title/designation
+            - worksat: Workplace information
+            - phone_number: Contact phone number
+            - born: Birth date
+            - school: School information
+            - college: College information
+            - lives_in: Current location
+            - profile_pic_id: Profile picture ID
+            - professional_life: Professional background
+            - ai_commenting: AI commenting preference
+            - cover_image_id: Cover image ID
+    
+    Returns:
+        CreateProfile: Response containing:
+            - profile: Created profile object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If profile already exists or creation fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Prevents duplicate profiles for the same user
+        - Creates bidirectional relationship between user and profile
+        - Supports extensive profile customization options
+    """
     profile = graphene.Field(ProfileType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -185,6 +375,48 @@ class CreateProfile(Mutation):
 
 
 class UpdateUserProfile(graphene.Mutation):
+    """
+    Updates user profile information and onboarding status.
+    
+    This mutation allows authenticated users to update their profile
+    information including personal details, location, and preferences.
+    It also tracks onboarding completion status for various fields.
+    
+    Args:
+        input (UpdateProfileInput): Profile update data containing:
+            - first_name: User's first name
+            - last_name: User's last name
+            - device_id: Device identifier
+            - gender: User's gender
+            - fcm_token: Firebase Cloud Messaging token
+            - bio: User biography
+            - state: User's state/province
+            - city: User's city
+            - designation: Job title/designation
+            - phone_number: Contact phone number
+            - born: Birth date
+            - dob: Date of birth
+            - lives_in: Current location
+            - profile_pic_id: Profile picture ID
+            - cover_image_id: Cover image ID
+    
+    Returns:
+        UpdateUserProfile: Response containing:
+            - profile: Updated profile object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: For validation errors or update failures
+    
+    Note:
+        - Requires user authentication
+        - Updates both Django User model and Neo4j Profile node
+        - Validates image IDs and date of birth
+        - Tracks onboarding completion status
+        - Updates onboarding flags when fields are set
+    """
     # user = graphene.Field(UserType)
     profile = graphene.Field(ProfileType)
     success=graphene.Boolean()
@@ -313,6 +545,34 @@ def delete_user(user):
         raise e
 
 class DeleteUserAccount(graphene.Mutation):
+    """
+    Deletes or deactivates a user account.
+    
+    This mutation provides two options for removing user accounts:
+    deactivation (sets is_active=False) or complete deletion from
+    both Django and Neo4j databases.
+    
+    Args:
+        input (DeleteUserAccountInput): Deletion data containing:
+            - username: Username of the account to delete
+            - deleteType: Type of deletion ("deactivation" or "delete")
+    
+    Returns:
+        DeleteUserAccount: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not found
+        Exception: For database operation failures
+    
+    Note:
+        - Requires login and superuser privileges
+        - "deactivation" sets user.is_active = False
+        - "delete" removes user and profile from databases
+        - Uses transaction for safe deletion
+        - Validates deleteType parameter
+    """
     class Arguments:
         input=DeleteUserAccountInput()
 
@@ -340,6 +600,32 @@ class DeleteUserAccount(graphene.Mutation):
 
 #Delete Profile 
 class DeleteUserProfile(graphene.Mutation):
+    """
+    Deletes a user's profile from the Neo4j database.
+    
+    This mutation removes a user's profile while keeping the user
+    account intact. The operation is performed within a transaction
+    to ensure data consistency.
+    
+    Args:
+        input (DeleteUserProfileInput): Profile deletion data containing:
+            - username: Username of the profile to delete
+    
+    Returns:
+        DeleteUserProfile: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If profile is not found or deletion fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Uses Neo4j transaction for safe deletion
+        - Only deletes the profile, not the user account
+        - Maintains referential integrity
+    """
     class Arguments:
         input=DeleteUserProfileInput()
 
@@ -375,6 +661,39 @@ class DeleteUserProfile(graphene.Mutation):
     # Return True 
 
 class LoginUsingUsernameEmail(graphene.Mutation):
+    """
+    Authenticates a user using username/email and password.
+    
+    This mutation handles user authentication, generates JWT tokens,
+    updates last login time, stores device ID, and manages Matrix
+    chat integration for authenticated users.
+    
+    Args:
+        input (LoginInput): Login credentials containing:
+            - usernameEmail: Username or email address
+            - password: User's password
+            - device_id: Optional device identifier
+    
+    Returns:
+        LoginUsingUsernameEmail: Response containing:
+            - user: Authenticated user object
+            - token: JWT access token
+            - refresh_token: JWT refresh token
+            - success: Boolean indicating authentication success
+            - message: Success or error message
+            - chat_available: Boolean indicating Matrix chat availability
+            - matrix_profile: Matrix profile information
+    
+    Raises:
+        Exception: If authentication fails or user not found
+    
+    Note:
+        - Supports login with username or email
+        - Automatically handles Matrix chat registration/login
+        - Stores device ID in user profile if provided
+        - Updates last login timestamp
+        - Gracefully handles Matrix service failures
+    """
     user = graphene.Field(UserType)
     token = graphene.String()
     refresh_token = graphene.String()
@@ -456,6 +775,27 @@ class LoginUsingUsernameEmail(graphene.Mutation):
             return LoginUsingUsernameEmail(user=None,success=False,message=message, matrix_profile=None)
         
 class Logout(graphene.Mutation):
+    """
+    Logs out the authenticated user and cleans up session data.
+    
+    This mutation handles user logout by removing device ID from
+    the user's profile and performing necessary cleanup operations.
+    
+    Returns:
+        Logout: Response containing:
+            - success: Boolean indicating logout success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If logout process fails
+    
+    Note:
+        - Requires user authentication
+        - Removes device ID from user profile
+        - Gracefully handles cleanup failures
+        - Does not invalidate JWT tokens (client-side responsibility)
+    """
     success = graphene.Boolean()
     message = graphene.String()
     @login_required
@@ -487,6 +827,33 @@ class Logout(graphene.Mutation):
 
 
 class SearchUsername(graphene.Mutation):
+    """
+    Checks username availability and provides suggestions if unavailable.
+    
+    This mutation validates a username and returns availability status.
+    If the username is taken, it generates alternative suggestions
+    based on the requested username and user's email.
+    
+    Args:
+        username (str): The username to check for availability
+    
+    Returns:
+        SearchUsername: Response containing:
+            - suggested_usernames: List of available username suggestions
+            - success: Boolean indicating if username is available
+            - message: Availability status message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        ValidationError: If username format is invalid
+        Exception: If username check fails
+    
+    Note:
+        - Requires user authentication
+        - Validates username format before checking availability
+        - Generates intelligent suggestions using email and base username
+        - Limits suggestion search to 50 similar usernames for performance
+    """
     class Arguments:
         username = graphene.String(required=True)
 
@@ -517,6 +884,35 @@ class SearchUsername(graphene.Mutation):
           
 
 class SelectUsername(Mutation):
+    """
+    Sets the username for an authenticated user during onboarding.
+    
+    This mutation allows users to select and set their username,
+    updates their Matrix profile display name, and marks the
+    username selection step as completed in onboarding.
+    
+    Args:
+        input (SelectUsernameInput): Username selection data containing:
+            - username: The chosen username
+    
+    Returns:
+        SelectUsername: Response containing:
+            - user: Updated user object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated or username is taken
+        ValidationError: If username format is invalid
+        Exception: If username update fails
+    
+    Note:
+        - Requires user authentication
+        - Validates username format and availability
+        - Updates Matrix profile display name if available
+        - Marks onboarding username selection as complete
+        - Gracefully handles Matrix profile update failures
+    """
     user = graphene.Field(UserType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -561,6 +957,39 @@ class SelectUsername(Mutation):
 
 
 class CreateOnboardingStatus(Mutation):
+    """
+    Creates an onboarding status record for a user profile.
+    
+    This mutation initializes the onboarding tracking system
+    for a user profile, setting various completion flags for
+    different onboarding steps.
+    
+    Args:
+        input (OnboardingInput): Onboarding data containing:
+            - profile_uid: UID of the profile to create onboarding for
+            - email_verified: Email verification status (default: False)
+            - phone_verified: Phone verification status (default: False)
+            - username_selected: Username selection status (default: False)
+            - first_name_set: First name completion status (default: False)
+            - last_name_set: Last name completion status (default: False)
+            - gender_set: Gender selection status (default: False)
+            - bio_set: Bio completion status (default: False)
+    
+    Returns:
+        CreateOnboardingStatus: Response containing:
+            - onboarding_status: Created onboarding status object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If profile not found or creation fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Links onboarding status to specified profile
+        - All onboarding flags default to False if not specified
+    """
     onboarding_status = graphene.Field(OnboardingStatusType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -595,6 +1024,33 @@ class CreateOnboardingStatus(Mutation):
 
 
 class UpdateOnboardingStatus(Mutation):
+    """
+    Updates an existing onboarding status record.
+    
+    This mutation allows modification of onboarding completion
+    flags for tracking user progress through the onboarding
+    process.
+    
+    Args:
+        input (UpdateOnboardingInput): Update data containing:
+            - uid: UID of the onboarding status to update
+            - Various onboarding flags to update
+    
+    Returns:
+        UpdateOnboardingStatus: Response containing:
+            - onboarding_status: Updated onboarding status object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If onboarding status not found or update fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Dynamically updates any provided fields
+        - Uses setattr for flexible field updates
+    """
     onboarding_status = graphene.Field(OnboardingStatusType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -620,6 +1076,35 @@ class UpdateOnboardingStatus(Mutation):
             return UpdateOnboardingStatus(onboarding_status=None, success=False,message=message)
 
 class CreateContactInfo(Mutation):
+    """
+    Creates contact information for a user profile.
+    
+    This mutation adds contact information such as social media
+    profiles, websites, or other contact methods to a user's
+    profile.
+    
+    Args:
+        input (ContactinfoInput): Contact information data containing:
+            - type: Type of contact information
+            - value: Contact value (e.g., username, URL)
+            - platform: Optional platform name
+            - link: Optional direct link
+    
+    Returns:
+        CreateContactInfo: Response containing:
+            - contact_info: Created contact information object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If profile not found or creation fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Links contact info to authenticated user's profile
+        - Supports various contact types and platforms
+    """
     contact_info = graphene.Field(ContactInfoType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -656,6 +1141,33 @@ class CreateContactInfo(Mutation):
             return CreateContactInfo(contact_info=None, success=False,message=message)
 
 class UpdateContactInfo(Mutation):
+    """
+    Updates existing contact information for a user profile.
+    
+    This mutation modifies contact information fields such as
+    type, value, platform, or link for an existing contact
+    information record.
+    
+    Args:
+        input (UpdateContactinfoInput): Update data containing:
+            - uid: UID of the contact info to update
+            - Fields to update (type, value, platform, link)
+    
+    Returns:
+        UpdateContactInfo: Response containing:
+            - contact_info: Updated contact information object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If contact info not found or update fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Dynamically updates any provided fields
+        - Uses setattr for flexible field updates
+    """
     contact_info = graphene.Field(ContactInfoType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -683,6 +1195,30 @@ class UpdateContactInfo(Mutation):
             return UpdateContactInfo(contact_info=None, success=False,message=message)
 
 class DeleteContactInfo(Mutation):
+    """
+    Deletes contact information from a user profile.
+    
+    This mutation removes a specific contact information
+    record from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the contact info to delete
+    
+    Returns:
+        DeleteContactInfo: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If contact info not found or deletion fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Permanently removes contact information
+        - Cannot be undone
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -704,6 +1240,39 @@ class DeleteContactInfo(Mutation):
             return DeleteContactInfo(success=False,message=message)
 
 class CreateScore(Mutation):
+    """
+    Creates a score record for a user profile.
+    
+    This mutation initializes various scoring metrics for a user
+    profile, including vibes, intelligence, appeal, social, human,
+    and repository scores.
+    
+    Args:
+        input (ScoreInput): Score data containing:
+            - profile_uid: UID of the profile to create scores for
+            - vibers_count: Number of vibers (default: 2.0)
+            - cumulative_vibescore: Cumulative vibe score (default: 2.0)
+            - intelligence_score: Intelligence rating (default: 2.0)
+            - appeal_score: Appeal rating (default: 2.0)
+            - social_score: Social interaction score (default: 2.0)
+            - human_score: Human authenticity score (default: 2.0)
+            - repo_score: Repository/work score (default: 2.0)
+    
+    Returns:
+        CreateScore: Response containing:
+            - score: Created score object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If profile not found or creation fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Links score to specified profile
+        - All scores default to 2.0 if not specified
+    """
     score = graphene.Field(ScoreType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -737,6 +1306,32 @@ class CreateScore(Mutation):
             return CreateScore(score=None, success=False,message=message)
 
 class UpdateScore(Mutation):
+    """
+    Updates an existing score record for a user profile.
+    
+    This mutation modifies scoring metrics for a user profile,
+    allowing updates to various score components.
+    
+    Args:
+        input (UpdateScoreInput): Update data containing:
+            - uid: UID of the score to update
+            - Score fields to update (vibers_count, cumulative_vibescore, etc.)
+    
+    Returns:
+        UpdateScore: Response containing:
+            - score: Updated score object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If score not found or update fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Dynamically updates any provided score fields
+        - Uses setattr for flexible field updates
+    """
     score = graphene.Field(ScoreType)
     success = graphene.Boolean()
     message=graphene.String() 
@@ -764,6 +1359,30 @@ class UpdateScore(Mutation):
             return UpdateScore(score=None, success=False,message=message)
 
 class DeleteScore(Mutation):
+    """
+    Deletes a score record from a user profile.
+    
+    This mutation removes a score record from the database,
+    permanently deleting all scoring metrics for the profile.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the score to delete
+    
+    Returns:
+        DeleteScore: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If score not found or deletion fails
+    
+    Note:
+        - Requires login and superuser privileges
+        - Permanently removes score record
+        - Cannot be undone
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -786,6 +1405,33 @@ class DeleteScore(Mutation):
             return DeleteScore(success=False,message=message)
 
 class CreateInterest(Mutation):
+    """
+    Creates an interest record for a user profile.
+    
+    This mutation adds interest information to a user's profile,
+    storing a list of interest names that represent the user's
+    areas of interest.
+    
+    Args:
+        input (InerestInput): Interest data containing:
+            - names: List of interest names (default: [])
+    
+    Returns:
+        CreateInterest: Response containing:
+            - interest: Created interest object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If profile not found or creation fails
+    
+    Note:
+        - Requires user authentication
+        - Links interest to authenticated user's profile
+        - Supports multiple interest names in a single record
+        - Uses error handling decorator
+    """
     interest = graphene.Field(InterestType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -818,6 +1464,33 @@ class CreateInterest(Mutation):
             return CreateInterest(interest=None, success=False,message=message)
 
 class UpdateInterest(Mutation):
+    """
+    Updates an existing interest record for a user profile.
+    
+    This mutation modifies interest information, allowing updates
+    to the list of interest names or deletion status.
+    
+    Args:
+        input (UpdateInterestInput): Update data containing:
+            - uid: UID of the interest to update
+            - names: Updated list of interest names
+            - is_deleted: Deletion status flag
+    
+    Returns:
+        UpdateInterest: Response containing:
+            - interest: Updated interest object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If interest not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Supports updating interest names and deletion status
+        - Uses error handling decorator
+    """
     interest = graphene.Field(InterestType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -848,6 +1521,31 @@ class UpdateInterest(Mutation):
             return UpdateInterest(interest=None, success=False,message=message)
 
 class DeleteInterest(Mutation):
+    """
+    Soft deletes an interest record for a user profile.
+    
+    This mutation marks an interest record as deleted rather
+    than permanently removing it from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the interest to delete
+    
+    Returns:
+        DeleteInterest: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If interest not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs soft delete (sets is_deleted=True)
+        - Uses error handling decorator
+        - Data can be recovered by updating is_deleted flag
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -871,6 +1569,33 @@ class DeleteInterest(Mutation):
             return DeleteInterest(success=False,message=message)
         
 class SendOTP(graphene.Mutation):
+    """
+    Sends an OTP (One-Time Password) to a user's email.
+    
+    This mutation generates and sends an OTP for various purposes
+    such as email verification or password reset. It includes
+    rate limiting to prevent abuse.
+    
+    Args:
+        email (str): Email address to send OTP to
+        purpose (OTPPurpose): Purpose of the OTP (EMAIL_VERIFICATION or FORGET_PASSWORD)
+    
+    Returns:
+        SendOTP: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not found, rate limit exceeded, or invalid purpose
+        Exception: If OTP generation or sending fails
+    
+    Note:
+        - Rate limited to 3 OTP requests per hour per user
+        - For FORGET_PASSWORD: validates email exists in system
+        - For EMAIL_VERIFICATION: requires authentication
+        - Stores OTP in database and cache
+        - Sends email using external mail service
+    """
     success = graphene.Boolean()
     message=graphene.String()
     
@@ -945,6 +1670,33 @@ class SendOTP(graphene.Mutation):
             return SendOTP(success=False,message=message)
     
 class VerifyOTP(graphene.Mutation):
+    """
+    Verifies an OTP for email verification purposes.
+    
+    This mutation validates an OTP sent to the user's email
+    and marks their email as verified in the onboarding status.
+    
+    Args:
+        input (VerifyOtpInput): OTP verification data containing:
+            - otp: The OTP code to verify
+    
+    Returns:
+        VerifyOTP: Response containing:
+            - success: Boolean indicating verification success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not authenticated, OTP invalid, or expired
+        Exception: If verification process fails
+    
+    Note:
+        - Requires user authentication
+        - Validates OTP against database records
+        - Checks OTP expiration
+        - Updates onboarding email verification status
+        - Deletes OTP after successful verification
+        - Uses error handling decorator
+    """
     class Arguments:
         input=VerifyOtpInput()
 
@@ -989,6 +1741,36 @@ class VerifyOTP(graphene.Mutation):
 
 
 class VerifyOTPAndResetPassword(graphene.Mutation):
+    """
+    Verifies OTP and resets user password in a single operation.
+    
+    This mutation validates an OTP for password reset and updates
+    the user's password, then generates new authentication tokens.
+    
+    Args:
+        email (str): User's email address
+        otp (str): OTP code for verification
+        new_password (str): New password to set
+    
+    Returns:
+        VerifyOTPAndResetPassword: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+            - token: New JWT access token
+            - refresh_token: New JWT refresh token
+    
+    Raises:
+        GraphQLError: If user not found, OTP invalid, or expired
+        Exception: If password reset fails
+    
+    Note:
+        - Does not require authentication (password reset flow)
+        - Validates OTP against database records
+        - Checks OTP expiration
+        - Updates user password using Django's set_password
+        - Generates new authentication tokens
+        - Deletes OTP after successful verification
+    """
     success = graphene.Boolean()
     message = graphene.String()
     token = graphene.String()
@@ -1034,6 +1816,31 @@ class VerifyOTPAndResetPassword(graphene.Mutation):
 
 
 class DeleteAchievement(Mutation):
+    """
+    Soft deletes an achievement record from a user profile.
+    
+    This mutation marks an achievement as deleted rather than
+    permanently removing it from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the achievement to delete
+    
+    Returns:
+        DeleteAchievement: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If achievement not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs soft delete (sets is_deleted=True)
+        - Uses error handling decorator
+        - Data can be recovered by updating is_deleted flag
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -1058,6 +1865,31 @@ class DeleteAchievement(Mutation):
         
 
 class DeleteEducation(Mutation):
+    """
+    Soft deletes an education record from a user profile.
+    
+    This mutation marks an education record as deleted rather than
+    permanently removing it from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the education record to delete
+    
+    Returns:
+        DeleteEducation: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If education record not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs soft delete (sets is_deleted=True)
+        - Uses error handling decorator
+        - Data can be recovered by updating is_deleted flag
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -1082,6 +1914,31 @@ class DeleteEducation(Mutation):
 
 
 class DeleteSkill(Mutation):
+    """
+    Soft deletes a skill record from a user profile.
+    
+    This mutation marks a skill record as deleted rather than
+    permanently removing it from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the skill to delete
+    
+    Returns:
+        DeleteSkill: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If skill not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs soft delete (sets is_deleted=True)
+        - Uses error handling decorator
+        - Data can be recovered by updating is_deleted flag
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -1106,6 +1963,31 @@ class DeleteSkill(Mutation):
 
 
 class DeleteExperience(Mutation):
+    """
+    Soft deletes an experience record from a user profile.
+    
+    This mutation marks an experience record as deleted rather than
+    permanently removing it from the database.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the experience record to delete
+    
+    Returns:
+        DeleteExperience: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If experience record not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs soft delete (sets is_deleted=True)
+        - Uses error handling decorator
+        - Data can be recovered by updating is_deleted flag
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -1131,6 +2013,38 @@ class DeleteExperience(Mutation):
 
 
 class CreateUsersReview(graphene.Mutation):
+    """
+    Creates a review from one user to another user.
+    
+    This mutation allows users to create reviews with reactions,
+    vibes, and content for other users. It also manages profile
+    reaction tracking and scoring.
+    
+    Args:
+        input (CreateUsersReviewInput): Review data containing:
+            - touser_uid: UID of the user being reviewed
+            - reaction: Reaction/vibe name
+            - vibe: Numeric vibe score
+            - title: Review title
+            - content: Review content
+            - file_id: Optional file attachment ID
+    
+    Returns:
+        CreateUsersReview: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If user not found or review creation fails
+    
+    Note:
+        - Requires user authentication
+        - Creates or updates ProfileReactionManager for target user
+        - Tracks reactions and vibe scores
+        - Links review to both reviewer and reviewee
+        - Uses error handling decorator
+    """
     # users_review = graphene.Field(UsersReviewType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1185,6 +2099,31 @@ class CreateUsersReview(graphene.Mutation):
 
 
 class DeleteUsersReview(graphene.Mutation):
+    """
+    Permanently deletes a user review.
+    
+    This mutation removes a user review from the database
+    completely, unlike soft delete operations.
+    
+    Args:
+        input (DeleteUsersReviewInput): Deletion data containing:
+            - uid: UID of the review to delete
+    
+    Returns:
+        DeleteUsersReview: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If review not found or deletion fails
+    
+    Note:
+        - Requires user authentication
+        - Performs hard delete (permanent removal)
+        - Uses error handling decorator
+        - Cannot be undone
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1210,6 +2149,31 @@ class DeleteUsersReview(graphene.Mutation):
 
 
 class CreateUploadContact(graphene.Mutation):
+    """
+    Creates an upload contact record for a user.
+    
+    This mutation allows users to upload their contact list,
+    with validation to ensure each contact has exactly 10 digits
+    and prevents duplicate uploads.
+    
+    Args:
+        contact (List[str]): List of contact numbers (each must be 10 digits)
+    
+    Returns:
+        CreateUploadContact: Response containing:
+            - upload_contact: Created upload contact object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user not authenticated, already uploaded, or validation fails
+    
+    Note:
+        - Requires superuser privileges
+        - Validates each contact has exactly 10 characters
+        - Prevents duplicate uploads per user
+        - Stores contact list for the authenticated user
+    """
     class Arguments:
         contact = graphene.List(graphene.String, required=True)
     
@@ -1242,6 +2206,31 @@ class CreateUploadContact(graphene.Mutation):
 
 
 class UpdateUploadContact(graphene.Mutation):
+    """
+    Updates an existing upload contact record for a user.
+    
+    This mutation allows users to modify their uploaded contact list
+    or mark it as deleted. Validates contact format if provided.
+    
+    Args:
+        contact (List[str], optional): Updated list of contact numbers
+        is_deleted (bool, optional): Flag to mark record as deleted
+    
+    Returns:
+        UpdateUploadContact: Response containing:
+            - upload_contact: Updated upload contact object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user not authenticated or validation fails
+    
+    Note:
+        - Requires superuser privileges
+        - Validates each contact has exactly 10 characters if provided
+        - Can update contact list and/or deletion status
+        - Saves changes to database
+    """
     
     class Arguments:
         contact = graphene.List(graphene.String)
@@ -1280,6 +2269,26 @@ class UpdateUploadContact(graphene.Mutation):
 
 
 class DeleteUploadContact(graphene.Mutation):
+    """
+    Permanently deletes an upload contact record for a user.
+    
+    This mutation removes the user's uploaded contact list
+    from the database completely.
+    
+    Returns:
+        DeleteUploadContact: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user not authenticated or record not found
+    
+    Note:
+        - Requires superuser privileges
+        - Performs hard delete (permanent removal)
+        - Cannot be undone
+        - Removes contact list for authenticated user
+    """
     
     success = graphene.Boolean()
     message = graphene.String()
@@ -1298,6 +2307,31 @@ class DeleteUploadContact(graphene.Mutation):
 
 
 class SendFeedback(graphene.Mutation):
+    """
+    Sends feedback from a user with email, image, and message.
+    
+    This mutation allows authenticated superusers to submit feedback
+    with an associated email, image, and feedback message.
+    
+    Args:
+        email (str): Email address for feedback
+        image_id (str): ID of the associated image
+        feedback_message (str): The feedback content
+    
+    Returns:
+        SendFeedback: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not authenticated or not superuser
+        Exception: If feedback submission fails
+    
+    Note:
+        - Requires user authentication and superuser privileges
+        - Contains commented code for OTP purposes
+        - Implementation appears incomplete
+    """
     success = graphene.Boolean()
     message=graphene.String()
     
@@ -1349,6 +2383,38 @@ class SendFeedback(graphene.Mutation):
 
 
 class CreateBackProfileReview(graphene.Mutation):
+    """
+    Creates a back profile review from one user to another.
+    
+    This mutation allows users to create reviews for other users' back profiles,
+    including reactions, vibes, and content. It manages back profile reaction
+    tracking and scoring.
+    
+    Args:
+        input (CreateBackProfileReviewInput): Review data containing:
+            - touser_uid: UID of the user being reviewed
+            - reaction: Reaction/vibe name
+            - vibe: Numeric vibe score
+            - title: Review title
+            - content: Review content
+            - file_id: Optional file attachment ID
+    
+    Returns:
+        CreateBackProfileReview: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If user not found or review creation fails
+    
+    Note:
+        - Requires user authentication
+        - Creates or updates BackProfileReactionManager for target user
+        - Tracks reactions and vibe scores for back profiles
+        - Links review to both reviewer and reviewee
+        - Uses error handling decorator
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1407,8 +2473,35 @@ class CreateBackProfileReview(graphene.Mutation):
 
 
 class CreateInvite(graphene.Mutation):
+    """
+    Creates an invitation for a user to join the platform.
+    
+    This mutation generates an invite with a unique token and link
+    that can be shared with others to join the platform.
+    
+    Args:
+        input (CreateInviteInput): Invitation data containing:
+            - origin_type: Type/source of the invitation
+    
+    Returns:
+        CreateInvite: Response containing:
+            - invite: Created invite object
+            - invite_link: Generated invitation link
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not authenticated or invalid origin type
+        Exception: If invite creation fails
+    
+    Note:
+        - Requires user authentication
+        - Validates origin_type against allowed choices
+        - Generates unique invite token and link
+        - Links invite to the inviting user
+    """
     invite = graphene.Field(InviteType)
-    invite_link=graphene.String()
+    invite_link = graphene.String()
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1418,37 +2511,72 @@ class CreateInvite(graphene.Mutation):
     @login_required
     def mutate(self, info, input):
         try:
-            user=info.context.user
+            user = info.context.user
             if user.is_anonymous:
-                raise GraphQLError ("User not found")
+                raise GraphQLError("User not found")
 
             payload = info.context.payload
             user_id = payload.get('user_id')
             
-            user=info.context.user
             login_user = Users.nodes.get(user_id=user_id)
-            
 
             # Validate origin_type
             if input.origin_type.value not in dict(Invite.OriginType.choices):
                 raise GraphQLError("Invalid origin type provided")
             
-            
+            # Create invite
             invite = Invite.objects.create(
                 inviter=user,
                 origin_type=input.origin_type.value,
             )
 
-            invite_link = f"http://104.197.79.25:8001/login/invite/{invite.invite_token}"
+            # Use the correct backend URL
+            invite_link = f"https://backend.ooumph.com/signup/invite/{invite.invite_token}"
 
-            return CreateInvite(invite=invite, invite_link=invite_link,success=True, message="Invite created successfully")
+            return CreateInvite(
+                invite=invite, 
+                invite_link=invite_link, 
+                success=True, 
+                message="Invite created successfully"
+            )
 
         except Exception as error:
-            return CreateInvite(invite=None, success=False, message=str(error))
+            return CreateInvite(invite=None, invite_link=None, success=False, message=str(error))
 
 
 
 class CreateUserV2(Mutation):
+    """
+    Creates a new user account (version 2) with optional invite token support.
+    
+    This mutation creates a new user account with enhanced features including
+    invite token validation, automatic connections, and user type specification.
+    
+    Args:
+        input (CreateUserInputV2): User creation data containing:
+            - email: User's email address
+            - password: User's password
+            - user_type: Type of user account (default: "personal")
+            - invite_token: Optional invitation token
+    
+    Returns:
+        CreateUserV2: Response containing:
+            - token: JWT authentication token
+            - refresh_token: JWT refresh token
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user already exists or validation fails
+        Exception: If user creation fails
+    
+    Note:
+        - Validates email and password inputs
+        - Checks for existing users in both SQLite and Neo4j
+        - Processes invite tokens and creates automatic connections
+        - Generates authentication tokens upon successful creation
+        - Creates user nodes in Neo4j database
+    """
     # user = graphene.Field(UserType)
     token = graphene.String()
     refresh_token = graphene.String()
@@ -1566,6 +2694,37 @@ class CreateUserV2(Mutation):
             return CreateUserV2(success=False,message=message)
 
 class CreateProfileDataReactionV2(Mutation):
+    """
+    Creates a reaction (like) for profile data items (education, achievement, skill, experience).
+    
+    This mutation allows users to react to various profile data items with
+    specific reactions and vibe scores. It manages reaction tracking and
+    scoring for different profile categories.
+    
+    Args:
+        input (CreateProfileDataReactionInputV2): Reaction data containing:
+            - uid: UID of the profile data item
+            - reaction: Type of reaction
+            - vibe: Numeric vibe score
+            - category: Category of profile data (education, achievement, skill, experience)
+    
+    Returns:
+        CreateProfileDataReactionV2: Response containing:
+            - like: Created reaction object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If reaction creation fails
+    
+    Note:
+        - Requires user authentication
+        - Supports education, achievement, skill, and experience categories
+        - Creates or updates appropriate ReactionManager for the category
+        - Links reaction to both user and profile data item
+        - Uses error handling decorator
+    """
     like = graphene.Field(ProfileDataReactionType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1668,6 +2827,35 @@ class CreateProfileDataReactionV2(Mutation):
 
 
 class CreateProfileDataCommentV2(Mutation):
+    """
+    Creates a comment for profile data items (education, achievement, skill, experience).
+    
+    This mutation allows users to add comments to various profile data items
+    across different categories.
+    
+    Args:
+        input (CreateProfileCommentInputV2): Comment data containing:
+            - uid: UID of the profile data item
+            - content: Comment content
+            - category: Category of profile data (education, achievement, skill, experience)
+    
+    Returns:
+        CreateProfileDataCommentV2: Response containing:
+            - comment_details: Created comment object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If comment creation fails
+    
+    Note:
+        - Requires user authentication
+        - Supports education, achievement, skill, and experience categories
+        - Links comment to both user and profile data item
+        - Uses error handling decorator
+        - Returns specific error message if category not selected
+    """
     comment_details = graphene.Field(ProfileDataCommentType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1736,6 +2924,33 @@ class CreateProfileDataCommentV2(Mutation):
 
 
 class UpdateProfileDataCommentV2(Mutation):
+    """
+    Updates an existing profile data comment.
+    
+    This mutation allows users to modify the content of their
+    existing comments on profile data items.
+    
+    Args:
+        input (UpdateProfileCommentInputV2): Update data containing:
+            - uid: UID of the comment to update
+            - content: New comment content
+    
+    Returns:
+        UpdateProfileDataCommentV2: Response containing:
+            - comment_details: Updated comment object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If comment not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Updates existing comment content
+        - Uses error handling decorator
+        - Maintains existing relationships
+    """
     comment_details = graphene.Field(ProfileDataCommentType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1762,6 +2977,38 @@ class UpdateProfileDataCommentV2(Mutation):
 
 
 class CreateAchievement(Mutation):
+    """
+    Creates a new achievement record for a user's profile.
+    
+    This mutation allows users to add achievements to their profile
+    with details like description, source, dates, and file attachments.
+    
+    Args:
+        input (CreateAchievementInput): Achievement data containing:
+            - what: Achievement title/name
+            - description: Achievement description
+            - from_source: Source of the achievement
+            - created_on: Creation timestamp
+            - file_id: List of file attachment IDs
+            - from_date: Start date (optional)
+            - to_date: End date (optional)
+    
+    Returns:
+        CreateAchievement: Response containing:
+            - achievement: Created achievement object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If achievement creation fails or file validation fails
+    
+    Note:
+        - Requires user authentication
+        - Validates file IDs if provided
+        - Links achievement to user's profile
+        - Uses error handling decorator
+    """
     achievement = graphene.Field(AchievementType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -1810,6 +3057,33 @@ class CreateAchievement(Mutation):
             return CreateAchievement(achievement=None, success=False,message=message)
 
 class UpdateAchievement(Mutation):
+    """
+    Updates an existing achievement record.
+    
+    This mutation allows users to modify their existing achievement
+    records with new information.
+    
+    Args:
+        input (UpdateAchievementInput): Update data containing:
+            - uid: UID of the achievement to update
+            - Additional fields to update
+    
+    Returns:
+        UpdateAchievement: Response containing:
+            - achievement: Updated achievement object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If achievement not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Updates all provided fields dynamically
+        - Uses error handling decorator
+        - Maintains existing relationships
+    """
     achievement = graphene.Field(AchievementType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -1835,6 +3109,38 @@ class UpdateAchievement(Mutation):
             return UpdateAchievement(achievement=None, success=False,message=message)
 
 class CreateEducation(Mutation):
+    """
+    Creates a new education record for a user's profile.
+    
+    This mutation allows users to add education entries to their profile
+    with details like institution, field of study, dates, and file attachments.
+    
+    Args:
+        input (CreateEducationInput): Education data containing:
+            - what: Institution or degree name
+            - field_of_study: Field of study
+            - from_source: Source of the education record
+            - created_on: Creation timestamp
+            - file_id: List of file attachment IDs
+            - from_date: Start date (optional)
+            - to_date: End date (optional)
+    
+    Returns:
+        CreateEducation: Response containing:
+            - education: Created education object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If education creation fails or file validation fails
+    
+    Note:
+        - Requires user authentication
+        - Validates file IDs if provided
+        - Links education to user's profile
+        - Uses error handling decorator
+    """
     education = graphene.Field(EducationType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -1884,6 +3190,33 @@ class CreateEducation(Mutation):
             return CreateEducation(education=None, success=False,message=message)
 
 class UpdateEducation(Mutation):
+    """
+    Updates an existing education record.
+    
+    This mutation allows users to modify their existing education
+    records with new information.
+    
+    Args:
+        input (UpdateEducationInput): Update data containing:
+            - uid: UID of the education record to update
+            - Additional fields to update
+    
+    Returns:
+        UpdateEducation: Response containing:
+            - education: Updated education object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If education record not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Updates all provided fields dynamically
+        - Uses error handling decorator
+        - Maintains existing relationships
+    """
     education = graphene.Field(EducationType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1909,6 +3242,38 @@ class UpdateEducation(Mutation):
 
 
 class CreateExperience(Mutation):
+    """
+    Creates a new experience record for a user's profile.
+    
+    This mutation allows users to add work experience entries to their profile
+    with details like position, description, dates, and file attachments.
+    
+    Args:
+        input (CreateExperienceInput): Experience data containing:
+            - what: Position or role title
+            - description: Experience description
+            - created_on: Creation timestamp
+            - from_source: Source of the experience record
+            - file_id: List of file attachment IDs
+            - from_date: Start date (optional)
+            - to_date: End date (optional)
+    
+    Returns:
+        CreateExperience: Response containing:
+            - experience: Created experience object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If experience creation fails or file validation fails
+    
+    Note:
+        - Requires user authentication
+        - Validates file IDs if provided
+        - Links experience to user's profile
+        - Uses error handling decorator
+    """
     experience = graphene.Field(ExperienceType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -1956,6 +3321,33 @@ class CreateExperience(Mutation):
             return CreateExperience(experience=None, success=False,message=message)
 
 class UpdateExperience(Mutation):
+    """
+    Updates an existing experience record.
+    
+    This mutation allows users to modify their existing work experience
+    records with new information.
+    
+    Args:
+        input (UpdateExperienceInput): Update data containing:
+            - uid: UID of the experience record to update
+            - Additional fields to update
+    
+    Returns:
+        UpdateExperience: Response containing:
+            - experience: Updated experience object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If experience record not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Updates all provided fields dynamically
+        - Uses error handling decorator
+        - Maintains existing relationships
+    """
     experience = graphene.Field(ExperienceType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1982,6 +3374,37 @@ class UpdateExperience(Mutation):
 
 
 class CreateSkill(Mutation):
+    """
+    Creates a new skill record for a user's profile.
+    
+    This mutation allows users to add skills to their profile
+    with details like skill name, source, dates, and file attachments.
+    
+    Args:
+        input (CreateSkillInput): Skill data containing:
+            - what: Skill name or title
+            - from_source: Source of the skill record
+            - file_id: List of file attachment IDs
+            - from_date: Start date (optional)
+            - to_date: End date (optional)
+    
+    Returns:
+        CreateSkill: Response containing:
+            - skill: Created skill object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If skill creation fails or file validation fails
+    
+    Note:
+        - Requires user authentication
+        - Validates file IDs if provided
+        - Links skill to user's profile
+        - Uses error handling decorator
+        - Handles optional date fields
+    """
     skill = graphene.Field(SkillType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -2031,6 +3454,33 @@ class CreateSkill(Mutation):
             return CreateSkill(skill=None, success=False,message=message)
 
 class UpdateSkill(Mutation):
+    """
+    Updates an existing skill record.
+    
+    This mutation allows users to modify their existing skill
+    records with new information.
+    
+    Args:
+        input (UpdateSkillInput): Update data containing:
+            - uid: UID of the skill record to update
+            - Additional fields to update
+    
+    Returns:
+        UpdateSkill: Response containing:
+            - skill: Updated skill object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user is not authenticated
+        Exception: If skill record not found or update fails
+    
+    Note:
+        - Requires user authentication
+        - Updates all provided fields dynamically
+        - Uses error handling decorator
+        - Maintains existing relationships
+    """
     skill = graphene.Field(SkillType)
     success = graphene.Boolean()
     message = graphene.String()

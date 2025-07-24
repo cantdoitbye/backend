@@ -48,6 +48,40 @@ class SubCommunityRoleAssignmentType(DjangoObjectType):
 
 # Breaks into proper module
 class CreateCommunity(Mutation):
+    """
+    Creates a new community with specified members and settings.
+    
+    This mutation handles the complete community creation process including:
+    - Creating the community record
+    - Setting up Matrix chat room (if possible)
+    - Adding initial members with appropriate permissions
+    - Sending notifications to new members
+    - Processing Matrix room invitations
+    
+    Args:
+        input (CreateCommunityInput): Community creation data including:
+            - name: Community name
+            - description: Community description
+            - community_circle: Community visibility circle
+            - community_type: Type of community
+            - category: Community category
+            - group_icon_id: Icon identifier
+            - member_uid: List of initial member UIDs
+    
+    Returns:
+        CreateCommunity: Response containing:
+            - community: Created community object (None in current implementation)
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If authentication fails or invalid member UIDs provided
+    
+    Note:
+        - Creator automatically becomes admin member
+        - Matrix room creation is optional and won't block community creation
+        - All initial members receive push notifications
+    """
     community = graphene.Field(CommunityType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -217,8 +251,34 @@ class CreateCommunity(Mutation):
 
 
 
-# This mutation is performed only by person who created this(admin)
 class UpdateCommunity(Mutation):
+    """
+    Updates an existing community's information.
+    
+    This mutation allows community creators (admins) to modify community details
+    such as name, description, category, and group icon.
+    
+    Args:
+        input (UpdateCommunityInput): Update data containing:
+            - uid: Community UID to update
+            - name: New community name (optional)
+            - description: New description (optional)
+            - category: New category (optional)
+            - group_icon_id: New icon identifier (optional)
+    
+    Returns:
+        UpdateCommunity: Response containing:
+            - community: Updated community object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community creator or community not found
+    
+    Note:
+        - Only the community creator can update community information
+        - Image validation is performed for group_icon_id if provided
+    """
     community = graphene.Field(CommunityType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -261,8 +321,29 @@ class UpdateCommunity(Mutation):
             return UpdateCommunity(community=None, success=False,message=message)
 
 
-# This mutation is performed only by person who created this(admin)
 class DeleteCommunity(Mutation):
+    """
+    Deletes an existing community.
+    
+    This mutation allows community creators (admins) to permanently delete
+    their communities. Only the original creator can perform this action.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: Community UID to delete
+    
+    Returns:
+        DeleteCommunity: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community creator or community not found
+    
+    Note:
+        - Only the community creator can delete the community
+        - This action is irreversible and removes all community data
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -298,6 +379,33 @@ class DeleteCommunity(Mutation):
             return DeleteCommunity(success=False,message=message)
 
 class CreateCommunityMessage(Mutation):
+    """
+    Creates a new message in a community.
+    
+    This mutation allows community members to post messages within a community.
+    Only members of the community can create messages. Requires superuser privileges.
+    
+    Args:
+        input (CreateCommMessageInput): Message data containing:
+            - community_uid: UID of the target community
+            - content: Message content
+            - file_id: Optional file attachment ID
+            - title: Message title
+    
+    Returns:
+        CreateCommunityMessage: Response containing:
+            - community_messages: Created message object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not authenticated, not a community member, or lacks superuser privileges
+    
+    Note:
+        - Only community members can create messages
+        - Requires superuser privileges
+        - Message content and attachments are validated
+    """
     community_messages = graphene.Field(CommunityMessagesType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -350,6 +458,33 @@ class CreateCommunityMessage(Mutation):
             return CreateCommunityMessage(community_messages=None, success=False,message=message)
 
 class UpdateCommunityMessage(Mutation):
+    """
+    Updates an existing community message.
+    
+    This mutation allows authorized users to edit previously posted
+    community messages. Requires superuser privileges.
+    
+    Args:
+        input (UpdateCommMessageInput): Update data containing:
+            - uid: Message UID to update
+            - content: New message content (optional)
+            - file_id: New file attachment ID (optional)
+            - title: New message title (optional)
+    
+    Returns:
+        UpdateCommunityMessage: Response containing:
+            - community_messages: Updated message object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not authenticated, lacks superuser privileges, or message not found
+    
+    Note:
+        - Requires superuser privileges
+        - Only specified fields in input are updated
+        - Message validation is performed before saving
+    """
     community_messages = graphene.Field(CommunityMessagesType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -375,6 +510,29 @@ class UpdateCommunityMessage(Mutation):
 
 
 class DeleteCommunityMessage(Mutation):
+    """
+    Deletes a community message.
+    
+    This mutation allows authorized users to delete community messages.
+    Requires superuser privileges for execution.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: Message UID to delete
+    
+    Returns:
+        DeleteCommunityMessage: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not authenticated, lacks superuser privileges, or message not found
+    
+    Note:
+        - Requires superuser privileges
+        - This action is irreversible
+        - Message is permanently removed from the community
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -396,6 +554,34 @@ class DeleteCommunityMessage(Mutation):
 
 
 class AddMember(Mutation):
+    """
+    Adds new members to a community.
+    
+    This mutation allows authorized users to add new members to a community.
+    For private communities or communities with restricted member addition,
+    only admins can add new members.
+    
+    Args:
+        input (AddMemberInput): Member addition data containing:
+            - community_uid: UID of the target community
+            - user_uid: List of user UIDs to add as members
+    
+    Returns:
+        AddMember: Response containing:
+            - all_membership: Membership object (implementation specific)
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks authorization, invalid UIDs provided, or users already members
+    
+    Note:
+        - Private communities require admin privileges to add members
+        - Validates all user UIDs before processing
+        - Sends push notifications to newly added members
+        - Processes Matrix room invitations if available
+        - Updates community member count automatically
+    """
     all_membership = graphene.Field(MembershipType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -496,7 +682,31 @@ class AddMember(Mutation):
 
 
 class RemoveMember(Mutation):
-
+    """
+    Removes members from a community.
+    
+    This mutation allows authorized users to remove existing members from a community.
+    Community creators cannot be removed, and authorization is required based on
+    community settings.
+    
+    Args:
+        membership_uid (List[str]): List of membership UIDs to remove
+    
+    Returns:
+        RemoveMember: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks authorization, memberships from different communities,
+                  or attempting to remove community creator
+    
+    Note:
+        - Community creators cannot be removed
+        - All memberships must belong to the same community
+        - Requires admin privileges if community restricts member removal
+        - Permanently deletes membership records
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -557,6 +767,34 @@ class RemoveMember(Mutation):
 
 
 class AddSubCommunityMember(Mutation):
+    """
+    Adds new members to a sub-community.
+    
+    This mutation allows authorized users to add new members to a sub-community.
+    For private sub-communities or those with restricted member addition,
+    only admins can add new members.
+    
+    Args:
+        input (AddSubCommunityMemberInput): Member addition data containing:
+            - sub_community_uid: UID of the target sub-community
+            - user_uid: List of user UIDs to add as members
+    
+    Returns:
+        AddSubCommunityMember: Response containing:
+            - all_membership: Sub-community membership object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks authorization, invalid UIDs provided, or users already members
+    
+    Note:
+        - Private sub-communities require admin privileges to add members
+        - Validates all user UIDs before processing
+        - Sends push notifications to newly added members
+        - Processes Matrix room invitations if available
+        - Members must be part of parent community
+    """
     all_membership = graphene.Field(SubCommunityMembershipType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -654,7 +892,28 @@ class AddSubCommunityMember(Mutation):
 
 
 class RemoveSubCommunityMember(Mutation):
-
+    """
+    Removes members from a sub-community.
+    
+    This mutation allows authorized users to remove existing members from a sub-community.
+    Only users with admin privileges in the parent community can remove sub-community members.
+    
+    Args:
+        sub_community_membership_uid (List[str]): List of sub-community membership UIDs to remove
+    
+    Returns:
+        RemoveSubCommunityMember: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks authorization or memberships from different sub-communities
+    
+    Note:
+        - Requires admin privileges in the parent community
+        - All memberships must belong to the same sub-community
+        - Permanently deletes sub-community membership records
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -709,6 +968,37 @@ class RemoveSubCommunityMember(Mutation):
 
 
 class CreateCommunityReview(Mutation):
+    """
+    Creates a new review for a community or sub-community.
+    
+    This mutation allows users to create reviews with ratings and reactions
+    for communities or sub-communities. It also manages community reaction
+    statistics and vibe tracking.
+    
+    Args:
+        input (CreateCommunityReviewInput): Review data containing:
+            - to_community_uid: UID of target community/sub-community
+            - title: Review title
+            - content: Review content
+            - file_id: Optional file attachment ID
+            - reaction: Reaction/vibe name
+            - vibe: Numeric vibe score
+    
+    Returns:
+        CreateCommunityReview: Response containing:
+            - review: Created review object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If authentication fails or invalid file ID provided
+    
+    Note:
+        - Automatically initializes community reaction manager if not exists
+        - Updates community vibe statistics
+        - Validates file attachments if provided
+        - Works with both communities and sub-communities
+    """
     review = graphene.Field(CommunityReviewType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -773,6 +1063,35 @@ class CreateCommunityReview(Mutation):
 
 
 class UpdateCommunityReview(Mutation):
+    """
+    Updates an existing community review.
+    
+    This mutation allows users to modify their previously created community
+    or sub-community reviews, including content, attachments, and ratings.
+    
+    Args:
+        input (UpdateCommunityReviewInput): Update data containing:
+            - uid: Review UID to update
+            - title: New review title (optional)
+            - content: New review content (optional)
+            - file_id: New file attachment ID (optional)
+            - reaction: New reaction/vibe name (optional)
+            - vibe: New numeric vibe score (optional)
+    
+    Returns:
+        UpdateCommunityReview: Response containing:
+            - review: Updated review object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If review not found or invalid file ID provided
+    
+    Note:
+        - Validates file attachments if provided
+        - Only specified fields in input are updated
+        - Review validation is performed before saving
+    """
     review = graphene.Field(CommunityReviewType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -798,6 +1117,28 @@ class UpdateCommunityReview(Mutation):
 
 
 class DeleteCommunityReview(Mutation):
+    """
+    Deletes a community review.
+    
+    This mutation allows users to delete their previously created community
+    or sub-community reviews permanently.
+    
+    Args:
+        uid (DeleteInput): Deletion data containing:
+            - uid: Review UID to delete
+    
+    Returns:
+        DeleteCommunityReview: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If review not found or user lacks authorization
+    
+    Note:
+        - This action is irreversible
+        - Review is permanently removed from the community/sub-community
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -817,6 +1158,34 @@ class DeleteCommunityReview(Mutation):
         
 
 class CreateCommunityGoal(graphene.Mutation):
+    """
+    Creates a new goal for a community or sub-community.
+    
+    This mutation allows community/sub-community admins to create goals
+    that help define objectives and targets for their communities.
+    
+    Args:
+        input (CreateCommunityGoalInput): Goal creation data containing:
+            - community_uid: UID of target community/sub-community
+            - name: Goal name
+            - description: Goal description
+            - file_id: Optional list of file attachment IDs
+    
+    Returns:
+        CreateCommunityGoal: Response containing:
+            - goal: Created goal object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or invalid file IDs provided
+    
+    Note:
+        - Only community/sub-community admins can create goals
+        - Validates file attachments if provided
+        - Works with both communities and sub-communities
+        - Goal is automatically linked to the creator
+    """
     goal = graphene.Field(CommunityGoalType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -870,6 +1239,33 @@ class CreateCommunityGoal(graphene.Mutation):
 
 
 class UpdateCommunityGoal(graphene.Mutation):
+    """
+    Updates an existing community goal.
+    
+    This mutation allows community admins to modify previously created
+    community goals, including name, description, and file attachments.
+    
+    Args:
+        input (UpdateCommunityGoalInput): Update data containing:
+            - uid: Goal UID to update
+            - name: New goal name (optional)
+            - description: New goal description (optional)
+            - file_id: New list of file attachment IDs (optional)
+    
+    Returns:
+        UpdateCommunityGoal: Response containing:
+            - goal: Updated goal object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or invalid file IDs provided
+    
+    Note:
+        - Only community admins can update goals
+        - Validates file attachments if provided
+        - Only specified fields in input are updated
+    """
     goal = graphene.Field(CommunityGoalType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -905,6 +1301,28 @@ class UpdateCommunityGoal(graphene.Mutation):
             return UpdateCommunityGoal(goal=None, success=False, message=message)
 
 class DeleteCommunityGoal(graphene.Mutation):
+    """
+    Deletes a community goal.
+    
+    This mutation allows community admins to permanently delete
+    community goals that are no longer relevant or needed.
+    
+    Args:
+        uid (str): Goal UID to delete
+    
+    Returns:
+        DeleteCommunityGoal: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or goal not found
+    
+    Note:
+        - Only community admins can delete goals
+        - This action is irreversible
+        - Goal is permanently removed from the community
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -933,6 +1351,35 @@ class DeleteCommunityGoal(graphene.Mutation):
 
 
 class CreateCommunityActivity(graphene.Mutation):
+    """
+    Creates a new activity for a community or sub-community.
+    
+    This mutation allows community/sub-community admins to create activities
+    that help organize events, tasks, or initiatives within their communities.
+    
+    Args:
+        input (CreateCommunityActivityInput): Activity creation data containing:
+            - community_uid: UID of target community/sub-community
+            - name: Activity name
+            - description: Activity description
+            - activity_type: Type/category of the activity
+            - file_id: Optional list of file attachment IDs
+    
+    Returns:
+        CreateCommunityActivity: Response containing:
+            - activity: Created activity object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or invalid file IDs provided
+    
+    Note:
+        - Only community/sub-community admins can create activities
+        - Validates file attachments if provided
+        - Works with both communities and sub-communities
+        - Activity is automatically linked to the creator
+    """
     activity = graphene.Field(CommunityActivityType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -988,6 +1435,34 @@ class CreateCommunityActivity(graphene.Mutation):
             return CreateCommunityActivity(activity=None, success=False, message=message)
     
 class UpdateCommunityActivity(graphene.Mutation):
+    """
+    Updates an existing community activity.
+    
+    This mutation allows community admins to modify previously created
+    community activities, including name, description, type, and file attachments.
+    
+    Args:
+        input (UpdateCommunityActivityInput): Update data containing:
+            - uid: Activity UID to update
+            - name: New activity name (optional)
+            - description: New activity description (optional)
+            - activity_type: New activity type (optional)
+            - file_id: New list of file attachment IDs (optional)
+    
+    Returns:
+        UpdateCommunityActivity: Response containing:
+            - activity: Updated activity object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or invalid file IDs provided
+    
+    Note:
+        - Only community admins can update activities
+        - Validates file attachments if provided
+        - Only specified fields in input are updated
+    """
     activity = graphene.Field(CommunityActivityType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1023,6 +1498,28 @@ class UpdateCommunityActivity(graphene.Mutation):
             return UpdateCommunityActivity(activity=None, success=False, message=message)
        
 class DeleteCommunityActivity(graphene.Mutation):
+    """
+    Deletes a community activity.
+    
+    This mutation allows community admins to permanently delete
+    community activities that are no longer relevant or needed.
+    
+    Args:
+        uid (str): Activity UID to delete
+    
+    Returns:
+        DeleteCommunityActivity: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or activity not found
+    
+    Note:
+        - Only community admins can delete activities
+        - This action is irreversible
+        - Activity is permanently removed from the community
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1051,6 +1548,35 @@ class DeleteCommunityActivity(graphene.Mutation):
 
 
 class CreateCommunityAffiliation(graphene.Mutation):
+    """
+    Creates a new affiliation for a community or sub-community.
+    
+    This mutation allows community/sub-community admins to create affiliations
+    that represent partnerships, collaborations, or associations with external entities.
+    
+    Args:
+        input (CreateCommunityAffiliationInput): Affiliation creation data containing:
+            - community_uid: UID of target community/sub-community
+            - entity: Name of the affiliated entity
+            - date: Date of affiliation
+            - subject: Subject or purpose of affiliation
+            - file_id: Optional list of file attachment IDs
+    
+    Returns:
+        CreateCommunityAffiliation: Response containing:
+            - affiliation: Created affiliation object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or invalid file IDs provided
+    
+    Note:
+        - Only community/sub-community admins can create affiliations
+        - Validates file attachments if provided
+        - Works with both communities and sub-communities
+        - Affiliation is automatically linked to the creator
+    """
     affiliation = graphene.Field(CommunityAffiliationType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1090,6 +1616,7 @@ class CreateCommunityAffiliation(graphene.Mutation):
                 subject=input.subject,
                 file_id=input.file_id,
             )
+            
             affiliation.save()
             affiliation.created_by.connect(creator)
 
@@ -1106,6 +1633,34 @@ class CreateCommunityAffiliation(graphene.Mutation):
             return CreateCommunityAffiliation(affiliation=None, success=False, message=message)
 
 class UpdateCommunityAffiliation(graphene.Mutation):
+    """
+    Updates an existing community affiliation.
+    
+    This mutation allows community/sub-community admins to modify previously
+    created affiliations, including entity name, date, subject, and file attachments.
+    
+    Args:
+        input (UpdateCommunityAffiliationInput): Update data containing:
+            - uid: Affiliation UID to update
+            - entity: New entity name (optional)
+            - date: New affiliation date (optional)
+            - subject: New subject or purpose (optional)
+            - file_id: New list of file attachment IDs (optional)
+    
+    Returns:
+        UpdateCommunityAffiliation: Response containing:
+            - affiliation: Updated affiliation object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or invalid file IDs provided
+    
+    Note:
+        - Only community/sub-community admins can update affiliations
+        - Validates file attachments if provided
+        - Only specified fields in input are updated
+    """
     affiliation = graphene.Field(CommunityAffiliationType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1141,6 +1696,28 @@ class UpdateCommunityAffiliation(graphene.Mutation):
             return UpdateCommunityAffiliation(affiliation=None, success=False, message=message)
 
 class DeleteCommunityAffiliation(graphene.Mutation):
+    """
+    Deletes a community affiliation.
+    
+    This mutation allows community/sub-community admins to permanently delete
+    affiliations that are no longer relevant or active.
+    
+    Args:
+        uid (str): Affiliation UID to delete
+    
+    Returns:
+        DeleteCommunityAffiliation: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or affiliation not found
+    
+    Note:
+        - Only community/sub-community admins can delete affiliations
+        - This action is irreversible
+        - Affiliation is permanently removed from the community
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1168,6 +1745,35 @@ class DeleteCommunityAffiliation(graphene.Mutation):
             return DeleteCommunityAffiliation(success=False, message=message)
 
 class CreateCommunityAchievement(graphene.Mutation):
+    """
+    Creates a new achievement for a community or sub-community.
+    
+    This mutation allows community/sub-community admins to create achievements
+    that represent accomplishments, milestones, or recognitions for the community.
+    
+    Args:
+        input (CreateCommunityAchievementInput): Achievement creation data containing:
+            - community_uid: UID of target community/sub-community
+            - entity: Name or title of the achievement
+            - date: Date when achievement was earned
+            - subject: Description or details of the achievement
+            - file_id: Optional list of file attachment IDs (certificates, images, etc.)
+    
+    Returns:
+        CreateCommunityAchievement: Response containing:
+            - achievement: Created achievement object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user lacks admin privileges or invalid file IDs provided
+    
+    Note:
+        - Only community/sub-community admins can create achievements
+        - Validates file attachments if provided
+        - Works with both communities and sub-communities
+        - Achievement is automatically linked to the creator
+    """
     achievement = graphene.Field(CommunityAchievementType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1223,6 +1829,34 @@ class CreateCommunityAchievement(graphene.Mutation):
             return CreateCommunityAchievement(achievement=None, success=False, message=message)
 
 class UpdateCommunityAchievement(graphene.Mutation):
+    """
+    Updates an existing community achievement.
+    
+    This mutation allows community admins to modify previously created
+    achievements, including entity name, date, subject, and file attachments.
+    
+    Args:
+        input (UpdateCommunityAchievementInput): Update data containing:
+            - uid: Achievement UID to update
+            - entity: New entity name (optional)
+            - date: New achievement date (optional)
+            - subject: New subject or description (optional)
+            - file_id: New list of file attachment IDs (optional)
+    
+    Returns:
+        UpdateCommunityAchievement: Response containing:
+            - achievement: Updated achievement object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or invalid file IDs provided
+    
+    Note:
+        - Only community admins can update achievements
+        - Validates file attachments if provided
+        - Only specified fields in input are updated
+    """
     achievement = graphene.Field(CommunityAchievementType)
     success = graphene.Boolean()
     message = graphene.String()
@@ -1258,6 +1892,28 @@ class UpdateCommunityAchievement(graphene.Mutation):
             return UpdateCommunityAchievement(achievement=None, success=False, message=message)
 
 class DeleteCommunityAchievement(graphene.Mutation):
+    """
+    Deletes a community achievement.
+    
+    This mutation allows community admins to permanently delete
+    achievements that are no longer relevant or were created in error.
+    
+    Args:
+        uid (str): Achievement UID to delete
+    
+    Returns:
+        DeleteCommunityAchievement: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the community admin or achievement not found
+    
+    Note:
+        - Only community admins can delete achievements
+        - This action is irreversible
+        - Achievement is permanently removed from the community
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1288,6 +1944,29 @@ class DeleteCommunityAchievement(graphene.Mutation):
 
 
 class MuteCommunityNotification(graphene.Mutation):
+    """
+    Mutes notifications for a community member.
+    
+    This mutation allows community members to disable notifications
+    from a specific community they are part of.
+    
+    Args:
+        input (MuteCommunityNoficationInput): Mute data containing:
+            - community_uid: UID of the community to mute notifications for
+    
+    Returns:
+        MuteCommunityNotification: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a member of the community
+    
+    Note:
+        - Only community members can mute notifications
+        - Prevents duplicate muting (returns error if already muted)
+        - User must be authenticated
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1325,6 +2004,29 @@ class MuteCommunityNotification(graphene.Mutation):
 
 
 class UnMuteCommunityNotification(graphene.Mutation):
+    """
+    Unmutes notifications for a community member.
+    
+    This mutation allows community members to re-enable notifications
+    from a specific community they previously muted.
+    
+    Args:
+        input (UnMuteCommunityNoficationInput): Unmute data containing:
+            - community_uid: UID of the community to unmute notifications for
+    
+    Returns:
+        UnMuteCommunityNotification: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a member of the community
+    
+    Note:
+        - Only community members can unmute notifications
+        - Prevents duplicate unmuting (returns error if already unmuted)
+        - User must be authenticated
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1362,6 +2064,30 @@ class UnMuteCommunityNotification(graphene.Mutation):
 
 
 class UpdateCommunityGroupInfo(graphene.Mutation):
+    """
+    Updates community group information.
+    
+    This mutation allows authorized community members to update
+    basic community information such as name, description, and other group details.
+    
+    Args:
+        input (UpdateCommunityGroupInfoInput): Update data containing:
+            - community_uid: UID of the community to update
+            - Various community fields to update (name, description, etc.)
+    
+    Returns:
+        UpdateCommunityGroupInfo: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a member or lacks edit permissions
+    
+    Note:
+        - Only members with can_edit_group_info permission can update
+        - User must be authenticated and a community member
+        - Updates only the fields provided in input
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1399,6 +2125,33 @@ class UpdateCommunityGroupInfo(graphene.Mutation):
 
 
 class CreateCommunityRoleManager(graphene.Mutation):
+    """
+    Creates or updates community role management settings.
+    
+    This mutation allows community admins to define custom roles with specific
+    permissions for community members, enabling fine-grained access control.
+    
+    Args:
+        input (CreateManageRoleInput): Role creation data containing:
+            - community_uid: UID of the community
+            - role_name: Name of the role to create
+            - Various permission flags (is_admin, can_edit_group_info, etc.)
+    
+    Returns:
+        CreateCommunityRoleManager: Response containing:
+            - community_role_manager: Created or updated role manager object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a community admin
+    
+    Note:
+        - Only community admins can create/manage roles
+        - If role manager exists, adds new role to existing manager
+        - If not exists, creates new role manager with the role
+        - Supports various permissions like member management, content creation, etc.
+    """
     community_role_manager = graphene.Field(CommunityRoleManagerType)
     message = graphene.String()
     success = graphene.Boolean()
@@ -1498,6 +2251,40 @@ class CreateCommunityRoleManager(graphene.Mutation):
 
 
 class CreateSubCommunity(Mutation):
+    """
+    Creates a new sub-community within an existing parent community.
+    
+    This mutation allows community admins to create child or sibling sub-communities
+    with their own members, settings, and optional Matrix chat room integration.
+    
+    Args:
+        input (CreateSubCommunityInput): Sub-community creation data containing:
+            - parent_community_uid: UID of the parent community
+            - name: Name of the sub-community
+            - description: Description of the sub-community
+            - sub_community_circle: Circle type (public/private)
+            - sub_community_type: Type (child/sibling community)
+            - sub_community_group_type: Group type classification
+            - category: Category classification
+            - member_uid: List of initial member UIDs
+            - group_icon_id: Optional group icon ID
+    
+    Returns:
+        CreateSubCommunity: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a community admin or invalid member UIDs provided
+    
+    Note:
+        - Only community admins can create sub-communities
+        - Validates all member UIDs before creation
+        - Creates Matrix chat room if user has Matrix profile
+        - Sends notifications to initial members
+        - Creator automatically becomes admin of the sub-community
+        - Supports both child and sibling community types
+    """
     
     success = graphene.Boolean()
     message=graphene.String()
@@ -1750,6 +2537,35 @@ class CreateSubCommunity(Mutation):
 
 
 class UpdateSubCommunity(Mutation):
+    """
+    Updates an existing sub-community.
+    
+    This mutation allows sub-community admins to modify sub-community
+    information including name, description, icons, and other settings.
+    
+    Args:
+        input (UpdateSubCommunityInput): Update data containing:
+            - uid: Sub-community UID to update
+            - name: New name (optional)
+            - description: New description (optional)
+            - group_icon_id: New group icon ID (optional)
+            - cover_image_id: New cover image ID (optional)
+            - Other sub-community fields to update
+    
+    Returns:
+        UpdateSubCommunity: Response containing:
+            - community: Updated sub-community object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a sub-community admin or invalid image IDs provided
+    
+    Note:
+        - Only sub-community admins can update sub-communities
+        - Validates image attachments if provided
+        - Updates only the fields provided in input
+    """
     community = graphene.Field(SubCommunityType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -1800,6 +2616,33 @@ class UpdateSubCommunity(Mutation):
 
 
 class CreateSubCommunityRoleManager(graphene.Mutation):
+    """
+    Creates or updates sub-community role management settings.
+    
+    This mutation allows sub-community admins to define custom roles with specific
+    permissions for sub-community members, enabling fine-grained access control.
+    
+    Args:
+        input (CreateManageSubCommunityRoleInput): Role creation data containing:
+            - sub_community_uid: UID of the sub-community
+            - role_name: Name of the role to create
+            - Various permission flags (is_admin, can_edit_group_info, etc.)
+    
+    Returns:
+        CreateSubCommunityRoleManager: Response containing:
+            - sub_community_role_manager: Created or updated role manager object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not a sub-community admin
+    
+    Note:
+        - Only sub-community admins can create/manage roles
+        - If role manager exists, adds new role to existing manager
+        - If not exists, creates new role manager with the role
+        - Supports various permissions like member management, content creation, etc.
+    """
     sub_community_role_manager = graphene.Field(SubCommunityRoleManagerType)
     message = graphene.String()
     success = graphene.Boolean()
@@ -1899,6 +2742,31 @@ class CreateSubCommunityRoleManager(graphene.Mutation):
 
 
 class AssignRoleMutation(graphene.Mutation):
+    """
+    Assigns a role to community members.
+    
+    This mutation allows community admins to assign predefined roles
+    to specific community members, granting them associated permissions.
+    
+    Args:
+        input (AssignRoleInput): Role assignment data containing:
+            - community_uid: UID of the community
+            - role_id: ID of the role to assign
+            - user_uids: List of user UIDs to assign the role to
+    
+    Returns:
+        AssignRoleMutation: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If role_id is invalid or role manager doesn't exist
+    
+    Note:
+        - Validates that the role_id exists in the community's role manager
+        - Creates role assignment record if it doesn't exist
+        - Can assign roles to multiple users in a single operation
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1935,6 +2803,31 @@ class AssignRoleMutation(graphene.Mutation):
 
 
 class AssignSubcommunityRoleMutation(graphene.Mutation):
+    """
+    Assigns a role to sub-community members.
+    
+    This mutation allows sub-community admins to assign predefined roles
+    to specific sub-community members, granting them associated permissions.
+    
+    Args:
+        input (AssignSubCommunityRoleInput): Role assignment data containing:
+            - sub_community_uid: UID of the sub-community
+            - role_id: ID of the role to assign
+            - user_uids: List of user UIDs to assign the role to
+    
+    Returns:
+        AssignSubcommunityRoleMutation: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If role_id is invalid or role manager doesn't exist
+    
+    Note:
+        - Validates that the role_id exists in the sub-community's role manager
+        - Creates role assignment record if it doesn't exist
+        - Can assign roles to multiple users in a single operation
+    """
     success = graphene.Boolean()
     message = graphene.String()
 
@@ -1974,6 +2867,33 @@ class AssignSubcommunityRoleMutation(graphene.Mutation):
 
 
 class JoinGeneratedCommunity(Mutation):
+    """
+    Adds members to a generated community with automatic role assignment.
+    
+    This mutation allows users to join generated communities with special logic
+    for role assignment based on community size and member count.
+    
+    Args:
+        input (AddMemberInput): Member addition data containing:
+            - community_uid: UID of the generated community
+            - user_uid: List of user UIDs to add as members
+    
+    Returns:
+        JoinGeneratedCommunity: Response containing:
+            - all_membership: Last created membership object
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If users are invalid or already members
+    
+    Note:
+        - Validates all user UIDs before processing
+        - Prevents duplicate memberships
+        - Auto-assigns admin/leader roles if community has ≤5 members
+        - Regular member roles for communities with >5 members
+        - Designed specifically for generated communities
+    """
     all_membership = graphene.Field(MembershipType)
     success = graphene.Boolean()
     message=graphene.String()
@@ -2052,6 +2972,29 @@ class JoinGeneratedCommunity(Mutation):
 
 
 class CreateCommunityPermission(Mutation):
+    """
+    Sets permission settings for a community or sub-community.
+    
+    This mutation allows admins to configure various permission settings
+    that control member actions within the community.
+    
+    Args:
+        input (CommunityPermissionInput): Permission settings containing:
+            - community_uid: UID of the community or sub-community
+            - only_admin_can_message: Whether only admins can send messages
+            - only_admin_can_add_member: Whether only admins can add members
+            - only_admin_can_remove_member: Whether only admins can remove members
+    
+    Returns:
+        CreateCommunityPermission: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Note:
+        - Works for both communities and sub-communities
+        - Falls back to sub-community if community UID not found
+        - Updates permission flags directly on the community/sub-community object
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -2094,6 +3037,22 @@ class CreateCommunityPermission(Mutation):
 
 
 class CreateGeneratedCommunity(Mutation):
+    """
+    Generates communities automatically based on user interests.
+    
+    This mutation triggers the automatic generation of communities
+    using an algorithm that analyzes user interests and preferences.
+    
+    Returns:
+        CreateGeneratedCommunity: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success message or generation details
+    
+    Note:
+        - Uses the generate_communities_based_on_interest() function
+        - No input parameters required
+        - Designed for automated community creation workflows
+    """
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -2118,6 +3077,35 @@ class CreateGeneratedCommunity(Mutation):
 
 
 class CreateCommunityPost(Mutation):
+    """
+    Creates a new post in a community or sub-community.
+    
+    This mutation allows community admins to create posts with various
+    content types including text, files, and different privacy settings.
+    
+    Args:
+        input (CreateCommunityPostInput): Post creation data containing:
+            - community_uid: UID of the community or sub-community
+            - post_title: Title of the post
+            - post_text: Text content of the post
+            - post_type: Type of post (text, image, etc.)
+            - privacy: Privacy setting for the post
+            - post_file_id: Optional list of file IDs to attach
+    
+    Returns:
+        CreateCommunityPost: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not an admin or not a member
+    
+    Note:
+        - Only community/sub-community admins can create posts
+        - Validates file IDs if provided
+        - Works for both communities and sub-communities
+        - Connects post to creator and community/sub-community
+    """
     
     success = graphene.Boolean()
     message = graphene.String()
@@ -2194,6 +3182,29 @@ class CreateCommunityPost(Mutation):
 
 
 class DeleteCommunityPost(Mutation):
+    """
+    Deletes a community post by marking it as deleted.
+    
+    This mutation allows post creators to delete their own posts
+    by setting the is_deleted flag to True.
+    
+    Args:
+        input (DeleteInput): Deletion data containing:
+            - uid: UID of the community post to delete
+    
+    Returns:
+        DeleteCommunityPost: Response containing:
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        Exception: If user is not the post creator
+    
+    Note:
+        - Only the original post creator can delete their post
+        - Uses soft delete (sets is_deleted=True) rather than hard delete
+        - Validates user ownership before allowing deletion
+    """
     success = graphene.Boolean()
     message = graphene.String()
 

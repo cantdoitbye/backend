@@ -1,3 +1,29 @@
+"""Community GraphQL Queries Module
+
+This module provides comprehensive GraphQL query resolvers for the community management system.
+It handles all community-related data retrieval operations including:
+
+- Community and subcommunity information
+- Membership management and user roles
+- Community goals, activities, affiliations, and achievements
+- Community recommendations and feeds
+- Role-based access control and permissions
+
+The module supports both regular communities and subcommunities with proper authorization
+and error handling through decorators.
+
+Key Features:
+- JWT-based authentication for all queries
+- Role-based access control for sensitive operations
+- Support for filtering by community type, circle, and category
+- Comprehensive error handling with custom decorators
+- Neo4j database integration for graph-based relationships
+- Optimized queries for performance
+
+Author: Community Team
+Version: 2.0
+"""
+
 from graphene_django import DjangoObjectType
 from neomodel import db
 import graphene
@@ -18,21 +44,50 @@ from auth_manager.Utils.generate_presigned_url import generate_file_info
 
 
 class SubCommunityRoleManagerType(DjangoObjectType):
+    """GraphQL type for SubCommunityRoleManager model.
+    
+    Provides GraphQL representation of subcommunity role management,
+    including role definitions and permissions for subcommunity members.
+    """
     class Meta:
         model = SubCommunityRoleManager
 
 
 class CommunityRoleManagerType(DjangoObjectType):
+    """GraphQL type for CommunityRoleManager model.
+    
+    Provides GraphQL representation of community role management,
+    including role definitions and permissions for community members.
+    """
     class Meta:
         model = CommunityRoleManager
 
 
 class CommunityRoleAssignmentType(DjangoObjectType):
+    """GraphQL type for CommunityRoleAssignment model.
+    
+    Provides GraphQL representation of role assignments,
+    mapping users to specific roles within communities.
+    """
     class Meta:
         model = CommunityRoleAssignment
 
 
 class Query(graphene.ObjectType):
+    """Main GraphQL Query class for community-related operations.
+    
+    This class contains all GraphQL query resolvers for community management,
+    including community discovery, membership management, role assignments,
+    and content retrieval. All queries require authentication and many include
+    authorization checks.
+    
+    Features:
+    - Community and subcommunity queries
+    - Membership and role management
+    - Content queries (goals, activities, affiliations, achievements)
+    - Recommendation and feed systems
+    - Administrative queries for superusers
+    """
     
     
     community_messages = graphene.List(
@@ -40,21 +95,38 @@ class Query(graphene.ObjectType):
     
     community_byuid = graphene.Field(
         CommunityDetailsType, uid=graphene.String(required=True))
-    # code Review and optimisation needed
     @handle_graphql_community_errors
     @login_required
     def resolve_community_byuid(self, info, uid):
-            payload = info.context.payload
-            user_id = payload.get('user_id')
-            user_node = Users.nodes.get(user_id=user_id)
-            try:
-                community = Community.nodes.get(uid=uid)
-                return CommunityDetailsType.from_neomodel(community, None,user_node)
-            except Community.DoesNotExist:
-                # If Community does not exist, try fetching SubCommunity
-                
-                sub_community = SubCommunity.nodes.get(uid=uid)
-                return CommunityDetailsType.from_neomodel(None,sub_community, user_node)
+        """Retrieve community or subcommunity details by UID.
+        
+        Fetches detailed information about a community or subcommunity based on the provided UID.
+        If a community with the given UID doesn't exist, it attempts to find a subcommunity.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            CommunityDetailsType: Detailed community or subcommunity information
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+            
+        Note:
+            This method requires code review and optimization as indicated by the original comment.
+        """
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=user_id)
+        try:
+            community = Community.nodes.get(uid=uid)
+            return CommunityDetailsType.from_neomodel(community, None,user_node)
+        except Community.DoesNotExist:
+            # If Community does not exist, try fetching SubCommunity
+            
+            sub_community = SubCommunity.nodes.get(uid=uid)
+            return CommunityDetailsType.from_neomodel(None,sub_community, user_node)
                 
     my_community = graphene.List(
         CommunityType, community_type=GroupTypeEnum(), community_circle=CircleTypeEnum())
@@ -62,6 +134,19 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community(self, info, community_type=None, community_circle=None):
+        """Retrieve communities that the authenticated user is a member of.
+        
+        Fetches all communities where the current user has membership, with optional
+        filtering by community type and circle.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_type (GroupTypeEnum, optional): Filter by community type
+            community_circle (CircleTypeEnum, optional): Filter by community circle
+            
+        Returns:
+            List[CommunityType]: List of communities the user is a member of
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -82,6 +167,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_grouped_communities(self, info):
+        """Retrieve communities grouped by type for the authenticated user.
+        
+        Fetches user's communities and subcommunities, organizing them by type:
+        - Interest groups
+        - Official groups
+        - Personal groups
+        - Business groups
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[GroupedCommunityCategoryType]: Communities grouped by category type
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -117,6 +216,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_members_by_community_uid(self, info, community_uid):
+        """Retrieve all members of a specific community.
+        
+        Fetches the complete membership list for a given community.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community
+            
+        Returns:
+            List[MembershipType]: List of all community memberships
+            
+        Raises:
+            DoesNotExist: If community with given UID doesn't exist
+        """
         community = Community.nodes.get(uid=community_uid)
         communitymember = list(community.members.all())
         return [MembershipType.from_neomodel(member) for member in communitymember]
@@ -127,6 +240,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_sub_community_members_by_sub_community_uid(self, info, sub_community_uid):
+        """Retrieve all members of a specific subcommunity.
+        
+        Fetches the complete membership list for a given subcommunity.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            sub_community_uid (str): Unique identifier of the subcommunity
+            
+        Returns:
+            List[SubCommunityMembershipType]: List of all subcommunity memberships
+            
+        Raises:
+            DoesNotExist: If subcommunity with given UID doesn't exist
+        """
         community = SubCommunity.nodes.get(uid=sub_community_uid)
         communitymember = list(community.sub_community_members.all())
         return [SubCommunityMembershipType.from_neomodel(member) for member in communitymember]
@@ -141,19 +268,34 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_member_by_community_uid_and_user_uid(self, info, community_uid, user_uid):
+        """Retrieve community members connected to a specific user.
         
-            community = Community.nodes.get(uid=community_uid)
+        Fetches community members who are connected to the specified user,
+        providing filtered membership information based on user connections.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community
+            user_uid (str): Unique identifier of the user to filter connections
+            
+        Returns:
+            List[MembershipType]: List of memberships for users connected to the specified user
+            
+        Raises:
+            DoesNotExist: If community or user with given UIDs don't exist
+        """
+        community = Community.nodes.get(uid=community_uid)
 
-            if user_uid:
-                # If user_uid is provided, filter the memberships for this specific user
-                user_node = Users.nodes.get(uid=user_uid)
-                community_members = [
-                    member
-                    for member in community.members.all()
-                    if member.user.is_connected(user_node)
-                ]
+        if user_uid:
+            # If user_uid is provided, filter the memberships for this specific user
+            user_node = Users.nodes.get(uid=user_uid)
+            community_members = [
+                member
+                for member in community.members.all()
+                if member.user.is_connected(user_node)
+            ]
 
-            return [MembershipType.from_neomodel(member) for member in community_members]
+        return [MembershipType.from_neomodel(member) for member in community_members]
 
         
 
@@ -167,37 +309,65 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_recentlyjoinedmember_by_community_uid(self, info, community_uid, user_uid=None):
+        """Retrieve recently joined members of a community.
+        
+        Fetches community members sorted by join date (newest first), with optional
+        filtering by user connections.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community
+            user_uid (str, optional): Filter members connected to this user
+            
+        Returns:
+            List[MembershipType]: List of memberships sorted by join date (newest first)
+            
+        Raises:
+            DoesNotExist: If community or user with given UIDs don't exist
+        """
+        # Fetch the community node by its UID
+        community = Community.nodes.get(uid=community_uid)
 
-            # Fetch the community node by its UID
-            community = Community.nodes.get(uid=community_uid)
+        if user_uid:
+            # If user_uid is provided, fetch the user node
+            user_node = Users.nodes.get(uid=user_uid)
+            # Filter the memberships to include only those connected to the provided user node
+            community_members = [
+                member
+                for member in community.members.all()
+                if member.user.is_connected(user_node)
+            ]
+        else:
+            # If no user_uid is provided, get all memberships in the community
+            community_members = list(community.members.all())
 
-            if user_uid:
-                # If user_uid is provided, fetch the user node
-                user_node = Users.nodes.get(uid=user_uid)
-                # Filter the memberships to include only those connected to the provided user node
-                community_members = [
-                    member
-                    for member in community.members.all()
-                    if member.user.is_connected(user_node)
-                ]
-            else:
-                # If no user_uid is provided, get all memberships in the community
-                community_members = list(community.members.all())
+        # Sort community members by join time from newer to older
+        community_members.sort(
+            key=lambda member: member.join_date, reverse=True)
 
-            # Sort community members by join time from newer to older
-            community_members.sort(
-                key=lambda member: member.join_date, reverse=True)
-
-            # Return the memberships as list of MembershipType objects
-            return [MembershipType.from_neomodel(member) for member in community_members]
+        # Return the memberships as list of MembershipType objects
+        return [MembershipType.from_neomodel(member) for member in community_members]
 
         
 
-    # admin(person who created the community) can see all members of a community
     my_community_member = graphene.List(MembershipType)
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_member(self, info):
+        """Retrieve all members from communities owned by the authenticated user.
+        
+        Fetches all members from all communities that the current user has created or owns.
+        This is typically used by community administrators to view their community memberships.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[MembershipType]: List of all memberships from user's communities
+            
+        Note:
+            Only community admins/creators can access this information.
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -209,13 +379,27 @@ class Query(graphene.ObjectType):
         return [MembershipType.from_neomodel(x) for x in community_member]
         
 
-    # user can see all communities he is member of
-    # optimisation and review needed
     user_community_membership = graphene.List(
         CommunityInfoType, community_type=GroupTypeEnum(), community_circle=CircleTypeEnum())
     @handle_graphql_community_errors
     @login_required
     def resolve_user_community_membership(self, info, community_type=None, community_circle=None):
+        """Retrieve detailed membership information for the authenticated user.
+        
+        Fetches comprehensive information about all communities and subcommunities
+        where the user has membership, with optional filtering capabilities.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_type (GroupTypeEnum, optional): Filter by community type
+            community_circle (CircleTypeEnum, optional): Filter by community circle
+            
+        Returns:
+            List[CommunityInfoType]: Detailed community membership information
+            
+        Note:
+            This method requires optimization and review as indicated by the original comment.
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
 
@@ -240,36 +424,50 @@ class Query(graphene.ObjectType):
         return [CommunityInfoType.from_neomodel(results1, results2)]
 
 
-    # user can see whether he is member of particular community or not
     communitymembership_details_by_community_uid = graphene.List(
         MembershipType, community_uid=graphene.String(required=True))
     
     @handle_graphql_community_errors
     @login_required
     def resolve_communitymembership_details_by_community_uid(self, info, community_uid):
-            payload = info.context.payload
-            user_id = payload.get('user_id')
-            user_node = Users.nodes.get(user_id=user_id)
-            user_email = user_node.email  # Get the email of the logged-in user
+        """Check if the authenticated user is a member of a specific community.
+        
+        Verifies membership status and returns membership details for the current user
+        in the specified community.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community to check
+            
+        Returns:
+            List[MembershipType]: User's membership details in the community (empty if not a member)
+            
+        Note:
+            Uses Cypher query to efficiently check membership status.
+        """
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=user_id)
+        user_email = user_node.email  # Get the email of the logged-in user
 
-            # Cypher query to match communities where the membership is associated with the logged-in user's email
-            query = """
-            MATCH (c:Community)-[:MEMBER_OF]->(m:Membership)-[:MEMBER]->(u:Users)
-            WHERE u.email = $user_email AND c.uid = $community_uid
-            RETURN m
-            """
+        # Cypher query to match communities where the membership is associated with the logged-in user's email
+        query = """
+        MATCH (c:Community)-[:MEMBER_OF]->(m:Membership)-[:MEMBER]->(u:Users)
+        WHERE u.email = $user_email AND c.uid = $community_uid
+        RETURN m
+        """
 
-            # Define the parameters for the query
-            params = {'user_email': user_email, 'community_uid': community_uid}
+        # Define the parameters for the query
+        params = {'user_email': user_email, 'community_uid': community_uid}
 
-            # Execute the query and get results
-            results, meta = db.cypher_query(query, params)
+        # Execute the query and get results
+        results, meta = db.cypher_query(query, params)
 
-            # Inflate the results into Membership objects
-            memberships = [Membership.inflate(row[0]) for row in results]
+        # Inflate the results into Membership objects
+        memberships = [Membership.inflate(row[0]) for row in results]
 
-            # Convert Membership objects to MembershipType GraphQL objects
-            return [MembershipType.from_neomodel(membership) for membership in memberships]
+        # Convert Membership objects to MembershipType GraphQL objects
+        return [MembershipType.from_neomodel(membership) for membership in memberships]
 
     community_goal_by_community_uid = graphene.List(
         CommunityGoalType, community_uid=graphene.String(required=True))
@@ -277,6 +475,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_goal_by_community_uid(self, info, community_uid):
+        """Retrieve all goals for a specific community or subcommunity.
+        
+        Fetches all non-deleted goals associated with the given community or subcommunity UID.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            List[CommunityGoalType]: List of active community goals
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         try:
             community = Community.nodes.get(uid=community_uid)
             goals = community.communitygoal.all()
@@ -294,6 +506,16 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_goals(self, info):
+        """Retrieve all goals from communities the authenticated user belongs to.
+        
+        Fetches goals from all communities where the current user has membership.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityGoalType]: List of goals from user's communities
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -310,6 +532,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_activity_by_community_uid(self, info, community_uid):
+        """Retrieve all activities for a specific community or subcommunity.
+        
+        Fetches all non-deleted activities associated with the given community or subcommunity UID.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            List[CommunityActivityType]: List of active community activities
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         try:
             community = Community.nodes.get(uid=community_uid)
             activities = community.communityactivity.all()
@@ -327,6 +563,16 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_activities(self, info):
+        """Retrieve all activities from communities the authenticated user belongs to.
+        
+        Fetches activities from all communities where the current user has membership.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityActivityType]: List of activities from user's communities
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -343,6 +589,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_affiliation_by_community_uid(self, info, community_uid):
+        """Retrieve all affiliations for a specific community or subcommunity.
+        
+        Fetches all non-deleted affiliations associated with the given community or subcommunity UID.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            List[CommunityAffiliationType]: List of active community affiliations
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         try:
             community = Community.nodes.get(uid=community_uid)
             affiliations = community.communityaffiliation.all()
@@ -360,6 +620,16 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_affiliations(self, info):
+        """Retrieve all affiliations from communities the authenticated user belongs to.
+        
+        Fetches affiliations from all communities where the current user has membership.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityAffiliationType]: List of affiliations from user's communities
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -376,6 +646,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_achievement_by_community_uid(self, info, community_uid):
+        """Retrieve all achievements for a specific community or subcommunity.
+        
+        Fetches all non-deleted achievements associated with the given community or subcommunity UID.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            List[CommunityAchievementType]: List of active community achievements
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         try:
             community = Community.nodes.get(uid=community_uid)
             achievements = community.communityachievement.all()
@@ -393,6 +677,16 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_achievements(self, info):
+        """Retrieve all achievements from communities the authenticated user belongs to.
+        
+        Fetches achievements from all communities where the current user has membership.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityAchievementType]: List of achievements from user's communities
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -412,6 +706,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_recommended_communities(self, info, community_circle=None, community_type=None, category=None):
+        """Retrieve recommended communities for the authenticated user.
+        
+        Returns a list of communities that might be of interest to the current user
+        based on recommendation algorithms. Supports filtering by circle, type, and category.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_circle (CircleTypeEnum, optional): Filter by community circle
+            community_type (GroupTypeEnum, optional): Filter by community type
+            category (CategoryEnum, optional): Filter by community category
+            
+        Returns:
+            List[CommunityType]: List of recommended communities (max 35)
+        """
         # This for Temporary later we can add scheduler or other things for community Generation
         # generate_communities_based_on_interest()
 
@@ -453,6 +761,18 @@ class Query(graphene.ObjectType):
     
     @login_required
     def resolve_community_role_manager_by_community_uid(self, info, community_uid):
+        """Retrieve role managers for a specific community.
+        
+        Fetches all role management configurations for the given community,
+        including detailed permissions for each role.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community
+            
+        Returns:
+            List[CommunityRoleManagerDetailsType]: List of community role managers with permissions
+        """
         # Filter CommunityRoleManager by community_uid
         all_details = CommunityRoleManager.objects.filter(
             community_uid=community_uid)
@@ -491,6 +811,18 @@ class Query(graphene.ObjectType):
     
     @login_required
     def resolve_sub_community_role_manager_by_sub_community_uid(self, info, sub_community_uid):
+        """Retrieve role managers for a specific subcommunity.
+        
+        Fetches all role management configurations for the given subcommunity,
+        including detailed permissions for each role.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            sub_community_uid (str): Unique identifier of the subcommunity
+            
+        Returns:
+            List[CommunityRoleManagerDetailsType]: List of subcommunity role managers with permissions
+        """
 
         all_details = SubCommunityRoleManager.objects.filter(
             sub_community_uid=sub_community_uid)
@@ -532,9 +864,24 @@ class Query(graphene.ObjectType):
         role_id=graphene.Int(required=True)
     )
 
-    
+    @handle_graphql_community_errors
     @login_required
     def resolve_community_assigned_user_role_by_community_uid_and_role_id(self, info, community_uid, role_id):
+        """Retrieve users assigned to a specific role in a community.
+        
+        Fetches all role assignments for a given role within a specific community.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community
+            role_id (str): Unique identifier of the role
+            
+        Returns:
+            List[CommunityRoleAssignmentType]: List of role assignments
+            
+        Raises:
+            DoesNotExist: If community or role does not exist
+        """
         # Retrieve the relevant CommunityRoleAssignment object by community_uid
         role_assignment = CommunityRoleAssignment.objects.filter(
             community_uid=community_uid).first()
@@ -569,9 +916,24 @@ class Query(graphene.ObjectType):
         role_id=graphene.Int(required=True)
     )
 
-    
+    @handle_graphql_community_errors
     @login_required
     def resolve_sub_community_assigned_user_role_by_community_uid_and_role_id(self, info, sub_community_uid, role_id):
+        """Retrieve users assigned to a specific role in a subcommunity.
+        
+        Fetches all role assignments for a given role within a specific subcommunity.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            sub_community_uid (str): Unique identifier of the subcommunity
+            role_id (str): Unique identifier of the role
+            
+        Returns:
+            List[CommunityRoleAssignmentType]: List of role assignments
+            
+        Raises:
+            DoesNotExist: If subcommunity or role does not exist
+        """
         # Retrieve the relevant CommunityRoleAssignment object by community_uid
         role_assignment = SubCommunityRoleAssignment.objects.filter(
             subcommunity_uid=sub_community_uid).first()
@@ -604,6 +966,17 @@ class Query(graphene.ObjectType):
 
     @login_required
     def resolve_suggested_communities(self, info):
+        """Retrieve suggested communities for the authenticated user.
+        
+        Returns a list of communities that are suggested to the current user
+        based on generated community recommendations.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityType]: List of suggested communities
+        """
         payload = info.context.payload
         user_id = str(payload.get('user_id'))
 
@@ -620,6 +993,22 @@ class Query(graphene.ObjectType):
     community_member_list=graphene.List(UserCommunityListType,uid=graphene.String(required=True),circle=CircleTypeEnum())
     @login_required
     def resolve_community_member_list(self, info, uid, circle=None):
+        """Retrieve a detailed list of community members.
+        
+        Fetches comprehensive member information for a specific community or subcommunity,
+        with optional filtering by circle type.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community or subcommunity
+            circle (CircleTypeEnum, optional): Filter by circle type (Inner, Outer, Universal)
+            
+        Returns:
+            List[UserCommunityListType]: Detailed list of community members
+            
+        Note:
+            Code optimization and review needed for this query.
+        """
 
         # Define parameters
         params = {"uid": uid}
@@ -688,6 +1077,23 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_details_by_uid(self, info, uid, communityType=None, communityCircle=None):
+        """Retrieve detailed community information organized by category.
+        
+        Fetches community details including child, sibling, and parent communities,
+        with optional filtering by type and circle.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community or subcommunity
+            communityType (GroupTypeEnum, optional): Filter by community type
+            communityCircle (CircleTypeEnum, optional): Filter by community circle
+            
+        Returns:
+            List[CommunityDetailsByCategoryType]: Community details organized by category
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -780,6 +1186,17 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_my_community_feed(self, info,community_type=None):
+        """Retrieve community feed for the authenticated user.
+        
+        Returns categorized community feed including popular and recent communities.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_type (GroupTypeEnum, optional): Filter by community type
+            
+        Returns:
+            List[CommunityCategoryType]: Categorized community feed
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -796,6 +1213,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_post_by_community_uid(self, info, community_uid):
+        """Retrieve all posts for a specific community or subcommunity.
+        
+        Fetches all non-deleted posts associated with the given community or subcommunity UID.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            community_uid (str): Unique identifier of the community or subcommunity
+            
+        Returns:
+            List[CommunityPostType]: List of active community posts
+            
+        Raises:
+            DoesNotExist: If neither community nor subcommunity exists with the given UID
+        """
         try:
             community = Community.nodes.get(uid=community_uid)
             communitypost = community.community_post.all()
@@ -813,6 +1244,19 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_secondary_user_community_feed_by_user_uid(self, info,user_uid, community_type=None):
+        """Retrieve secondary community feed for a specific user.
+        
+        Returns categorized community feed including mutual and interest communities
+        for the specified user relative to the authenticated user.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            user_uid (str): Unique identifier of the target user
+            community_type (GroupTypeEnum, optional): Filter by community type
+            
+        Returns:
+            List[SecondaryCommunityCategoryType]: Categorized secondary community feed
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -830,6 +1274,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_communities(self, info):
+        """Retrieve all communities (Admin only).
+        
+        Returns all communities in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityType]: List of all communities
+            
+        Note:
+            This API is not used in the frontend.
+        """
         communities = Community.nodes.all()
         return [CommunityType.from_neomodel(community) for community in communities]
     
@@ -840,6 +1297,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_members(self, info):
+        """Retrieve all community memberships (Admin only).
+        
+        Returns all community memberships in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[MembershipType]: List of all community memberships
+            
+        Note:
+            This API is not used in the frontend.
+        """
         return [MembershipType.from_neomodel(membership) for membership in Membership.nodes.all()]
 
     
@@ -848,6 +1318,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_reviews(self, info):
+        """Retrieve all community reviews (Admin only).
+        
+        Returns all community reviews in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityReviewType]: List of all community reviews
+            
+        Note:
+            This API is not used in the frontend.
+        """
         return [CommunityReviewType.from_neomodel(review) for review in CommunityReview.nodes.all()]
 
     all_community_message = graphene.List(CommunityMessagesType)
@@ -856,6 +1339,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_message(self, info):
+        """Retrieve all community messages (Admin only).
+        
+        Returns all community messages in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityMessagesType]: List of all community messages
+            
+        Note:
+            This API is not used in the frontend.
+        """
         return [CommunityMessagesType.from_neomodel(message) for message in CommunityMessages.nodes.all()]
 
     all_community_goals = graphene.List(CommunityGoalType)
@@ -863,6 +1359,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_goals(self, info):
+        """Retrieve all community goals (Admin only).
+        
+        Returns all community goals in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityGoalType]: List of all community goals
+            
+        Note:
+            This API is not used in the frontend.
+        """
         community_goals = CommunityGoal.nodes.all()
         return [CommunityGoalType.from_neomodel(goal) for goal in community_goals]
 
@@ -871,6 +1380,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_activities(self, info):
+        """Retrieve all community activities (Admin only).
+        
+        Returns all community activities in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityActivityType]: List of all community activities
+            
+        Note:
+            This API is not used in the frontend.
+        """
         community_activities = CommunityActivity.nodes.all()
         return [CommunityActivityType.from_neomodel(activity) for activity in community_activities]
 
@@ -884,6 +1406,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_affiliations(self, info):
+        """Retrieve all community affiliations (Admin only).
+        
+        Returns all community affiliations in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityAffiliationType]: List of all community affiliations
+            
+        Note:
+            This API is not used in the frontend.
+        """
         community_affiliations = CommunityAffiliation.nodes.all()
         return [CommunityAffiliationType.from_neomodel(affiliation) for affiliation in community_affiliations]
     
@@ -893,6 +1428,19 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_community_achievements(self, info):
+        """Retrieve all community achievements (Admin only).
+        
+        Returns all community achievements in the system. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            
+        Returns:
+            List[CommunityAchievementType]: List of all community achievements
+            
+        Note:
+            This API is not used in the frontend.
+        """
         community_achievements = CommunityAchievement.nodes.all()
         return [CommunityAchievementType.from_neomodel(achievement) for achievement in community_achievements]
     
@@ -924,9 +1472,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_goal_by_uid(self, info, uid):
-        """
-        Retrieve a specific community goal by its UID.
-        Only members of the community can access the goal.
+        """Retrieve a specific community goal by its UID.
+        
+        Only members of the community can access the goal. Validates membership
+        before returning goal details.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community goal
+            
+        Returns:
+            CommunityGoalType: The requested community goal
+            
+        Raises:
+            Exception: If goal not found, deleted, or user lacks access
         """
         try:
             payload = info.context.payload
@@ -965,9 +1524,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_activity_by_uid(self, info, uid):
-        """
-        Retrieve a specific community activity by its UID.
-        Only members of the community can access the activity.
+        """Retrieve a specific community activity by its UID.
+        
+        Only members of the community can access the activity. Validates membership
+        before returning activity details.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community activity
+            
+        Returns:
+            CommunityActivityType: The requested community activity
+            
+        Raises:
+            Exception: If activity not found, deleted, or user lacks access
         """
         try:
             payload = info.context.payload
@@ -1006,9 +1576,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_affiliation_by_uid(self, info, uid):
-        """
-        Retrieve a specific community affiliation by its UID.
-        Only members of the community can access the affiliation.
+        """Retrieve a specific community affiliation by its UID.
+        
+        Only members of the community can access the affiliation. Validates membership
+        before returning affiliation details.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community affiliation
+            
+        Returns:
+            CommunityAffiliationType: The requested community affiliation
+            
+        Raises:
+            Exception: If affiliation not found, deleted, or user lacks access
         """
         try:
             payload = info.context.payload
@@ -1047,9 +1628,20 @@ class Query(graphene.ObjectType):
     @handle_graphql_community_errors
     @login_required
     def resolve_community_achievement_by_uid(self, info, uid):
-        """
-        Retrieve a specific community achievement by its UID.
-        Only members of the community can access the achievement.
+        """Retrieve a specific community achievement by its UID.
+        
+        Only members of the community can access the achievement. Validates membership
+        before returning achievement details.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            uid (str): Unique identifier of the community achievement
+            
+        Returns:
+            CommunityAchievementType: The requested community achievement
+            
+        Raises:
+            Exception: If achievement not found, deleted, or user lacks access
         """
         try:
             payload = info.context.payload

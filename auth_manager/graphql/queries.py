@@ -16,35 +16,108 @@ from .inputs import ProfiledataTypeEnum
 from auth_manager.graphql.raw_queries import profile_details_query
 
 class StateType(DjangoObjectType):
+    """
+    GraphQL type for StateInfo model.
+    
+    Represents state information in the GraphQL schema,
+    exposing state ID and name fields.
+    
+    Meta:
+        model: StateInfo Django model
+        fields: Limited to id and state_name
+    """
     class Meta:
         model = StateInfo
         fields = ("id", "state_name")
 
 class CityType(DjangoObjectType):
+    """
+    GraphQL type for CityInfo model.
+    
+    Represents city information in the GraphQL schema,
+    exposing city ID and name fields.
+    
+    Meta:
+        model: CityInfo Django model
+        fields: Limited to id and city_name
+    """
     class Meta:
         model = CityInfo
         fields = ("id", "city_name")
 
 class InviteType(DjangoObjectType):
+    """
+    GraphQL type for Invite model.
+    
+    Represents invitation records in the GraphQL schema,
+    exposing all model fields for invite operations.
+    
+    Meta:
+        model: Invite Django model
+        fields: All model fields are exposed
+    """
     class Meta:
         model = Invite
         fields = "__all__"
 
 class GetInviteDetails(graphene.ObjectType):
+    """
+    Response type for invite detail queries.
+    
+    Provides structured response for invite-related operations
+    including the invite object, success status, and messages.
+    
+    Fields:
+        invite: InviteType object containing invite details
+        success: Boolean indicating operation success
+        message: String containing response message
+    """
     invite = graphene.Field(InviteType)
     success = graphene.Boolean()
     message = graphene.String()
 
 
 class UploadContactType(DjangoObjectType):
+    """
+    GraphQL type for UploadContact model.
+    
+    Represents uploaded contact information in the GraphQL schema,
+    providing access to contact data fields.
+    
+    Meta:
+        model: UploadContact Django model
+    """
     class Meta:
         model = UploadContact
 
 class SubInterestType(graphene.ObjectType):
+    """
+    GraphQL type for sub-interest data.
+    
+    Represents individual sub-interest items with ID and name,
+    used within interest list structures.
+    
+    Fields:
+        id: Integer ID of the sub-interest (required)
+        name: String name of the sub-interest (required)
+    """
     id = graphene.Int(required=True)
     name = graphene.String(required=True)
 
 class InterestListType(DjangoObjectType):
+    """
+    GraphQL type for InterestList model with sub-interests.
+    
+    Represents interest categories with their associated sub-interests,
+    providing hierarchical interest data structure.
+    
+    Fields:
+        sub_interests: List of SubInterestType objects
+    
+    Meta:
+        model: InterestList Django model
+        fields: id, name, and sub_interests
+    """
     sub_interests = graphene.List(SubInterestType)
 
     class Meta:
@@ -52,6 +125,18 @@ class InterestListType(DjangoObjectType):
         fields = ("id", "name", "sub_interests")
 
     def resolve_sub_interests(self, info):
+        """
+        Resolves sub-interests list for an interest category.
+        
+        Converts sub_interests data into SubInterestType objects,
+        ensuring proper format and structure validation.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[SubInterestType]: List of sub-interest objects
+        """
         # Check if sub_interests is in a correct format
         # Ensure self.sub_interests is a list
         if isinstance(self.sub_interests, list):
@@ -63,18 +148,104 @@ class InterestListType(DjangoObjectType):
 
 
 class Query(graphene.ObjectType):
+    """
+    Main GraphQL Query class for auth_manager.
+    
+    Provides all query resolvers for user authentication, profile management,
+    and data retrieval operations. Includes both public and authenticated queries
+    for various user-related functionalities.
+    
+    Features:
+        - User profile and data queries
+        - Authentication and matrix user searches
+        - Interest, achievement, education, skill, and experience queries
+        - Contact and invitation management
+        - Administrative queries for superusers
+    """
 
     all_users = graphene.List(UserType)
     
     @login_required
     def resolve_all_users(self, info, **kwargs):
+        """
+        Retrieves all users in the system.
+        
+        Returns a list of all registered users. Requires user authentication.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[UserType]: List of all user objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated
+        
+        Note:
+            - Requires login authentication
+            - Returns all users without filtering
+        """
         # print(info.context.user)
         return [UserType.from_neomodel(user) for user in Users.nodes.all()]
+    
+    get_invitee_details = graphene.Field(GetInviteDetails, invite_token=graphene.String(required=True))
+
+    def resolve_get_invitee_details(self, info, invite_token):
+        try:
+            # Check if the invite exists
+            invite = Invite.objects.filter(invite_token=invite_token, is_deleted=False).first()
+
+            if not invite:
+                raise GraphQLError("Invalid invite token")
+
+            # Check if the invite is expired
+            if invite.expiry_date < timezone.now():
+                return GetInviteDetails(
+                    invite=None,
+                    success=False,
+                    message="This invite link has expired."
+                )
+
+            # Return invite details if valid
+            return GetInviteDetails(
+                invite=invite,
+                success=True,
+                message="Invite details retrieved successfully."
+            )
+
+        except Exception as error:
+            return GetInviteDetails(
+                invite=None,
+                success=False,
+                message=str(error)
+            )
 
     search_matrix_username = graphene.Field(MatrixUserType, username=graphene.String(required=True))
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_search_matrix_username(self, info, username):
+        """
+        Searches for a user by username and retrieves Matrix profile information.
+        
+        Finds a user by username and includes their Matrix chat profile data
+        if available, enabling Matrix integration features.
+        
+        Args:
+            info: GraphQL resolve info context
+            username (str): Username to search for (required)
+        
+        Returns:
+            MatrixUserType: User object with Matrix profile information
+        
+        Raises:
+            GraphQLError: If user not found or Matrix profile doesn't exist
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Validates Matrix profile existence
+        """
         try:
             # Fetch user node by username
             user = Users.nodes.get(username=username)
@@ -93,6 +264,22 @@ class Query(graphene.ObjectType):
 
     welcome_messages = graphene.List(WelcomeScreenMessageType)
     def resolve_welcome_messages(self, info):
+        """
+        Retrieves all welcome screen messages.
+        
+        Returns welcome messages displayed to users on app screens,
+        typically used for onboarding or announcements.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[WelcomeScreenMessageType]: List of welcome message objects
+        
+        Note:
+            - Public query, no authentication required
+            - Returns all available welcome messages
+        """
         return WelcomeScreenMessage.objects.all()
     
 
@@ -100,13 +287,33 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_profile_by_user_id(self, info, user_id):
-            
-            profile = Profile.nodes.get(user_id=user_id)
-            payload = info.context.payload
-            # print(info.context)
-            user_id = payload.get('user_id')
-            user_node=Users.nodes.get(user_id=user_id)
-            return ProfileDetailsVibeType.from_neomodel(profile,user_node)
+        """
+        Retrieves detailed profile information for a specific user.
+        
+        Fetches comprehensive profile data for viewing another user's profile,
+        including personal information and profile details.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_id (str): Target user's ID to retrieve profile for (required)
+        
+        Returns:
+            ProfileDetailsVibeType: Detailed profile information object
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns profile data for viewing other users
+        """
+        profile = Profile.nodes.get(user_id=user_id)
+        payload = info.context.payload
+        # print(info.context)
+        user_id = payload.get('user_id')
+        user_node=Users.nodes.get(user_id=user_id)
+        return ProfileDetailsVibeType.from_neomodel(profile,user_node)
         
         
         
@@ -114,43 +321,82 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors    
     @login_required
     def resolve_my_profile(self, info):
-            
-            payload = info.context.payload
-            user_id = payload.get('user_id')
-            profile = Profile.nodes.get(user_id=user_id)
-            
-
-            params = {
-                "log_in_user_profile_uid": profile.uid  # ID of the logged-in user
-            }
-
+        """
+        Retrieves comprehensive profile information for the authenticated user.
         
-            # Execute the query
-            results, _ = db.cypher_query(profile_details_query.get_profile_details_query, params)
-           
-            
-            profile_node=results[0][0] if results[0][0] else None
-            user_node=results[0][1] if results[0][1] else None
-            onboardingStatus_node=results[0][2] if results[0][2] else None
-            score_node=results[0][3] if results[0][3] else None
-            interest_node=results[0][4] if results[0][4] else None
-            achievement_node=results[0][5] if results[0][5] else None
-            education_node=results[0][6] if results[0][6] else None
-            skill_node=results[0][7] if results[0][7] else None
-            experience_node=results[0][8] if results[0][8] else None
-            post_count = results[0][9] if len(results[0]) > 9 else 0
-            community_count = results[0][10] if len(results[0]) > 10 else 0
-            connection_count = results[0][11] if len(results[0]) > 11 else 0
+        Returns complete profile data including personal info, onboarding status,
+        scores, interests, achievements, education, skills, experience, and counts
+        for posts, communities, and connections.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            ProfileInfoType: Complete profile information object with all related data
+        
+        Raises:
+            GraphQLError: If user profile not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses complex Cypher query for comprehensive data retrieval
+            - Includes statistical counts for user engagement metrics
+        """
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        profile = Profile.nodes.get(user_id=user_id)
+        
+
+        params = {
+            "log_in_user_profile_uid": profile.uid  # ID of the logged-in user
+        }
+
     
+        # Execute the query
+        results, _ = db.cypher_query(profile_details_query.get_profile_details_query, params)
+       
+        
+        profile_node=results[0][0] if results[0][0] else None
+        user_node=results[0][1] if results[0][1] else None
+        onboardingStatus_node=results[0][2] if results[0][2] else None
+        score_node=results[0][3] if results[0][3] else None
+        interest_node=results[0][4] if results[0][4] else None
+        achievement_node=results[0][5] if results[0][5] else None
+        education_node=results[0][6] if results[0][6] else None
+        skill_node=results[0][7] if results[0][7] else None
+        experience_node=results[0][8] if results[0][8] else None
+        post_count = results[0][9] if len(results[0]) > 9 else 0
+        community_count = results[0][10] if len(results[0]) > 10 else 0
+        connection_count = results[0][11] if len(results[0]) > 11 else 0
 
 
-            return ProfileInfoType.from_neomodel(profile_node,user_node,onboardingStatus_node,score_node,interest_node,achievement_node,education_node,skill_node,experience_node,post_count, community_count, connection_count)
+        return ProfileInfoType.from_neomodel(profile_node,user_node,onboardingStatus_node,score_node,interest_node,achievement_node,education_node,skill_node,experience_node,post_count, community_count, connection_count)
         
         
     my_onboarding=graphene.List(OnboardingStatusType)
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_onboarding(self,info):
+        """
+        Retrieves onboarding status information for the authenticated user.
+        
+        Returns the user's onboarding progress and completion status,
+        used to track which onboarding steps have been completed.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[OnboardingStatusType]: List of onboarding status objects
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all onboarding status records for the user
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -164,6 +410,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_score_by_uid(self, info, user_uid):
+        """
+        Retrieves all scores for a specific user by their UID.
+        
+        Fetches score data for a target user, typically used for viewing
+        another user's achievements and performance metrics.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve scores for (required)
+        
+        Returns:
+            List[ScoreType]: List of score objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all scores without filtering
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node = user_node.profile.single()
         all_scores = list(profile_node.score)
@@ -174,6 +441,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_scores(self, info):
+        """
+        Retrieves all scores for the authenticated user.
+        
+        Returns the current user's score data including achievements,
+        performance metrics, and any gamification elements.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[ScoreType]: List of score objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all user's scores without filtering
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -186,6 +473,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_interest_by_uid(self, info, user_uid):
+        """
+        Retrieves all interests for a specific user by their UID.
+        
+        Fetches interest data for a target user, used for viewing
+        another user's interests and preferences.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve interests for (required)
+        
+        Returns:
+            List[InterestType]: List of interest objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all interests including deleted ones
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node = user_node.profile.single()
         all_interests = list(profile_node.interest)
@@ -196,6 +504,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_interests(self, info):
+        """
+        Retrieves active interests for the authenticated user.
+        
+        Returns the current user's interest data, filtering out deleted interests
+        to show only currently active preferences.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[InterestType]: List of active interest objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Filters out deleted interests (is_deleted=True)
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -209,6 +537,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_achievement_by_user_id(self, info, user_uid):
+        """
+        Retrieves all achievements for a specific user by their UID.
+        
+        Fetches achievement data for a target user, used for viewing
+        another user's accomplishments and milestones.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve achievements for (required)
+        
+        Returns:
+            List[AchievementType]: List of achievement objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all achievements including deleted ones
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node=user_node.profile.single()
         all_achievement = list(profile_node.achievement)
@@ -218,6 +567,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_achievement(self,info):
+        """
+        Retrieves active achievements for the authenticated user.
+        
+        Returns the current user's achievement data, filtering out deleted achievements
+        to show only currently active accomplishments.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[AchievementType]: List of active achievement objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Filters out deleted achievements (is_deleted=True)
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -232,6 +601,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_education_by_user_id(self, info, user_uid):
+        """
+        Retrieves all education records for a specific user by their UID.
+        
+        Fetches education data for a target user, used for viewing
+        another user's educational background and qualifications.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve education for (required)
+        
+        Returns:
+            List[EducationType]: List of education objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all education records including deleted ones
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node=user_node.profile.single()
         all_education = list(profile_node.education)
@@ -242,6 +632,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_education(self,info):
+        """
+        Retrieves active education records for the authenticated user.
+        
+        Returns the current user's education data, filtering out deleted records
+        to show only currently active educational background.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[EducationType]: List of active education objects for the authenticated user
+        
+        Raises:
+            Exception: If user or profile not found, or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Filters out deleted education records (is_deleted=True)
+            - Includes additional exception handling
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -260,6 +671,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_skill_by_user_id(self, info, user_uid):
+        """
+        Retrieves all skills for a specific user by their UID.
+        
+        Fetches skill data for a target user, used for viewing
+        another user's technical and professional skills.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve skills for (required)
+        
+        Returns:
+            List[SkillType]: List of skill objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all skills including deleted ones
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node=user_node.profile.single()
         all_skill = list(profile_node.skill)
@@ -269,6 +701,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_skill(self,info):
+        """
+        Retrieves active skills for the authenticated user.
+        
+        Returns the current user's skill data, filtering out deleted skills
+        to show only currently active technical and professional skills.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[SkillType]: List of active skill objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Filters out deleted skills (is_deleted=True)
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -284,6 +736,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_experience_by_user_id(self, info, user_id):
+        """
+        Retrieves all work experience records for a specific user by their ID.
+        
+        Fetches experience data for a target user, used for viewing
+        another user's professional work history and career background.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_id (str): Target user's ID to retrieve experience for (required)
+        
+        Returns:
+            List[ExperienceType]: List of experience objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all experience records including deleted ones
+        """
         user_node = Users.nodes.get(user_id=user_id)
         profile_node=user_node.profile.single()
         all_experience = list(profile_node.experience)
@@ -294,6 +767,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_experience(self,info):
+        """
+        Retrieves active work experience records for the authenticated user.
+        
+        Returns the current user's experience data, filtering out deleted records
+        to show only currently active professional work history.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[ExperienceType]: List of active experience objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user or profile not found
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Filters out deleted experience records (is_deleted=True)
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -308,6 +801,22 @@ class Query(graphene.ObjectType):
     interest_lists = graphene.List(InterestListType)
 
     def resolve_interest_lists(self, info):
+        """
+        Retrieves all available interest lists.
+        
+        Returns predefined interest categories and lists that users can
+        select from when setting up their profile interests.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[InterestListType]: List of all available interest list objects
+        
+        Note:
+            - Public query, no authentication required
+            - Returns all interest lists from Django model
+        """
         return InterestList.objects.all()
     
 
@@ -315,6 +824,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_back_profile_vibe_list_by_user_uid(self, info, user_uid):
+        """
+        Retrieves back profile vibe list for a specific user by their UID.
+        
+        Fetches back profile data and vibes associated with a target user,
+        used for viewing profile feedback and impressions.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve back profile list for (required)
+        
+        Returns:
+            List[BackProfileListType]: List of back profile objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns back profile data based on profile UID
+        """
         
         user_node = Users.nodes.get(uid=user_uid)
         profile_uid=user_node.profile.single().uid
@@ -326,6 +856,26 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_my_back_profile_review(self,info):
+        """
+        Retrieves all back profile reviews for the authenticated user.
+        
+        Returns reviews and feedback that the current user has received
+        on their profile from other users.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[BackProfileReviewType]: List of back profile review objects for the authenticated user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all reviews received by the user
+        """
 
         payload = info.context.payload
         user_id = payload.get('user_id')
@@ -339,6 +889,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_back_profile_review_by_user_uid(self,info,user_uid):
+        """
+        Retrieves all back profile reviews for a specific user by their UID.
+        
+        Fetches reviews and feedback that a target user has received
+        on their profile from other users.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve reviews for (required)
+        
+        Returns:
+            List[BackProfileReviewType]: List of back profile review objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all reviews received by the target user
+        """
         
         user_node=Users.nodes.get(uid=user_uid)   
         my_reviews=list(user_node.user_back_profile_review.all())
@@ -350,21 +921,84 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_back_profile_review_by_uid(self,info,uid):
+        """
+        Retrieves a specific back profile review by its UID.
+        
+        Fetches a single review record by its unique identifier,
+        used for viewing detailed review information.
+        
+        Args:
+            info: GraphQL resolve info context
+            uid (str): Review's UID to retrieve (required)
+        
+        Returns:
+            List[BackProfileReviewType]: List containing the single review object
+        
+        Raises:
+            GraphQLError: If review not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns single review wrapped in list format
+        """
         review_node=BackProfileUsersReview.nodes.get(uid=uid)
         return [BackProfileReviewType.from_neomodel(review_node)]
         
     
 
     # Below apis are not used by frontend
-         
+    
+    # Administrative queries requiring superuser access
     @login_required
     @superuser_required
     def resolve_all_users(self, info, **kwargs):
+        """
+        Retrieves all users in the system (Administrative).
+        
+        Returns a complete list of all registered users for administrative
+        purposes. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[UserType]: List of all user objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API not used by frontend
+            - Returns all users without filtering
+        """
         return [UserType.from_neomodel(user) for user in Users.nodes.all()]
 
 
     @login_required
     def resolve_user_by_id(self, info, user_id):
+        """
+        Retrieves a specific user by their ID.
+        
+        Fetches user information by user ID for administrative or
+        internal system purposes.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_id: Target user's ID to retrieve
+        
+        Returns:
+            UserType: User object if found, None otherwise
+        
+        Raises:
+            GraphQLError: If user is not authenticated
+        
+        Note:
+            - Requires login authentication
+            - Returns None if user doesn't exist instead of raising error
+        """
         try:
             user = Users.nodes.get(user_id=user_id)
             return UserType.from_neomodel(user)
@@ -375,6 +1009,27 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_profiles(self, info, **kwargs):
+        """
+        Retrieves all user profiles in the system (Administrative).
+        
+        Returns a complete list of all user profiles for administrative
+        purposes. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[ProfileType]: List of all profile objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API not used by frontend
+            - Returns all profiles without filtering
+        """
         return [ProfileType.from_neomodel(profile) for profile in Profile.nodes.all()]
 
        
@@ -382,6 +1037,26 @@ class Query(graphene.ObjectType):
     @superuser_required
     @login_required
     def resolve_all_onboarding(self, info, **kwargs):
+        """
+        Retrieves all onboarding status records (Administrative).
+        
+        Returns a complete list of all onboarding status records for
+        administrative monitoring and analysis.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[OnboardingStatusType]: List of all onboarding status objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for monitoring onboarding progress
+        """
         return [OnboardingStatusType.from_neomodel(x) for x in OnboardingStatus.nodes.all()]
 
    
@@ -389,6 +1064,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_profileonboarding_by_uid(self, info, user_uid):
+        """
+        Retrieves onboarding status for a specific user by their UID.
+        
+        Fetches onboarding progress and completion status for a target user,
+        used for administrative monitoring or support purposes.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve onboarding for (required)
+        
+        Returns:
+            List[OnboardingStatusType]: List of onboarding status objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses error handling decorator
+            - Returns all onboarding records for the target user
+        """
         user_node = Users.nodes.get(uid=user_uid)
         
         profile_node=user_node.profile.single()
@@ -400,12 +1096,52 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_contact_info(self, info, **kwargs):
+        """
+        Retrieves all contact information records (Administrative).
+        
+        Returns a complete list of all contact information for administrative
+        purposes. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[ContactInfoType]: List of all contact info objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for contact data management
+        """
         return [ContactInfoType.from_neomodel(x) for x in ContactInfo.nodes.all()]
 
    
     contactinfo_by_uid = graphene.List(ContactInfoType, user_uid=graphene.String(required=True))
     @login_required
     def resolve_contactinfo_by_uid(self, info, user_uid):
+        """
+        Retrieves contact information for a specific user by their UID.
+        
+        Fetches contact details for a target user, used for viewing
+        another user's contact information.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve contact info for (required)
+        
+        Returns:
+            List[ContactInfoType]: List of contact info objects for the specified user
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Returns all contact information for the target user
+        """
         user_node = Users.nodes.get(uid=user_uid)
         profile_node = user_node.profile.single()
         all_contact_info = list(profile_node.contactinfo)
@@ -416,6 +1152,26 @@ class Query(graphene.ObjectType):
 
     @login_required
     def resolve_my_contact_info(self, info):
+        """
+        Retrieves contact information for the authenticated user.
+        
+        Returns the current user's contact details including phone numbers,
+        email addresses, and other contact methods.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[ContactInfoType]: List of contact info objects for the authenticated user
+        
+        Raises:
+            Exception: If user or profile not found, or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes additional exception handling
+            - Returns all contact information for the current user
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
@@ -431,12 +1187,52 @@ class Query(graphene.ObjectType):
     all_score = graphene.List(ScoreType)
     @superuser_required
     def resolve_all_score(self, info, **kwargs):
+        """
+        Retrieves all score records (Administrative).
+        
+        Returns a complete list of all user scores for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[ScoreType]: List of all score objects
+        
+        Raises:
+            GraphQLError: If user is not a superuser
+        
+        Note:
+            - Requires superuser privileges
+            - Administrative API for score data analysis
+        """
         return [ScoreType.from_neomodel(x) for x in Score.nodes.all()]
 
     
     all_interest = graphene.List(InterestType)
     @superuser_required
     def resolve_all_interest(self, info, **kwargs):
+        """
+        Retrieves all interest records (Administrative).
+        
+        Returns a complete list of all user interests for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[InterestType]: List of all interest objects
+        
+        Raises:
+            GraphQLError: If user is not a superuser
+        
+        Note:
+            - Requires superuser privileges
+            - Administrative API for interest data analysis
+        """
         return [InterestType.from_neomodel(x) for x in Interest.nodes.all()]
 
                   
@@ -444,6 +1240,26 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_achievement(self, info, **kwargs):
+        """
+        Retrieves all achievement records (Administrative).
+        
+        Returns a complete list of all user achievements for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[AchievementType]: List of all achievement objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for achievement data analysis
+        """
         return [AchievementType.from_neomodel(achievement) for achievement in Achievement.nodes.all()]
 
    
@@ -453,6 +1269,26 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_education(self, info, **kwargs):
+        """
+        Retrieves all education records (Administrative).
+        
+        Returns a complete list of all user education records for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[EducationType]: List of all education objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for education data analysis
+        """
         return [EducationType.from_neomodel(education) for education in Education.nodes.all()]
 
            
@@ -461,6 +1297,26 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_skill(self, info, **kwargs):
+        """
+        Retrieves all skill records (Administrative).
+        
+        Returns a complete list of all user skills for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[SkillType]: List of all skill objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for skill data analysis
+        """
         return [SkillType.from_neomodel(skill) for skill in Skill.nodes.all()]
 
             
@@ -469,6 +1325,26 @@ class Query(graphene.ObjectType):
     @login_required
     @superuser_required
     def resolve_all_experience(self, info, **kwargs):
+        """
+        Retrieves all experience records (Administrative).
+        
+        Returns a complete list of all user experience records for administrative
+        analysis and monitoring. Requires superuser privileges.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[ExperienceType]: List of all experience objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated or not a superuser
+        
+        Note:
+            - Requires login authentication and superuser privileges
+            - Administrative API for experience data analysis
+        """
         return [ExperienceType.from_neomodel(experience) for experience in Experience.nodes.all()]
    
         
@@ -477,6 +1353,28 @@ class Query(graphene.ObjectType):
 
     @login_required
     def resolve_users_back_profile_by_user_uid(self, info, uid):
+        """
+        Retrieves back profile reviews for a specific user by their UID.
+        
+        Fetches all reviews and feedback given to a target user,
+        used for viewing another user's reputation and reviews.
+        
+        Args:
+            info: GraphQL resolve info context
+            uid (str): Target user's UID to retrieve reviews for (required)
+        
+        Returns:
+            List[UsersReviewType]: List of review objects for the specified user
+            None: If user or reviews not found
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Returns all reviews for the target user
+            - Includes exception handling for missing reviews
+        """
         try:
             payload = info.context.payload
             user_id = payload.get('user_id')
@@ -491,13 +1389,51 @@ class Query(graphene.ObjectType):
       
     @login_required
     def resolve_all_back_profile(self, info):
+        """
+        Retrieves all back profile reviews (Administrative).
+        
+        Returns a complete list of all user reviews for administrative
+        monitoring and analysis purposes.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[UsersReviewType]: List of all review objects
+        
+        Raises:
+            GraphQLError: If user not authenticated or database error
+        
+        Note:
+            - Requires login authentication
+            - Administrative API for review data analysis
+        """
         return [UsersReviewType.from_neomodel(review) for review in UsersReview.nodes.all()]
     
     my_back_profile=graphene.List(UsersReviewType)
     
     @login_required
     def resolve_my_back_profile(self,info):
-
+        """
+        Retrieves back profile reviews for the authenticated user.
+        
+        Returns all reviews and feedback received by the current user,
+        allowing them to view their reputation and ratings.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[UsersReviewType]: List of review objects for the authenticated user
+        
+        Raises:
+            Exception: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes additional exception handling
+            - Returns all reviews received by the current user
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node=Users.nodes.get(user_id=user_id)
@@ -514,6 +1450,27 @@ class Query(graphene.ObjectType):
     my_connection_list_user = graphene.Field(graphene.List(UserType))
     
     def resolve_my_connection_list_user(self, info):
+        """
+        Retrieves users from the authenticated user's uploaded contact list.
+        
+        Matches uploaded contacts with existing users in the system,
+        returning users who have phone numbers in the contact list.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[UserType]: List of users matching uploaded contacts
+            None: If user is anonymous or no contacts uploaded
+        
+        Raises:
+            Exception: If contact upload not found or database error
+        
+        Note:
+            - No explicit authentication decorator (checks anonymous status)
+            - Uses Neo4j Cypher query for contact matching
+            - Matches users by phone number from uploaded contacts
+        """
         user = info.context.user
         if user.is_anonymous:
             return None
@@ -542,6 +1499,27 @@ class Query(graphene.ObjectType):
     my_uploaded_Contact = graphene.Field(UploadContactType)
     
     def resolve_my_uploaded_Contact(self, info):
+        """
+        Retrieves the authenticated user's uploaded contact information.
+        
+        Returns the contact upload record for the current user,
+        containing their uploaded contact list data.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            UploadContactType: User's uploaded contact data
+            None: If user is anonymous or no contacts uploaded
+        
+        Raises:
+            None: Handles DoesNotExist exception gracefully
+        
+        Note:
+            - No explicit authentication decorator (checks anonymous status)
+            - Includes exception handling for missing contact uploads
+            - Returns Django model instance directly
+        """
         user = info.context.user
         if user.is_anonymous:
             return None
@@ -557,6 +1535,26 @@ class Query(graphene.ObjectType):
    
     @login_required
     def resolve_my_invitation_list_user(self, info):
+        """
+        Retrieves contacts that can be invited (not yet on the platform).
+        
+        Compares the user's uploaded contact list with existing users
+        to identify contacts who haven't joined the platform yet.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            InviteListType: List of contacts available for invitation
+        
+        Raises:
+            Exception: If contact upload not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Uses Neo4j Cypher query to find existing contacts
+            - Returns contacts not found in the user database
+        """
         user = info.context.user
         upload_contact = UploadContact.objects.get(user=user)
         contact_list = upload_contact.contact
@@ -584,6 +1582,28 @@ class Query(graphene.ObjectType):
     user_reviews = graphene.List(CustomUserReviewType, user_uid=graphene.String(required=True))
     @login_required
     def resolve_user_reviews(self, info, user_uid):
+        """
+        Retrieves aggregated review statistics for a specific user.
+        
+        Processes all reviews for a user and groups them by reaction type,
+        calculating statistics like count, average vibe, and vibe distribution.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve review stats for (required)
+        
+        Returns:
+            List[CustomUserReviewType]: Aggregated review statistics by reaction type
+        
+        Raises:
+            GraphQLError: If user not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Groups reviews by reaction type (e.g., 'positive', 'negative')
+            - Calculates vibe range distribution and averages
+            - Returns custom aggregated review objects
+        """
         # Initialize an empty list to store the user reviews
         user_reviews = []
 
@@ -645,9 +1665,42 @@ class Query(graphene.ObjectType):
     get_cities_by_state = graphene.List(CityType, state_id=graphene.Int(required=True))
 
     def resolve_get_all_states(self, info):
+        """
+        Retrieves all available states.
+        
+        Returns a complete list of all states for location selection
+        and geographic filtering purposes.
+        
+        Args:
+            info: GraphQL resolve info context
+        
+        Returns:
+            List[StateType]: List of all state objects
+        
+        Note:
+            - No authentication required (public data)
+            - Returns Django model instances directly
+        """
         return StateInfo.objects.all()
 
     def resolve_get_cities_by_state(self, info, state_id):
+        """
+        Retrieves cities for a specific state.
+        
+        Returns all cities belonging to the specified state,
+        used for location selection and filtering.
+        
+        Args:
+            info: GraphQL resolve info context
+            state_id (int): State ID to retrieve cities for (required)
+        
+        Returns:
+            List[CityType]: List of city objects for the specified state
+        
+        Note:
+            - No authentication required (public data)
+            - Filters cities by state relationship
+        """
         return CityInfo.objects.filter(state_id=state_id)
     
     experience_by_uid = graphene.List(ExperienceType, experience_uid=graphene.String(required=True))
@@ -655,6 +1708,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_experience_by_uid(self, info, experience_uid):
+        """
+        Retrieves a specific experience record by its UID.
+        
+        Fetches detailed information about a single experience entry
+        using its unique identifier.
+        
+        Args:
+            info: GraphQL resolve info context
+            experience_uid (str): Experience UID to retrieve (required)
+        
+        Returns:
+            List[ExperienceType]: Single experience object in list format
+        
+        Raises:
+            GraphQLError: If experience not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes error handling decorator
+            - Returns single object wrapped in list
+        """
         experience_data = Experience.nodes.get(uid=experience_uid)
         return [ExperienceType.from_neomodel(experience_data)]
     
@@ -662,6 +1736,28 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_achievement_by_uid(self, info, achievement_uid):
+        """
+        Retrieves a specific achievement record by its UID.
+        
+        Fetches detailed information about a single achievement entry
+        using its unique identifier.
+        
+        Args:
+            info: GraphQL resolve info context
+            achievement_uid (str): Achievement UID to retrieve (required)
+        
+        Returns:
+            List[AchievementType]: Single achievement object in list format
+        
+        Raises:
+            GraphQLError: If achievement not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes error handling decorator
+            - Returns single object wrapped in list
+            - Includes debug print statement
+        """
         achievement_data = Achievement.nodes.get(uid=achievement_uid)
         print(achievement_data.uid)
         return [AchievementType.from_neomodel(achievement_data)] 
@@ -672,6 +1768,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_education_by_uid(self, info, education_uid):
+        """
+        Retrieves a specific education record by its UID.
+        
+        Fetches detailed information about a single education entry
+        using its unique identifier.
+        
+        Args:
+            info: GraphQL resolve info context
+            education_uid (str): Education UID to retrieve (required)
+        
+        Returns:
+            List[EducationType]: Single education object in list format
+        
+        Raises:
+            GraphQLError: If education not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes error handling decorator
+            - Returns single object wrapped in list
+        """
         education_data = Education.nodes.get(uid=education_uid)
         return [EducationType.from_neomodel(education_data)] 
     
@@ -683,6 +1800,27 @@ class Query(graphene.ObjectType):
     @handle_graphql_auth_manager_errors
     @login_required
     def resolve_skill_by_uid(self, info, skill_uid):
+        """
+        Retrieves a specific skill record by its UID.
+        
+        Fetches detailed information about a single skill entry
+        using its unique identifier.
+        
+        Args:
+            info: GraphQL resolve info context
+            skill_uid (str): Skill UID to retrieve (required)
+        
+        Returns:
+            List[SkillType]: Single skill object in list format
+        
+        Raises:
+            GraphQLError: If skill not found or database error
+        
+        Note:
+            - Requires login authentication
+            - Includes error handling decorator
+            - Returns single object wrapped in list
+        """
         skill_data = Skill.nodes.get(uid=skill_uid)
         return [SkillType.from_neomodel(skill_data)]
 
@@ -690,17 +1828,70 @@ class Query(graphene.ObjectType):
 
 
 class QueryV2(graphene.ObjectType):
+    """
+    Version 2 of the GraphQL Query class.
+    
+    Provides enhanced query resolvers and additional functionality
+    for the GraphQL API, including invite management and user queries.
+    
+    Note:
+        - Inherits from graphene.ObjectType
+        - Includes both new resolvers and inherited ones from Query class
+        - Provides versioned API functionality
+    """
 
     all_users = graphene.List(UserInfoType)
     
     @login_required
     def resolve_all_users(self, info, **kwargs):
+        """
+        Retrieves all users with enhanced user information (V2).
+        
+        Returns a limited list of users with extended user information
+        for administrative and discovery purposes.
+        
+        Args:
+            info: GraphQL resolve info context
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            List[UserInfoType]: List of enhanced user info objects (limited to 50)
+        
+        Raises:
+            GraphQLError: If user not authenticated
+        
+        Note:
+            - Requires login authentication
+            - Returns enhanced UserInfoType instead of basic UserType
+            - Limited to first 50 users for performance
+        """
         # print(info.context.user)
         return [UserInfoType.from_neomodel(user) for user in Users.nodes.all()[:50]]
 
     get_invitee_details = graphene.Field(GetInviteDetails, invite_token=graphene.String(required=True))
 
     def resolve_get_invitee_details(self, info, invite_token):
+        """
+        Retrieves invite details using an invite token.
+        
+        Validates and returns information about an invitation,
+        including expiry status and invite validity.
+        
+        Args:
+            info: GraphQL resolve info context
+            invite_token (str): Invitation token to validate (required)
+        
+        Returns:
+            GetInviteDetails: Object containing invite info, success status, and message
+        
+        Raises:
+            GraphQLError: If invite token is invalid
+        
+        Note:
+            - No authentication required (public invite validation)
+            - Checks invite existence, deletion status, and expiry
+            - Returns structured response with success/error information
+        """
         try:
             # Check if the invite exists
             invite = Invite.objects.filter(invite_token=invite_token, is_deleted=False).first()
