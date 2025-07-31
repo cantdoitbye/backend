@@ -15,6 +15,9 @@ from post.graphql.raw_queries import users,post_queries
 from post.utils.reaction_manager import PostReactionUtils,IndividualVibeManager
 from post.utils.file_url import FileURL
 from neomodel import db
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FileDetailType(graphene.ObjectType):
     url = graphene.String()
@@ -180,14 +183,13 @@ class CommentType(ObjectType):
     def from_neomodel(cls, comment):
         related_post = comment.post.single() if comment.post.single() else None
         
-        if not post_metrics:
-            post_metrics = {
-                'score': 2.0,
-                'views': 0,
-                'comments': 0,
-                'shares': 0,
-                'vibes': 0
-            }
+        post_metrics = {
+            'score': 2.0,
+            'views': 0,
+            'comments': 0,
+            'shares': 0,
+            'vibes': 0
+        }
         
         if related_post:
             try:
@@ -661,6 +663,10 @@ class FeedTestType(ObjectType):
         
         overall_score = query_overall_score if query_overall_score is not None else 2.0
         share_count = query_share_count if query_share_count is not None else 0
+
+        logger.info(f"🔍 FeedTestType.from_neomodel called with:")
+        logger.info(f"   - connection_node: {type(connection_node)} - {connection_node}")
+        logger.info(f"   - circle_node: {type(circle_node)} - {circle_node}")
         
         return cls(
             uid=post_data.get('uid'),
@@ -725,11 +731,16 @@ class ConnectionFeedType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, connection_node, circle_node):
+        # 🔍 Add debug logging
+        logger.info(f"🔍 ConnectionFeedType.from_neomodel called:")
+        logger.info(f"   - connection_node: {connection_node}")
+        logger.info(f"   - circle_node: {circle_node}")
+        
         return cls(
             uid=connection_node['uid'],
             connection_status=connection_node['connection_status'],
             timestamp=str(connection_node['timestamp']),
-            circle=CircleFeedType.from_neomodel(circle_node)
+            circle=CircleFeedType.from_neomodel(circle_node) if circle_node else None  # 🔑 KEY FIX
         )
 
 # This belong to FeedTestType
@@ -740,6 +751,13 @@ class CircleFeedType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, circle_node):
+        if not circle_node:
+            return None
+            
+        # 🔍 Add debug logging
+        logger.info(f"🔍 CircleFeedType.from_neomodel called:")
+        logger.info(f"   - circle_node: {circle_node}")
+        
         return cls(
             uid=circle_node['uid'],
             circle_type=circle_node['circle_type'],

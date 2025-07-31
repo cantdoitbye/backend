@@ -1,6 +1,7 @@
 # autm_manager/graphql/mutations.py
 import asyncio
 from enum import Enum
+import os
 import graphene
 from graphene import Mutation
 from graphql import GraphQLError
@@ -1584,6 +1585,7 @@ class SendOTP(graphene.Mutation):
         SendOTP: Response containing:
             - success: Boolean indicating operation success
             - message: Success or error message
+            - otp: The generated OTP code (for testing/debugging)
     
     Raises:
         GraphQLError: If user not found, rate limit exceeded, or invalid purpose
@@ -1598,6 +1600,7 @@ class SendOTP(graphene.Mutation):
     """
     success = graphene.Boolean()
     message=graphene.String()
+    otp = graphene.String()
     
     class Arguments:
         email = graphene.String(required=True)
@@ -1647,27 +1650,27 @@ class SendOTP(graphene.Mutation):
             # email_utility.render_verification_email(user.first_name,otp_code,email)
             if purpose==OtpPurposeEnum.EMAIL_VERIFICATION.value:
                 generate_payload.send_rendered_email(
-                        api_url="http://50.28.84.70:32231/v1/mail/send-raw-html",
-                        api_key="bf224b31-ffa7-5a40-8392-90307c2153dc",
+                        api_url=os.getenv('EMAIL_API_URL'),
+                        api_key=os.getenv('EMAIL_API_KEY'),
                         first_name=user.first_name,
                         otp_code=otp_code,
                         user_email=email
                     )
             elif purpose==OtpPurposeEnum.FORGET_PASSWORD.value:
                  generate_payload.send_rendered_forget_email(
-                        api_url="http://50.28.84.70:32231/v1/mail/send-raw-html",
-                        api_key="bf224b31-ffa7-5a40-8392-90307c2153dc",
+                        api_url=os.getenv('EMAIL_API_URL'),
+                        api_key=os.getenv('EMAIL_API_KEY'),
                         first_name=user.first_name,
                         otp_code=otp_code,
                         user_email=email
                     )
 
             # send_otp.send_otp_email(email, otp_code,purpose)
-            return SendOTP(success=True,message=UserMessages.OTP_SUCCESS)
+            return SendOTP(success=True,message=UserMessages.OTP_SUCCESS, otp=otp_code)
         
         except Exception as error:
             message = getattr(error, 'message', str(error))
-            return SendOTP(success=False,message=message)
+            return SendOTP(success=False,message=message, otp=None)
     
 class VerifyOTP(graphene.Mutation):
     """
