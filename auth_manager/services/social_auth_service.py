@@ -104,10 +104,74 @@ class SocialAuthService:
             raise GraphQLError(f"Error verifying Facebook token: {str(e)}")
     
     @staticmethod
+    def verify_apple_token(identity_token):
+        """
+        Verify Apple identity token and get user info
+        """
+        try:
+            # Decode without verification first to get header
+            unverified_header = jwt.get_unverified_header(identity_token)
+            key_id = unverified_header.get('kid')
+            
+            # Get Apple's public keys
+            keys_url = "https://appleid.apple.com/auth/keys"
+            keys_response = requests.get(keys_url)
+            
+            if keys_response.status_code != 200:
+                raise GraphQLError("Failed to get Apple public keys")
+            
+            keys_data = keys_response.json()
+            
+            # Find the key that matches the token's kid
+            public_key = None
+            for key_data in keys_data.get('keys', []):
+                if key_data.get('kid') == key_id:
+                    # Convert JWK to PEM format
+                    public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
+                    break
+            
+            if not public_key:
+                raise GraphQLError("Unable to find matching Apple public key")
+            
+            # Verify and decode token
+            decoded_token = jwt.decode(
+                identity_token,
+                public_key,
+                algorithms=['RS256'],
+                audience=settings.APPLE_CLIENT_ID,
+                issuer='https://appleid.apple.com'
+            )
+            
+            # Extract user information
+            email = decoded_token.get('email', '')
+            email_verified = decoded_token.get('email_verified', False)
+            
+            # Apple doesn't provide first/last name in the token after first login
+            # These would typically come from the user parameter in the initial request
+            first_name = ''
+            last_name = ''
+            
+            return {
+                'provider_id': decoded_token.get('sub'),  # Apple user ID
+                'email': email,
+                'first_name': first_name,
+                'last_name': last_name,
+                'profile_picture': '',  # Apple doesn't provide profile pictures
+                'verified_email': email_verified,
+                'provider': 'apple'
+            }
+            
+        except jwt.ExpiredSignatureError:
+            raise GraphQLError("Apple token has expired")
+        except jwt.InvalidTokenError as e:
+            raise GraphQLError(f"Invalid Apple token: {str(e)}")
+        except requests.RequestException as e:
+            raise GraphQLError(f"Error verifying Apple token: {str(e)}")
+
+    @staticmethod
     def get_or_create_user_from_social_data(social_data, invite_token=None):
         """
-        Get or create user from social authentication data
-        Works with both Django User and Neo4j Users models
+        Enhanced method to support all social providers including Apple
         """
         try:
             email = social_data['email']
@@ -123,7 +187,29 @@ class SocialAuthService:
                 # User exists, check if Users node exists
                 try:
                     users_node = Users.nodes.get(user_id=str(django_user.id))
+                    
+                    # Update social provider info if not set
+                    if not SocialAuthService.is_social_login_user(django_user):
+                        # Update username to indicate social login
+                        original_username = django_user.username
+                        new_username = f"{original_username}_{provider}"
+                        
+                        # Ensure new username is unique
+                        counter = 1
+                        temp_username = new_username
+                        while User.objects.filter(username=temp_username).exists():
+                            temp_username = f"{new_username}_{counter}"
+                            counter += 1
+                        
+                        django_user.username = temp_username
+                        django_user.save()
+                        
+                        # Update Users node
+                        users_node.username = django_user.username
+                        users_node.save()
+                    
                     return django_user, users_node, False
+                    
                 except Users.DoesNotExist:
                     # Django user exists but Users node doesn't - create it
                     users_node = Users(
@@ -138,8 +224,9 @@ class SocialAuthService:
                     users_node.save()
                     return django_user, users_node, False
             
+            # Create new user
             # Create username with provider info to track social login
-            base_username = email
+            base_username = email.split('@')[0] if email else 'user'
             username = f"{base_username}_{provider}"
             
             # Ensure username is unique
@@ -168,6 +255,28 @@ class SocialAuthService:
                 is_active=True
             )
             users_node.save()
+            
+            # Create basic profile
+            from auth_manager.models import Profile, OnboardingStatus
+            
+            profile = Profile(
+                user_id=str(django_user.id),
+                # Set social provider specific data if available
+                profile_pic_id=social_data.get('profile_picture', '')
+            )
+            profile.save()
+            profile.user.connect(users_node)
+            users_node.profile.connect(profile)
+            
+            # Create onboarding status
+            onboarding = OnboardingStatus(
+                email_verified=social_data.get('verified_email', False),
+                first_name_set=bool(social_data['first_name']),
+                last_name_set=bool(social_data['last_name'])
+            )
+            onboarding.save()
+            onboarding.profile.connect(profile)
+            profile.onboarding.connect(onboarding)
             
             # Handle invite if provided
             if invite_token:
@@ -248,7 +357,8 @@ class SocialAuthService:
         """
         Check if user was created via social login
         """
-        return '_google' in django_user.username or '_facebook' in django_user.username
+        return any(provider in django_user.username for provider in ['_google', '_facebook', '_apple'])
+    
     
     @staticmethod
     def get_social_provider(django_user):
@@ -259,4 +369,6 @@ class SocialAuthService:
             return 'google'
         elif '_facebook' in django_user.username:
             return 'facebook'
+        elif '_apple' in django_user.username:
+            return 'apple'
         return None

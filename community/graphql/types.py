@@ -1,5 +1,6 @@
 import graphene
 from graphene import ObjectType
+from datetime import datetime
 
 from auth_manager.graphql.types import UserType
 from post.redis import get_post_comment_count, get_post_like_count
@@ -151,8 +152,13 @@ class CommunityType(ObjectType):
     communitymessage = graphene.List(lambda:CommunityMessagesNonCommunityType)
     community_review=graphene.List(lambda:CommunityReviewNonCommunityType)
     members=graphene.List(lambda:MembershipNonCommunityType)
+    
+    # Agent management fields
+    leader_agent = graphene.Field('agentic.graphql.types.AgentType')
+    has_leader_agent = graphene.Boolean()
+    agent_assignments = graphene.List('agentic.graphql.types.AgentAssignmentType')
     @classmethod
-    def from_neomodel(cls, community):
+    def from_neomodel(cls, community, include_agent_assignments=True):
         community.number_of_members = len(community.members.all())
         community.save()
         
@@ -168,6 +174,34 @@ class CommunityType(ObjectType):
             print(f"Error generating group icon URL: {e}")
             # Continue without the group icon URL
         
+        # Get agent assignments only if requested to avoid circular references
+        leader_agent = None
+        has_leader_agent = False
+        agent_assignments = []
+        
+        if include_agent_assignments:
+            try:
+                leader_agent = cls._get_leader_agent(community)
+                has_leader_agent = community.has_leader_agent()
+                agent_assignments = cls._get_agent_assignments(community)
+            except Exception as e:
+                print(f"Error loading community agent assignments: {e}")
+                leader_agent = None
+                has_leader_agent = False
+                agent_assignments = []
+        
+        # Safely generate cover image URL - handle errors gracefully
+        cover_image_url = None
+        try:
+            if community.cover_image_id:
+                file_info = generate_presigned_url.generate_file_info(community.cover_image_id)
+                if file_info and file_info.get('url'):
+                    cover_image_url = FileDetailType(**file_info)
+        except Exception as e:
+            cover_image_url = None
+            print(f"Error generating cover image URL: {e}")
+            # Continue without the cover image URL
+        
         return cls(
             uid=community.uid,
             name=community.name,
@@ -182,13 +216,46 @@ class CommunityType(ObjectType):
             group_icon_id=community.group_icon_id,
             group_icon_url=group_icon_url,
             cover_image_id=community.cover_image_id,
-            cover_image_url=FileDetailType(**generate_presigned_url.generate_file_info(community.cover_image_id)),
+            cover_image_url=cover_image_url,
             category=community.category,
             created_by=UserType.from_neomodel(community.created_by.single()) if community.created_by.single() else None,
             communitymessage=[CommunityMessagesNonCommunityType.from_neomodel(x) for x in community.communitymessage],
             community_review=[CommunityReviewNonCommunityType.from_neomodel(x) for x in community.community_review],
             members=[MembershipNonCommunityType.from_neomodel(x) for x in community.members],
+            
+            # Agent management fields
+            leader_agent=leader_agent,
+            has_leader_agent=has_leader_agent,
+            agent_assignments=agent_assignments
         )
+    
+    @classmethod
+    def _get_leader_agent(cls, community):
+        """Get the leader agent for the community."""
+        try:
+            leader_agent = community.get_leader_agent()
+            if leader_agent:
+                # Import here to avoid circular imports
+                from agentic.graphql.types import AgentType
+                return AgentType.from_neomodel(leader_agent)
+            return None
+        except Exception as e:
+            print(f"Error getting leader agent: {e}")
+            return None
+    
+    @classmethod
+    def _get_agent_assignments(cls, community):
+        """Get all agent assignments for the community."""
+        try:
+            assignments = community.get_agent_assignments()
+            if assignments:
+                # Import here to avoid circular imports
+                from agentic.graphql.types import AgentAssignmentType
+                return [AgentAssignmentType.from_neomodel(assignment, include_community=False) for assignment in assignments if assignment]
+            return []
+        except Exception as e:
+            print(f"Error getting agent assignments: {e}")
+            return []
 
 
 class CommunityInformationType(ObjectType):
@@ -840,6 +907,29 @@ class SubCommunityType(graphene.ObjectType):
     def from_neomodel(cls, sub_community):
         sub_community.number_of_members=len(sub_community.sub_community_members.all())
         sub_community.save()
+        
+        # Safely generate group icon URL - handle errors gracefully
+        group_icon_url = None
+        try:
+            if sub_community.group_icon_id:
+                file_info = generate_presigned_url.generate_file_info(sub_community.group_icon_id)
+                if file_info and file_info.get('url'):
+                    group_icon_url = FileDetailType(**file_info)
+        except Exception as e:
+            group_icon_url = None
+            print(f"Error generating sub-community group icon URL: {e}")
+        
+        # Safely generate cover image URL - handle errors gracefully
+        cover_image_url = None
+        try:
+            if sub_community.cover_image_id:
+                file_info = generate_presigned_url.generate_file_info(sub_community.cover_image_id)
+                if file_info and file_info.get('url'):
+                    cover_image_url = FileDetailType(**file_info)
+        except Exception as e:
+            cover_image_url = None
+            print(f"Error generating sub-community cover image URL: {e}")
+        
         return cls(
             uid=sub_community.uid,
             name=sub_community.name,
@@ -853,9 +943,9 @@ class SubCommunityType(graphene.ObjectType):
             number_of_members=sub_community.number_of_members,  # Direct field
             group_invite_link=sub_community.group_invite_link,
             group_icon_id=sub_community.group_icon_id,
-            group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(sub_community.group_icon_id)),  # Define or import your function
+            group_icon_url=group_icon_url,
             cover_image_id=sub_community.cover_image_id,
-            cover_image_url=FileDetailType(**generate_presigned_url.generate_file_info(sub_community.cover_image_id)),
+            cover_image_url=cover_image_url,
             category=sub_community.category,
             created_by=UserType.from_neomodel(sub_community.created_by.single()) if sub_community.created_by.single() else None,
             parent_community=CommunityType.from_neomodel(sub_community.parent_community.single()) if sub_community.parent_community.single() else None
@@ -1011,6 +1101,7 @@ class CommunityDetailsType(ObjectType):
     vibes_count = graphene.Int()
     post_count = graphene.Int()
     
+    
     @classmethod
     def from_neomodel(cls, community=None,subcommunity=None,user_node=None):
 
@@ -1065,7 +1156,7 @@ class CommunityDetailsType(ObjectType):
                     community_type=community.community_type,
                     community_circle=community.community_circle,
                     room_id=community.room_id,
-                    created_date=community.created_date,
+                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date,
                     updated_date=community.updated_date,
                     number_of_members=member_count,
                     innermembercount=inner_member_count,
@@ -1628,6 +1719,9 @@ class CommunityCategoryType(ObjectType):
 
                         )
 
+            # Sort data by created_date in descending order (latest first)
+            data.sort(key=lambda x: x.created_date if x.created_date else datetime.min, reverse=True)
+            
             return cls(
                 title=details,
                 data=data
@@ -1718,6 +1812,7 @@ class CommunityFeedType(ObjectType):
     category = graphene.String()
     type = graphene.String()
     is_parent_community = graphene.Boolean()
+    created_date = graphene.DateTime()
     
     
     @classmethod
@@ -1734,7 +1829,8 @@ class CommunityFeedType(ObjectType):
                     group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(community.group_icon_id)) if community.group_icon_id else None,
                     category=community.category,
                     type=community.sub_community_type,
-                    is_parent_community=False
+                    is_parent_community=False,
+                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date
                 )
             except:
                 return cls(
@@ -1747,7 +1843,8 @@ class CommunityFeedType(ObjectType):
                     group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(community['group_icon_id'])) if community['group_icon_id'] else None,
                     category=community['category'],
                     type=community['community_type'],
-                    is_parent_community=community['community_type'] != None
+                    is_parent_community=community['community_type'] != None,
+                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date')
                 )
         else:
             try: 
@@ -1761,7 +1858,8 @@ class CommunityFeedType(ObjectType):
                     group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(community.group_icon_id)) if community.group_icon_id else None,
                     category=community.category,
                     type=community.community_type,
-                    is_parent_community=community.community_type != None
+                    is_parent_community=community.community_type != None,
+                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date
                 )
                 
             except:
@@ -1775,8 +1873,8 @@ class CommunityFeedType(ObjectType):
                     group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(community['group_icon_id'])) if community['group_icon_id'] else None,
                     category=community['category'],
                     type=community['community_type'] if community['community_type'] else community['sub_community_type'],
-                    is_parent_community=community['community_type'] != None
-                    
+                    is_parent_community=community['community_type'] != None,
+                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date')
                 )
                 
 

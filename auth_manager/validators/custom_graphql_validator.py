@@ -607,11 +607,11 @@ class NonSpecialCharacterString2_100(graphene.Scalar):
         return value
 
 class NonSemiSpecialCharacterString2_100(graphene.Scalar):
-    """Custom String Scalar that enforces length constraints and disallows special characters"""
+    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, and special characters"""
 
     MIN_LENGTH = 2
     MAX_LENGTH = 100
-    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z ]+$")  # Allows only letters, numbers, and spaces
+    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z0-9 !@#$%^&*()_+\-=\[\]{}|;':\",./<>?`~]+$")  # Allows letters, numbers, spaces, and special characters
 
     @classmethod
     def add_option(cls, field_name, mutation_name=None):
@@ -641,7 +641,7 @@ class NonSemiSpecialCharacterString2_100(graphene.Scalar):
         if not (self.MIN_LENGTH <= len(value) <= self.MAX_LENGTH):
             self.raise_error(f"String length must be between {self.MIN_LENGTH} and {self.MAX_LENGTH} characters.")
         if not self.ALLOWED_PATTERN.match(value):
-            self.raise_error(f"{self.field_name} must contain only letters. No special characters allowed.")
+            self.raise_error(f"{self.field_name} must contain only letters, numbers, spaces, and special characters.")
         return value
 
     @classmethod
@@ -663,9 +663,9 @@ class NonSemiSpecialCharacterString2_100(graphene.Scalar):
                 extensions=extensions,
                 path=path
             )
-        if not re.match(r"^[a-zA-ZÀ-ÖØ-öø-ÿ0-9+ ]+$", value):
+        if not re.match(r"^[a-zA-ZÀ-ÖØ-öø-ÿ0-9 !@#$%^&*()_+\-=\[\]{}|;':\",./<>?`~]+$", value):
             raise GraphQLError(
-                "Value must contain only letters. No special characters allowed. Except +",
+                "Value must contain only letters, numbers, spaces, and special characters.",
                 extensions=extensions,
                 path=path
             )
@@ -736,7 +736,142 @@ class NonSpecialCharacterString2_200(graphene.Scalar):
             )
         return value
 
-
+class SpecialCharacterString2_200(graphene.Scalar):
+    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, and special characters"""
+    MIN_LENGTH = 2
+    MAX_LENGTH = 200
+    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z0-9 !@#$%^&*()_+\-=\[\]{}|;':\",./<>?`~]+$")  # Allows letters, numbers, spaces, and special characters
+    
+    @classmethod
+    def add_option(cls, field_name, mutation_name=None):
+        """Create a new class with the specified field name and mutation name"""
+        # Create a unique class name that includes the mutation name if provided
+        class_name = f"Custom{field_name.title().replace('_', '')}Validator"
+        if mutation_name:
+            class_name = f"{class_name}_{mutation_name}"
+        return type(class_name, (cls,), {'field_name': field_name, 'mutation_name': mutation_name})
+    
+    field_name = "value"
+    
+    def raise_error(self, message):
+        """Helper function to raise GraphQLError with custom extensions"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if self.mutation_name:
+            path.append(self.mutation_name)
+        path.append(self.field_name)
+        raise GraphQLError(message, extensions=extensions, path=path)
+    
+    def parse_value(self, value):
+        """Handles values when passed as variables"""
+        if not isinstance(value, str):
+            self.raise_error("Value must be a string.")
+        
+        if not (self.MIN_LENGTH <= len(value) <= self.MAX_LENGTH):
+            self.raise_error(f"String length must be between {self.MIN_LENGTH} and {self.MAX_LENGTH} characters.")
+        
+        if not self.ALLOWED_PATTERN.match(value):
+            self.raise_error("Value must contain only letters, numbers, spaces, and special characters.")
+        
+        return value
+    
+    @classmethod
+    def parse_literal(cls, node, _variables=None):
+        """Handles inline literals in GraphQL queries"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if hasattr(cls, 'mutation_name') and cls.mutation_name:
+            path.append(cls.mutation_name)
+        path.append(cls.field_name)
+        
+        if not isinstance(node, ast.StringValueNode):
+            raise GraphQLError("Value must be a string.", extensions=extensions, path=path)
+        
+        value = node.value
+        if not (2 <= len(value) <= 200):
+            raise GraphQLError(
+                f"String length must be between 2 and 200 characters.",
+                extensions=extensions,
+                path=path
+            )
+        
+        if re.search(r"<[^>]+>", value):
+            raise GraphQLError(
+                "HTML tags are not allowed.",
+                extensions=extensions,
+                path=path
+            )
+        
+        return value
+    
+class SpecialCharacterString2_100(graphene.Scalar):
+    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, and special characters"""
+    MIN_LENGTH = 2
+    MAX_LENGTH = 100
+    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z0-9 !@#$%^&*()_+\-=\[\]{}|;':\",./<>?`~]+$")  # Allows letters, numbers, spaces, and special characters
+    
+    @classmethod
+    def add_option(cls, field_name, mutation_name=None):
+        """Create a new class with the specified field name and mutation name"""
+        # Create a unique class name that includes the mutation name if provided
+        class_name = f"Custom{field_name.title().replace('_', '')}Validator"
+        if mutation_name:
+            class_name = f"{class_name}_{mutation_name}"
+        return type(class_name, (cls,), {'field_name': field_name, 'mutation_name': mutation_name})
+    
+    field_name = "value"
+    
+    def raise_error(self, message):
+        """Helper function to raise GraphQLError with custom extensions"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if self.mutation_name:
+            path.append(self.mutation_name)
+        path.append(self.field_name)
+        raise GraphQLError(message, extensions=extensions, path=path)
+    
+    def parse_value(self, value):
+        """Handles values when passed as variables"""
+        if not isinstance(value, str):
+            self.raise_error(f"{self.field_name} must be a string.")
+        
+        if not (self.MIN_LENGTH <= len(value) <= self.MAX_LENGTH):
+            self.raise_error(f"String length must be between {self.MIN_LENGTH} and {self.MAX_LENGTH} characters.")
+        
+        if not self.ALLOWED_PATTERN.match(value):
+            self.raise_error(f"{self.field_name} must contain only letters, numbers, spaces, and special characters.")
+        
+        return value
+    
+    @classmethod
+    def parse_literal(cls, node, _variables=None):
+        """Handles inline literals in GraphQL queries"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if hasattr(cls, 'mutation_name') and cls.mutation_name:
+            path.append(cls.mutation_name)
+        path.append(cls.field_name)
+        
+        if not isinstance(node, ast.StringValueNode):
+            raise GraphQLError("Value must be a string.", extensions=extensions, path=path)
+        
+        value = node.value
+        if not (2 <= len(value) <= 100):
+            raise GraphQLError(
+                f"String length must be between 2 and 100 characters.",
+                extensions=extensions,
+                path=path
+            )
+        
+        if not re.match(r"^[a-zA-ZÀ-ÖØ-öø-ÿ0-9 !@#$%^&*()_+\-=\[\]{}|;':\",./<>?`~]+$", value):
+            raise GraphQLError(
+                "Value must contain only letters, numbers, spaces, and special characters.",
+                extensions=extensions,
+                path=path
+            )
+        
+        return value
+    
 class NonSpecialCharacterString2_500(graphene.Scalar):
     """Custom String Scalar that enforces length constraints and disallows special characters"""
 

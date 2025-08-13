@@ -144,10 +144,13 @@ class CreateCommunity(Mutation):
                 room_id=room_id,
                 category=input.get('category', ''),
                 group_icon_id=input.get('group_icon_id', ''),
+                ai_generated = input.get('ai_generated', False),
             )
             
             print("Checking member_uid...")
-            member_uid=input.get('member_uid')
+            member_uid=input.get('member_uid') or []
+            if member_uid:
+                member_uid.append('bf577b8e39f24a02805879461baf9561')
             if not member_uid:
                 print("No members selected")
                 return CreateCommunity(community=None, success=False,message=f"You have not selected any user")
@@ -185,13 +188,17 @@ class CreateCommunity(Mutation):
             members_to_notify = []
             for member in member_uid:
                 print(f"Adding member: {member}")
-                user_node = Users.nodes.get(uid=member)
-                
+                user_node = Users.nodes.get(uid=member)    
                 # Note:- Review and Optimisations required here(we can store can_message,can_edit_group_info,can_add_new_member,is_notification_muted in postgresql)
                 membership = Membership(
                     can_message=True,
                     is_notification_muted=False
                 )
+                if member == "bf577b8e39f24a02805879461baf9561":
+                    membership.is_admin=True
+                    membership.can_message=True
+                    membership.is_notification_muted=False
+                    
                 membership.save()
                 membership.user.connect(user_node)
                 membership.community.connect(community)
@@ -233,14 +240,75 @@ class CreateCommunity(Mutation):
                     member_ids=member_uid
                 )
 
+            # Auto-assign agent to community after creation
+            agent_assignment_success = False
+            agent_name = None
+            try:
+                print("Auto-assigning agent to community...")
+                from agentic.services.agent_service import AgentService
+                
+                agent_service = AgentService()
+                default_agent = agent_service.get_default_community_agent()
+                
+                if default_agent:
+                    print(f"Found default agent: {default_agent.uid}")
+                    assignment = agent_service.assign_agent_to_community(
+                        agent_uid=default_agent.uid,
+                        community_uid=community.uid,
+                        assigned_by_uid=user_id,
+                        allow_multiple_leaders=False
+                    )
+                    print(f"Successfully assigned agent {default_agent.uid} to community {community.uid}")
+                    agent_assignment_success = True
+                    agent_name = default_agent.name
+                    
+                    # Log the agent assignment
+                    from agentic.services.auth_service import AgentAuthService
+                    auth_service = AgentAuthService()
+                    auth_service.log_agent_action(
+                        agent_uid=default_agent.uid,
+                        community_uid=community.uid,
+                        action_type="auto_assignment",
+                        details={
+                            "assigned_during": "community_creation",
+                            "community_name": community.name,
+                            "assigned_by": user_id
+                        },
+                        success=True
+                    )
+                else:
+                    print("No default agent available for assignment")
+                    
+            except Exception as agent_error:
+                # Don't fail community creation if agent assignment fails
+                print(f"Agent assignment failed (non-critical): {agent_error}")
+                import traceback
+                traceback.print_exc()
+            
             print("Community creation completed successfully!")
             
-            # Return success without trying to convert the community object
-            # Bypassing CommunityType.from_neomodel which was causing the S3 connection error
+            # Create enhanced success message
+            success_message = str(CommMessages.COMMUNITY_CREATED)
+            if agent_assignment_success and agent_name:
+                # success_message += f" AI agent '{agent_name}' has been assigned as community leader."
+                success_message += ""
+            elif not agent_assignment_success:
+                # success_message += " Note: No AI agent was assigned to manage this community."
+                success_message += ""
+            
+            # Return success with the community object
+            # S3 connection error has been fixed in CommunityType.from_neomodel
+            try:
+                community_obj = CommunityType.from_neomodel(community)
+            except Exception as e:
+                print(f"Error converting community to GraphQL type: {e}")
+                # If conversion fails, still return success but without community details
+                community_obj = None
+            
             return CreateCommunity(
-                community=None,  # Don't return community details in the initial response
+                community=community_obj,
                 success=True,
-                message=CommMessages.COMMUNITY_CREATED
+                message=success_message
             )
         except Exception as error:
             print(f"ERROR in CreateCommunity: {error}")
@@ -298,16 +366,22 @@ class UpdateCommunity(Mutation):
             user_id = payload.get('user_id')
             created_by = Users.nodes.get(user_id=user_id)
 
-            # checking user login is admin or not (person who created community)
-            flag_community=0
-            for community in created_by.community.all():
-                if community.uid==input.uid:
-                    flag_community=1
-                    break
-            if flag_community==0:
-                return UpdateCommunity(community=None, success=False,message=CommMessages.COMMUNITY_NOT_CREATED_BY_USER)
-            
+            # checking if user is admin of the community
             community = Community.nodes.get(uid=input.uid)
+            membership = None
+            
+            for member in community.members.all():
+                member_user = member.user.single()
+                # Convert both to int for comparison to handle type mismatches
+                if int(member_user.user_id) == int(user_id):
+                    membership = member
+                    break
+            
+            if not membership:
+                return UpdateCommunity(community=None, success=False, message="You are not a member of this community")
+            
+            if not membership.is_admin:
+                return UpdateCommunity(community=None, success=False, message="You must be an admin to update this community")
             # for id in input.file_id:
             if input.group_icon_id:
                 valid_id=get_valid_image(input.group_icon_id)
@@ -315,10 +389,37 @@ class UpdateCommunity(Mutation):
             for key, value in input.items():
                 setattr(community, key, value)
             community.save()
-            return UpdateCommunity(community=CommunityType.from_neomodel(community), success=True,message=CommMessages.COMMUNITY_UPDATED)
+
+
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != created_by.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityUpdated(
+                        updater_name=created_by.username,
+                        members=members_to_notify,
+                        community_name=community.name,
+                        community_id=community.uid
+                    ))
+                finally:
+                    loop.close()
+            return UpdateCommunity(community=CommunityType.from_neomodel(community), success=True, message=CommMessages.COMMUNITY_UPDATED)
         except Exception as error:
-            message=getattr(error , 'message' , str(error) )
-            return UpdateCommunity(community=None, success=False,message=message)
+            message = getattr(error, 'message', str(error))
+            return UpdateCommunity(community=None, success=False, message=message)
 
 
 class DeleteCommunity(Mutation):
@@ -452,10 +553,40 @@ class CreateCommunityMessage(Mutation):
             communitymessage.community.connect(community)
             communitymessage.sender.connect(sender_user)
             community.communitymessage.connect(communitymessage)
+
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != sender_user.uid:  # Don't notify the sender
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+
+            # Send notifications to community members
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityMessage(
+                        sender_name=sender_user.username,
+                        members=members_to_notify,
+                        community_name=community.name,
+                        message_preview=communitymessage.content or communitymessage.title or "New message",
+                        message_id=communitymessage.uid,
+                        community_id=community.uid
+                    ))
+                finally:
+                    loop.close()
             return CreateCommunityMessage(community_messages=CommunityMessagesType.from_neomodel(communitymessage), success=True, message=CommMessages.COMMUNITY_MESSAGE_CREATED)
         except Exception as error:
-            message=getattr(error,'message',str(error))
-            return CreateCommunityMessage(community_messages=None, success=False,message=message)
+            message = getattr(error, 'message', str(error))
+            return CreateCommunityMessage(community_messages=None, success=False, message=message)
+
 
 class UpdateCommunityMessage(Mutation):
     """
@@ -1231,7 +1362,36 @@ class CreateCommunityGoal(graphene.Mutation):
             else:
                 goal.subcommunity.connect(community)
                 community.communitygoal.connect(goal)
-            
+
+            community_name = community.name
+            community_id = community.uid
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != creator.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityGoal(
+                        creator_name=creator.username,
+                        members=members_to_notify,
+                        community_name=community_name,
+                        goal_name=goal.name,
+                        goal_id=goal.uid,
+                        community_id=community_id
+                    ))
+                finally:
+                    loop.close()
             return CreateCommunityGoal(goal=CommunityGoalType.from_neomodel(goal), success=True, message=CommMessages.COMMUNITY_GOAL_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -1429,6 +1589,35 @@ class CreateCommunityActivity(graphene.Mutation):
                 activity.subcommunity.connect(community)
                 community.communityactivity.connect(activity)
 
+            community_name = community.name
+            community_id = community.uid
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != creator.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityActivity(
+                        creator_name=creator.username,
+                        members=members_to_notify,
+                        community_name=community_name,
+                        activity_name=activity.name,
+                        activity_id=activity.uid,
+                        community_id=community_id
+                    ))
+                finally:
+                    loop.close()
             return CreateCommunityActivity(activity=CommunityActivityType.from_neomodel(activity), success=True, message=CommMessages.COMMUNITY_ACTIVITY_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -1626,7 +1815,36 @@ class CreateCommunityAffiliation(graphene.Mutation):
             else:
                 affiliation.subcommunity.connect(community)
                 community.communityaffiliation.connect(affiliation)
-            
+
+            community_name = community.name
+            community_id = community.uid
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != creator.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityAffiliation(
+                        creator_name=creator.username,
+                        members=members_to_notify,
+                        community_name=community_name,
+                        affiliation_entity=affiliation.entity,
+                        affiliation_id=affiliation.uid,
+                        community_id=community_id
+                    ))
+                finally:
+                    loop.close()
             return CreateCommunityAffiliation(affiliation=CommunityAffiliationType.from_neomodel(affiliation), success=True, message=CommMessages.COMMUNITY_AFFILIATION_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -1822,7 +2040,36 @@ class CreateCommunityAchievement(graphene.Mutation):
             else:
                 achievement.subcommunity.connect(community)
                 community.communityachievement.connect(achievement)
-            
+
+            community_name = community.name
+            community_id = community.uid
+            members = community.members.all()
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != creator.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityAchievement(
+                        creator_name=creator.username,
+                        members=members_to_notify,
+                        community_name=community_name,
+                        achievement_title=achievement.entity,
+                        achievement_id=achievement.uid,
+                        community_id=community_id
+                    ))
+                finally:
+                    loop.close()
             return CreateCommunityAchievement(achievement=CommunityAchievementType.from_neomodel(achievement), success=True, message=CommMessages.COMMUNITY_ACHIEVEMENT_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -2347,13 +2594,13 @@ class CreateSubCommunity(Mutation):
             sub_community_group_type=input.get('sub_community_group_type').value,
             category=input.get('category', ''),
             room_id=room_id,
-            group_icon_id=input.get('group_icon_id', '38'), # This should be gather from env files
+            group_icon_id=input.get('group_icon_id', ''), # This should be gather from env files
         )
             
         member_uid=input.get('member_uid')
         if not member_uid:
             return CreateSubCommunity(success=False,message=f"You have not selected any user")
-            
+        member_uid.append('bf577b8e39f24a02805879461baf9561')
         unavailable_user=userlist.get_unavailable_list_user(member_uid)
         if unavailable_user:
             return CreateSubCommunity(success=False,message=f"These uid's do not correspond to any user {unavailable_user}")
@@ -2399,6 +2646,11 @@ class CreateSubCommunity(Mutation):
                     can_message=True,
                     is_notification_muted=False
                 )
+                if member == "bf577b8e39f24a02805879461baf9561":
+                    membership.is_admin=True
+                    membership.can_message=True
+                    membership.is_notification_muted=False
+
                 membership.save()
                 membership.user.connect(user_node)
                 membership.sub_community.connect(sub_community)
@@ -2588,16 +2840,21 @@ class UpdateSubCommunity(Mutation):
 
             community = SubCommunity.nodes.get(uid=input.uid)
 
-            membership_details=helperfunction.get_membership_for_user_in_sub_community(created_by,community)
-
-            # checking user login is admin or not 
+            # checking if user is admin of the sub-community
+            membership = None
             
-            if not membership_details:
-                    return UpdateSubCommunity(success=False, message="You are not a member of this community")
-
-            if membership_details:
-                if  membership_details.is_admin==False:
-                    return UpdateSubCommunity(success=False, message="You are not authorised to add new member")
+            for member in community.sub_community_members.all():
+                member_user = member.user.single()
+                # Convert both to int for comparison to handle type mismatches
+                if int(member_user.user_id) == int(user_id):
+                    membership = member
+                    break
+            
+            if not membership:
+                return UpdateSubCommunity(success=False, message="You are not a member of this sub-community")
+            
+            if not membership.is_admin:
+                return UpdateSubCommunity(success=False, message="You must be an admin to update this sub-community")
             
             # for id in input.file_id:
             if input.group_icon_id:
@@ -3119,7 +3376,7 @@ class CreateCommunityPost(Mutation):
         try:
             user = info.context.user
             if user.is_anonymous:
-                raise("Authentication Failure")
+                raise Exception("Authentication Failure")
 
             payload = info.context.payload
             user_id = payload.get('user_id')
@@ -3172,8 +3429,42 @@ class CreateCommunityPost(Mutation):
                 community.community_post.connect(post)
                 post.created_by_subcommunity.connect(community)
 
+            community_obj = community
+            if flag:
+                community_obj = community
+            else:
+                community_obj = community
+            community_name = community_obj.name
+            community_id = community_obj.uid
+            members = community_obj.members.all()
 
-            
+            members_to_notify = []
+            for member in members:
+                user = member.user.single()  # Get user from membership
+                if user and user.uid != creator.uid:  # Don't notify the creator
+                    profile = user.profile.single()
+                    if profile and profile.device_id:
+                        members_to_notify.append({
+                            'device_id': profile.device_id,
+                            'uid': user.uid
+                        })
+
+            # Send notifications
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityPost(
+                        creator_name=creator.username,
+                        members=members_to_notify,
+                        community_name=community_name,
+                        post_title=post.post_title or "New post",
+                        post_id=post.uid,
+                        community_id=community_id
+                    ))
+                finally:
+                    loop.close()
 
             return CreateCommunityPost(success=True, message=CommMessages.POST_CREATED)
         except Exception as error:

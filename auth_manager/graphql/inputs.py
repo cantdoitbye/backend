@@ -34,9 +34,18 @@ class CreateUserInputV2(graphene.InputObjectType):
     invite_token=custom_graphql_validator.String.add_option("inviteToken", "CreateUserV2")(required=False)
 
 class SocialLoginInput(graphene.InputObjectType):
-    provider = graphene.String(required=True)  # 'google' or 'facebook'
+    """Input for social login authentication"""
     access_token = graphene.String(required=True)
-    invite_token = custom_graphql_validator.String.add_option("inviteToken", "SocialLogin")(required=False)
+    provider = graphene.String(required=True)  # 'google', 'facebook', 'apple'
+    invite_token = graphene.String()  # Optional invite token
+    device_id = graphene.String()  # Optional device ID
+
+class AppleSocialLoginInput(graphene.InputObjectType):
+    """Input for Apple social login authentication"""
+    identity_token = graphene.String(required=True)  # Apple ID token
+    authorization_code = graphene.String()  # Optional authorization code
+    invite_token = graphene.String()  # Optional invite token
+    device_id = graphene.String()  # Optional device ID
 
 
 

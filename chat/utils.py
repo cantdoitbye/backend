@@ -26,5 +26,3 @@ async def register_user_on_matrix(username, password):
 
     await admin_client.close()
     return None
-
-

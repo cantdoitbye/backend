@@ -54,7 +54,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'vibe_manager',
     'monitoring',
-    'docs', 
+    'docs',
+    'agentic',
 
 
 ]
@@ -292,9 +293,24 @@ MATRIX_SERVER_URL = os.getenv("MATRIX_SERVER_URL")
 print(MATRIX_SERVER_URL)
 MATRIX_RETRY_LIMIT = os.getenv('MATRIX_RETRY_LIMIT')
 MATRIX_TIMEOUT = os.getenv('MATRIX_TIMEOUT')
+MATRIX_ADMIN_USER = os.getenv('MATRIX_ADMIN_USER')
+MATRIX_ADMIN_PASSWORD = os.getenv('MATRIX_ADMIN_PASSWORD')
 
 # it will get removed in susequent build
 CSRF_TRUSTED_ORIGINS = ["https://backend.ooumph.com"] 
+
+# Social Authentication Settings
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+
+FACEBOOK_APP_ID = os.getenv('FACEBOOK_APP_ID', '')
+FACEBOOK_APP_SECRET = os.getenv('FACEBOOK_APP_SECRET', '')
+
+APPLE_CLIENT_ID = os.getenv('APPLE_CLIENT_ID', '')  # Your app's bundle ID
+APPLE_KEY_ID = os.getenv('APPLE_KEY_ID', '')  # Key ID from Apple Developer
+APPLE_TEAM_ID = os.getenv('APPLE_TEAM_ID', '')  # Team ID from Apple Developer
+APPLE_PRIVATE_KEY = os.getenv('APPLE_PRIVATE_KEY', '')  # Private key content
+
 
 # logging.basicConfig(
 #     level=logging.DEBUG,

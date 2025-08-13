@@ -931,6 +931,9 @@ class PostCategoryType(ObjectType):
                         PostRecommendedType.from_neomodel(post_node)
                         )
 
+            # Sort data by created_at_datetime in descending order (latest first)
+            data.sort(key=lambda post: post.created_at_datetime or datetime.min, reverse=True)
+            
             return cls(
                 title=detail,
                 data=data
@@ -951,6 +954,7 @@ class PostRecommendedType(ObjectType):
     vibes_count=graphene.Int()
     vibe_score = graphene.Float()
     created_at = graphene.String()
+    created_at_datetime = graphene.DateTime()
     is_deleted = graphene.Boolean()
     # created_by = graphene.Field(UserType)
     
@@ -973,6 +977,7 @@ class PostRecommendedType(ObjectType):
             vibes_count=get_post_like_count(uid[0]),
             vibe_score=post['vibe_score'],
             created_at=time_ago (created_at),
+            created_at_datetime=created_at,
             is_deleted=post['is_deleted'],
             # created_by=UserType.from_neomodel(post.created_by.single()) if post.created_by.single() else None,
             

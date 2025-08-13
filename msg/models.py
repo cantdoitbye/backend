@@ -22,6 +22,34 @@ class Conversation(DjangoNode, StructuredNode):
         
     def __str__(self):
         return 
+
+class VibeReaction(DjangoNode, StructuredNode):
+    """
+    Model for storing vibe reactions sent to Matrix messages
+    Integrates with your existing vibe system in PostgreSQL
+    """
+    uid = UniqueIdProperty()
+    
+    # Relationships
+    conv_message = RelationshipTo('ConversationMessages', 'REACTS_TO')
+    reacted_by = RelationshipTo('Users', 'REACTED_BY')
+    
+    # Vibe data from your PostgreSQL IndividualVibe model
+    individual_vibe_id = IntegerProperty()  # References IndividualVibe.id
+    vibe_name = StringProperty(required=True)  # From name_of_vibe field
+    vibe_intensity = FloatProperty(required=True)  # 1.0 to 5.0 user selection
+    
+    # Matrix integration
+    matrix_event_id = StringProperty()  # Matrix reaction event ID
+    matrix_room_id = StringProperty()   # Matrix room where reaction was sent
+    
+    # Metadata
+    reaction_type = StringProperty(default="vibe")
+    timestamp = DateTimeProperty(default_now=True)
+    is_active = BooleanProperty(default=True)
+    
+    class Meta:
+        app_label = 'msg' 
     
 class ConversationMessages(DjangoNode, StructuredNode):
     uid = UniqueIdProperty()
@@ -35,6 +63,8 @@ class ConversationMessages(DjangoNode, StructuredNode):
     timestamp =  DateTimeProperty(default_now=True)
     visible_to_blocked = BooleanProperty(default=False)
     reaction=RelationshipTo('Reaction','HAS_REACTION')
+    vibe_reactions = RelationshipTo('VibeReaction', 'HAS_VIBE_REACTION')
+
 
     def save(self, *args, **kwargs):
         self.timestamp = datetime.now()

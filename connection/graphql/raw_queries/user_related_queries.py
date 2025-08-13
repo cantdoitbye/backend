@@ -37,35 +37,35 @@ recommended_recent_users_query = """
 get_top_vibes_hobbies_query="""
                 MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
                 RETURN u , p
-                ORDER BY rand() 
+                ORDER BY u.created_at DESC 
                 LIMIT 20
 """
 
 get_top_vibes_trending_topics_query="""
                 MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
                 RETURN u , p
-                ORDER BY rand() 
+                ORDER BY u.created_at DESC 
                 LIMIT 20
 """
 
 get_top_vibes_country_query="""
                 MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
                 RETURN u , p
-                ORDER BY rand() 
+                ORDER BY u.created_at DESC 
                 LIMIT 20
 """
 
 get_top_vibes_organisation_query="""
                 MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
                 RETURN u , p
-                ORDER BY rand() 
+                ORDER BY u.created_at DESC 
                 LIMIT 20
 """
 
 get_top_vibes_sport_query="""
                 MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
                 RETURN u , p
-                ORDER BY rand() 
+                ORDER BY u.created_at DESC 
                 LIMIT 20
 """
 

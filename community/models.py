@@ -79,7 +79,7 @@ class Community(DjangoNode, StructuredNode):
     group_icon_id = StringProperty()           # Reference to uploaded icon/avatar image
     cover_image_id = StringProperty()          # Reference to uploaded cover/banner image
     category = StringProperty()                # Broad categorization for discovery and filtering
-    
+    ai_generated = BooleanProperty(default=False)
     # Community behavior and origin flags
     generated_community = BooleanProperty(default=False)  # True if AI-generated, False if user-created
     
@@ -109,6 +109,10 @@ class Community(DjangoNode, StructuredNode):
     # These enable complex community organization and nested groups
     child_communities = RelationshipTo('SubCommunity', 'HAS_CHILD_COMMUNITY')     # Direct sub-communities
     sibling_communities = RelationshipTo('SubCommunity', 'HAS_SIBLING_COMMUNITY') # Related communities at same level
+    
+    # Agent management relationships
+    # These enable AI agent assignment and autonomous community management
+    leader_agent = RelationshipTo('agentic.models.AgentCommunityAssignment', 'HAS_LEADER_AGENT')  # AI agent assigned as community leader
 
 
     def save(self, *args, **kwargs):
@@ -124,6 +128,49 @@ class Community(DjangoNode, StructuredNode):
         """
         self.updated_date = datetime.now()
         super().save(*args, **kwargs)
+    
+    def get_leader_agent(self):
+        """
+        Get the current leader agent for this community.
+        
+        Returns:
+            Agent: The current leader agent, or None if no active leader
+        """
+        try:
+            # Get all agent assignments for this community
+            assignments = self.leader_agent.all()
+            
+            for assignment in assignments:
+                if assignment.is_active():
+                    agent = assignment.agent.single()
+                    if agent and agent.is_active():
+                        return agent
+            
+            return None
+        except Exception:
+            # Return None if there's any error getting the leader agent
+            return None
+    
+    def has_leader_agent(self):
+        """
+        Check if this community has an active leader agent.
+        
+        Returns:
+            bool: True if community has an active leader agent, False otherwise
+        """
+        return self.get_leader_agent() is not None
+    
+    def get_agent_assignments(self):
+        """
+        Get all agent assignments for this community.
+        
+        Returns:
+            list: List of AgentCommunityAssignment objects for this community
+        """
+        try:
+            return list(self.leader_agent.all())
+        except Exception:
+            return []
     
     class Meta:
         app_label = 'community'  # Django app label for proper model registration

@@ -251,65 +251,37 @@ recommended_recent_post_query = """
 #         LIMIT 60;
 
 # """
-
 post_feed_query="""
         CALL {
         // Subquery 1: Fetch posts from connected users (PRIORITIZE THIS)
-MATCH (me:Users {user_id: $log_in_user_node_id})-[:HAS_CONNECTION]->(conn:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(friend:Users)-[:HAS_POST]->(post:Post {is_deleted: false}),
-      (friend)-[:HAS_PROFILE]->(profile:Profile)
-OPTIONAL MATCH (conn)-[:HAS_CIRCLE]->(circle:Circle)
+        MATCH (me:Users {user_id: $log_in_user_node_id})-[:HAS_CONNECTION]->(conn:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(friend:Users)-[:HAS_POST]->(post:Post {is_deleted: false}),
+              (friend)-[:HAS_PROFILE]->(profile:Profile)
+        OPTIONAL MATCH (conn)-[:HAS_CIRCLE]->(circle:Circle)
 
-OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
-OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
-OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
-WITH post, friend as user, profile, collect(vibe) AS reactions, conn, circle,
-     COUNT(DISTINCT share) AS share_count,
-     COUNT(DISTINCT comment) AS comment_count,
-     COUNT(DISTINCT vibe) AS like_count
-WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count,
-     (comment_count + like_count + share_count) AS engagement_score
-WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count, engagement_score,
-     CASE 
-        WHEN post.vibe_score IS NOT NULL 
-        THEN round(post.vibe_score + (engagement_score * 0.1), 1)
-        ELSE 2.0 
-     END AS calculated_overall_score
+        OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
+        OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
+        OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
+        WITH post, friend as user, profile, collect(vibe) AS reactions, conn, circle,
+             COUNT(DISTINCT share) AS share_count,
+             COUNT(DISTINCT comment) AS comment_count,
+             COUNT(DISTINCT vibe) AS like_count
+        WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count,
+             (comment_count + like_count + share_count) AS engagement_score
+        WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count, engagement_score,
+             CASE 
+                WHEN post.vibe_score IS NOT NULL 
+                THEN round(post.vibe_score + (engagement_score * 0.1), 1)
+                ELSE 2.0 
+             END AS calculated_overall_score
 
-RETURN post, user, profile, reactions, 
-       {uid: conn.uid, connection_status: conn.connection_status, timestamp: toString(conn.timestamp)} AS connection,
-       {uid: circle.uid, circle_type: circle.circle_type, sub_relation: circle.sub_relation} AS circle, 
-       post.created_at AS created_at, share_count, calculated_overall_score
-LIMIT 25
-
-        UNION ALL
-        // Subquery 2: Fetch recent posts from non-connected users (LOWER PRIORITY)
-MATCH (post:Post {is_deleted: false})<-[:HAS_POST]-(user:Users)-[:HAS_PROFILE]->(profile:Profile)
-WHERE user.user_id <> $log_in_user_node_id
-AND NOT EXISTS {
-    MATCH (me:Users {user_id:$log_in_user_node_id})-[:HAS_CONNECTION]->(conn:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(user)
-}
-OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
-OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
-OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
-WITH post, user, profile, collect(vibe) AS reactions, 
-     COUNT(DISTINCT share) AS share_count,
-     COUNT(DISTINCT comment) AS comment_count,
-     COUNT(DISTINCT vibe) AS like_count
-WITH post, user, profile, reactions, share_count, comment_count, like_count,
-     (comment_count + like_count + share_count) AS engagement_score
-WITH post, user, profile, reactions, share_count, comment_count, like_count, engagement_score,
-     CASE 
-        WHEN post.vibe_score IS NOT NULL 
-        THEN round(post.vibe_score + (engagement_score * 0.1), 1)
-        ELSE 2.0 
-     END AS calculated_overall_score
-RETURN post, user, profile, reactions, NULL AS connection, NULL AS circle, 
-       post.created_at AS created_at, share_count, calculated_overall_score
-ORDER BY post.created_at DESC
-LIMIT 35
+        RETURN post, user, profile, reactions, 
+               {uid: conn.uid, connection_status: conn.connection_status, timestamp: toString(conn.timestamp)} AS connection,
+               {uid: circle.uid, circle_type: circle.circle_type, sub_relation: circle.sub_relation} AS circle, 
+               post.created_at AS created_at, share_count, calculated_overall_score
+        LIMIT 25
 
         UNION ALL
-        // Subquery 3: Fetch Community Post
+        // Subquery 2: Fetch Community Post (FIXED - Removed non-existent profile relationship)
         MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_COMMUNITY]->(community:Community)
         OPTIONAL MATCH (community_post)-[:HAS_POST_SHARE]->(share:PostShare)
         OPTIONAL MATCH (community_post)-[:HAS_COMMENT]->(comment:Comment)
@@ -329,35 +301,101 @@ LIMIT 35
         RETURN community_post AS post, community AS user, community AS profile, NULL AS reactions, 
                NULL AS connection, NULL AS circle, community_post.created_at AS created_at, 
                share_count, calculated_overall_score
-        LIMIT 5
+        LIMIT 10
 
         UNION ALL
-        // Subquery 4: Fetch SubCommunity Post
-        MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(community:SubCommunity)
-        OPTIONAL MATCH (community_post)-[:HAS_POST_SHARE]->(share:PostShare)
-        OPTIONAL MATCH (community_post)-[:HAS_COMMENT]->(comment:Comment)
-        OPTIONAL MATCH (community_post)-[:HAS_LIKE]->(like:Like)
-        WITH community_post, community,
+// Subquery 3: Fetch ALL SubCommunity Posts (Direct, Child, and Sibling) - CORRECTED
+CALL {
+    // Direct SubCommunity posts
+    MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(subcommunity:SubCommunity)
+    RETURN community_post, subcommunity, subcommunity AS subcommunity_profile
+    
+    UNION ALL
+    
+    // Child SubCommunity posts - CORRECTED DIRECTION
+    MATCH (parent_community:Community)-[:HAS_CHILD_COMMUNITY]->(child_subcommunity:SubCommunity)
+    MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(child_subcommunity)
+    RETURN community_post, child_subcommunity as subcommunity, child_subcommunity AS subcommunity_profile
+    
+    UNION ALL
+    
+    // Sibling SubCommunity posts - CORRECTED DIRECTION
+    MATCH (parent_community:Community)-[:HAS_SIBLING_COMMUNITY]->(sibling_subcommunity:SubCommunity)
+    MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(sibling_subcommunity)
+    RETURN community_post, sibling_subcommunity as subcommunity, sibling_subcommunity AS subcommunity_profile
+    
+    UNION ALL
+    
+    // ADDED: SubCommunity to SubCommunity child relationships
+    MATCH (parent_subcommunity:SubCommunity)-[:HAS_CHILD_COMMUNITY]->(child_subcommunity:SubCommunity)
+    MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(child_subcommunity)
+    RETURN community_post, child_subcommunity as subcommunity, child_subcommunity AS subcommunity_profile
+    
+    UNION ALL
+    
+    // ADDED: SubCommunity to SubCommunity sibling relationships
+    MATCH (parent_subcommunity:SubCommunity)-[:HAS_SIBLING_COMMUNITY]->(sibling_subcommunity:SubCommunity)
+    MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_SUBCOMMUNITY]->(sibling_subcommunity)
+    RETURN community_post, sibling_subcommunity as subcommunity, sibling_subcommunity AS subcommunity_profile
+}
+
+// Apply engagement scoring to all SubCommunity posts
+OPTIONAL MATCH (community_post)-[:HAS_POST_SHARE]->(share:PostShare)
+OPTIONAL MATCH (community_post)-[:HAS_COMMENT]->(comment:Comment)
+OPTIONAL MATCH (community_post)-[:HAS_LIKE]->(like:Like)
+WITH community_post, subcommunity, subcommunity_profile,
+     COUNT(DISTINCT share) AS share_count,
+     COUNT(DISTINCT comment) AS comment_count,
+     COUNT(DISTINCT like) AS like_count
+WITH community_post, subcommunity, subcommunity_profile, share_count, comment_count, like_count,
+     (comment_count + like_count + share_count) AS engagement_score
+WITH community_post, subcommunity, subcommunity_profile, share_count, comment_count, like_count, engagement_score,
+     CASE
+        WHEN community_post.vibe_score IS NOT NULL
+        THEN round(community_post.vibe_score + (engagement_score * 0.1), 1)
+        ELSE 2.0
+     END AS calculated_overall_score
+RETURN community_post AS post, subcommunity AS user,
+       CASE WHEN subcommunity_profile IS NOT NULL THEN subcommunity_profile ELSE subcommunity END AS profile,
+       NULL AS reactions,
+       NULL AS connection, NULL AS circle, community_post.created_at AS created_at,
+       share_count, calculated_overall_score
+ORDER BY community_post.created_at DESC
+LIMIT 15
+
+        UNION ALL
+        // Subquery 4: Fetch recent posts from non-connected users (LOWER PRIORITY)
+        MATCH (post:Post {is_deleted: false})<-[:HAS_POST]-(user:Users)-[:HAS_PROFILE]->(profile:Profile)
+        WHERE user.user_id <> $log_in_user_node_id
+        AND NOT EXISTS {
+            MATCH (me:Users {user_id:$log_in_user_node_id})-[:HAS_CONNECTION]->(conn:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(user)
+        }
+        OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
+        OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
+        OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
+        WITH post, user, profile, collect(vibe) AS reactions, 
              COUNT(DISTINCT share) AS share_count,
              COUNT(DISTINCT comment) AS comment_count,
-             COUNT(DISTINCT like) AS like_count
-        WITH community_post, community, share_count, comment_count, like_count,
+             COUNT(DISTINCT vibe) AS like_count
+        WITH post, user, profile, reactions, share_count, comment_count, like_count,
              (comment_count + like_count + share_count) AS engagement_score
-        WITH community_post, community, share_count, comment_count, like_count, engagement_score,
+        WITH post, user, profile, reactions, share_count, comment_count, like_count, engagement_score,
              CASE 
-                WHEN community_post.vibe_score IS NOT NULL 
-                THEN round(community_post.vibe_score + (engagement_score * 0.1), 1)
+                WHEN post.vibe_score IS NOT NULL 
+                THEN round(post.vibe_score + (engagement_score * 0.1), 1)
                 ELSE 2.0 
              END AS calculated_overall_score
-        RETURN community_post AS post, community AS user, community AS profile, NULL AS reactions, 
-               NULL AS connection, NULL AS circle, community_post.created_at AS created_at, 
-               share_count, calculated_overall_score
-        LIMIT 5
+        RETURN post, user, profile, reactions, NULL AS connection, NULL AS circle, 
+               post.created_at AS created_at, share_count, calculated_overall_score
+        ORDER BY post.created_at DESC
+        LIMIT 15
 
         }
         RETURN post, user, profile, reactions, connection, circle, share_count, calculated_overall_score
         ORDER BY 
-            CASE WHEN connection IS NOT NULL THEN 1 ELSE 2 END,
+            CASE WHEN connection IS NOT NULL THEN 1 
+                 WHEN labels(user)[0] IN ['Community', 'SubCommunity'] THEN 2
+                 ELSE 3 END,
             created_at DESC
         LIMIT 60;
 """

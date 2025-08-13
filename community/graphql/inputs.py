@@ -15,6 +15,7 @@ class CreateCommunityInput(graphene.InputObjectType):
     group_icon_id=custom_graphql_validator.String.add_option("groupIconId", "CreateCommunity")()
     cover_image_id=custom_graphql_validator.String.add_option("coverImageId", "CreateCommunity")()
     member_uid=custom_graphql_validator.ListString.add_option("memberUid", "CreateCommunity")()
+    ai_generated = custom_graphql_validator.Boolean.add_option("aiGenerated", "CreateCommunity")(default_value=False, description="Indicates if this community is AI-generated")
 
 class UpdateCommunityInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunity")(required=True)

@@ -90,3 +90,35 @@ class MatrixProfileType(DjangoObjectType):
     class Meta:
         model = MatrixProfile
         fields = ("user", "matrix_user_id", "access_token", "pending_matrix_registration")
+
+class VibeReactionType(ObjectType):
+    """GraphQL type for vibe reactions"""
+    uid = graphene.String()
+    vibe_name = graphene.String()
+    vibe_emoji = graphene.String()
+    vibe_intensity = graphene.Float()
+    matrix_event_id = graphene.String()
+    matrix_room_id = graphene.String()
+    timestamp = graphene.DateTime()
+    reacted_by = graphene.Field('auth_manager.graphql.types.UserType')
+    
+    @classmethod
+    def from_neomodel(cls, vibe_reaction):
+        return cls(
+            uid=vibe_reaction.uid,
+            vibe_name=vibe_reaction.vibe_name,
+            vibe_emoji=vibe_reaction.vibe_emoji,
+            vibe_intensity=vibe_reaction.vibe_intensity,
+            matrix_event_id=vibe_reaction.matrix_event_id,
+            matrix_room_id=vibe_reaction.matrix_room_id,
+            timestamp=vibe_reaction.timestamp,
+            reacted_by=UserType.from_neomodel(vibe_reaction.reacted_by.single()) if vibe_reaction.reacted_by.single() else None,
+        )
+    
+class VibeOptionType(ObjectType):
+    """Available vibe options for the UI"""
+    name = graphene.String()
+    emoji = graphene.String()
+    color = graphene.String()  # For UI theming
+
+

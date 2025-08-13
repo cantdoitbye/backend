@@ -775,6 +775,217 @@ class LoginUsingUsernameEmail(graphene.Mutation):
             message=getattr(error , 'message' , str(error) )
             return LoginUsingUsernameEmail(user=None,success=False,message=message, matrix_profile=None)
         
+class SocialLogin(graphene.Mutation):
+    """
+    Social login mutation for Google and Facebook authentication.
+    
+    This mutation handles authentication via social providers (Google/Facebook),
+    creates new users if they don't exist, and returns JWT tokens for authentication.
+    """
+    user = graphene.Field(UserType)
+    token = graphene.String()
+    refresh_token = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+    chat_available = graphene.Boolean()
+    matrix_profile = graphene.Field(MatrixProfileType)
+    is_new_user = graphene.Boolean()  # Indicates if this is a new user
+
+    class Arguments:
+        input = SocialLoginInput()
+
+    def mutate(self, info, input):
+        try:
+            from auth_manager.services.social_auth_service import SocialAuthService
+            
+            access_token = input.access_token
+            provider = input.provider.lower()
+            invite_token = input.invite_token
+            device_id = input.device_id
+
+            # Verify token and get user data from social provider
+            if provider == 'google':
+                social_data = SocialAuthService.verify_google_token(access_token)
+            elif provider == 'facebook':
+                social_data = SocialAuthService.verify_facebook_token(access_token)
+            else:
+                raise GraphQLError("Unsupported social provider")
+
+            # Get or create user from social data
+            django_user, users_node, is_new_user = SocialAuthService.get_or_create_user_from_social_data(
+                social_data, invite_token
+            )
+
+            # Generate JWT tokens
+            token = get_token(django_user)
+            refresh_token = create_refresh_token(django_user)
+
+            # Update last login
+            django_user.last_login = timezone.now()
+            django_user.save()
+            update_last_login(None, django_user)
+
+            # Store device_id in profile if provided
+            if device_id:
+                try:
+                    profile = users_node.profile.single()
+                    if profile:
+                        profile.device_id = device_id
+                        profile.save()
+                except Exception as e:
+                    print(f"Error storing device_id: {str(e)}")
+
+            # Handle Matrix chat integration
+            chat_available = False
+            matrix_profile = None
+            try:
+                matrix_profile, created = MatrixProfile.objects.get_or_create(user=django_user)
+                
+                if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                    chat_available = True
+                else:
+                    matrix_access_user = asyncio.run(login_user_on_matrix(django_user.username, django_user.username))
+                    chat_available = matrix_access_user[0] is not None
+                    
+                    matrix_profile.access_token = matrix_access_user[0]
+                    matrix_profile.pending_matrix_registration = not chat_available
+                    matrix_profile.matrix_user_id = matrix_access_user[1]
+                    matrix_profile.save()
+
+            except Exception as e:
+                print(f"Matrix login error: {e}")
+                chat_available = False
+
+            # Convert to UserType
+            user = UserType.from_neomodel(users_node)
+
+            return SocialLogin(
+                user=user,
+                token=token,
+                refresh_token=refresh_token,
+                success=True,
+                message="Social login successful",
+                chat_available=chat_available,
+                matrix_profile=matrix_profile,
+                is_new_user=is_new_user
+            )
+
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return SocialLogin(
+                success=False,
+                message=message,
+                user=None,
+                token=None,
+                refresh_token=None,
+                chat_available=False,
+                matrix_profile=None,
+                is_new_user=False
+            )
+
+
+class AppleSocialLogin(graphene.Mutation):
+    """
+    Apple social login mutation.
+    
+    This mutation handles authentication via Apple Sign-In,
+    creates new users if they don't exist, and returns JWT tokens.
+    """
+    user = graphene.Field(UserType)
+    token = graphene.String()
+    refresh_token = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+    chat_available = graphene.Boolean()
+    matrix_profile = graphene.Field(MatrixProfileType)
+    is_new_user = graphene.Boolean()
+
+    class Arguments:
+        input = AppleSocialLoginInput()
+
+    def mutate(self, info, input):
+        try:
+            from auth_manager.services.social_auth_service import SocialAuthService
+            
+            identity_token = input.identity_token
+            invite_token = input.invite_token
+            device_id = input.device_id
+
+            # Verify Apple token and get user data
+            social_data = SocialAuthService.verify_apple_token(identity_token)
+
+            # Get or create user from social data
+            django_user, users_node, is_new_user = SocialAuthService.get_or_create_user_from_social_data(
+                social_data, invite_token
+            )
+
+            # Generate JWT tokens
+            token = get_token(django_user)
+            refresh_token = create_refresh_token(django_user)
+
+            # Update last login
+            django_user.last_login = timezone.now()
+            django_user.save()
+            update_last_login(None, django_user)
+
+            # Store device_id in profile if provided
+            if device_id:
+                try:
+                    profile = users_node.profile.single()
+                    if profile:
+                        profile.device_id = device_id
+                        profile.save()
+                except Exception as e:
+                    print(f"Error storing device_id: {str(e)}")
+
+            # Handle Matrix chat integration
+            chat_available = False
+            matrix_profile = None
+            try:
+                matrix_profile, created = MatrixProfile.objects.get_or_create(user=django_user)
+                
+                if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                    chat_available = True
+                else:
+                    matrix_access_user = asyncio.run(login_user_on_matrix(django_user.username, django_user.username))
+                    chat_available = matrix_access_user[0] is not None
+                    
+                    matrix_profile.access_token = matrix_access_user[0]
+                    matrix_profile.pending_matrix_registration = not chat_available
+                    matrix_profile.matrix_user_id = matrix_access_user[1]
+                    matrix_profile.save()
+
+            except Exception as e:
+                print(f"Matrix login error: {e}")
+                chat_available = False
+
+            # Convert to UserType
+            user = UserType.from_neomodel(users_node)
+
+            return AppleSocialLogin(
+                user=user,
+                token=token,
+                refresh_token=refresh_token,
+                success=True,
+                message="Apple login successful",
+                chat_available=chat_available,
+                matrix_profile=matrix_profile,
+                is_new_user=is_new_user
+            )
+
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return AppleSocialLogin(
+                success=False,
+                message=message,
+                user=None,
+                token=None,
+                refresh_token=None,
+                chat_available=False,
+                matrix_profile=None,
+                is_new_user=False
+            )        
+        
 class Logout(graphene.Mutation):
     """
     Logs out the authenticated user and cleans up session data.
@@ -3053,6 +3264,8 @@ class CreateAchievement(Mutation):
 
             
 
+            
+
 
             return CreateAchievement(achievement=AchievementType.from_neomodel(achievement), success=True,message=UserMessages.CREATE_ACHIEVEMENT)
         except Exception as error:
@@ -3514,6 +3727,8 @@ class Mutation(graphene.ObjectType):
     register_user = CreateUser.Field()
     register_userV2 = CreateUserV2.Field()
     login_by_username_email=LoginUsingUsernameEmail.Field()
+    social_login = SocialLogin.Field()
+    apple_social_login = AppleSocialLogin.Field()
     logout=Logout.Field()
 
     update_user_profile = UpdateUserProfile.Field()

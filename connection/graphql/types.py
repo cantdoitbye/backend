@@ -8,6 +8,7 @@ from connection.utils import relation
 from auth_manager.Utils import generate_presigned_url
 from connection.graphql.raw_queries import user_related_queries
 from neomodel import db
+from datetime import datetime
 
 class StatusEnum(graphene.Enum):
     RECEIVED = "Received"
@@ -190,6 +191,7 @@ class RecommendedUserType(ObjectType):
     first_name=graphene.String()
     last_name=graphene.String()
     user_type=graphene.String()
+    created_at = graphene.DateTime()
     
     profile = graphene.Field(lambda:ProfileRecommendedUserType)
     # connection = graphene.Field(lambda: ConnectionType)
@@ -204,6 +206,7 @@ class RecommendedUserType(ObjectType):
             first_name=user["first_name"],
             last_name=user["last_name"],
             user_type=user["user_type"],
+            created_at=user.get("created_at"),
 
             profile=ProfileRecommendedUserType.from_neomodel(profile) if profile else None,
             # connection=ConnectionType.from_neomodel(user.connection.single()) if user.connection.single() else None,
@@ -435,6 +438,9 @@ class UserCategoryType(ObjectType):
 
                         )
 
+            # Sort data by created_at in descending order (latest first)
+            data.sort(key=lambda user: user.created_at or datetime.min, reverse=True)
+            
             return cls(
                 title=detail,
                 data=data,

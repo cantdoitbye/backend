@@ -566,7 +566,7 @@ class SecondaryStoryType(ObjectType):
                 # Only process stories that exist in Redis (not expired)
                 if check_story_cache_key_exists(story_uid):
                     story_uids_in_category.append(story_uid) 
-                    total_vibes += story_vibes_count  # Note: variable not defined in original
+                    # total_vibes += story_vibes_count  # Note: variable not defined in original
                     
                     # Create user instance with story data
                     user_instance = SecondaryUserStoryViewType.from_neomodel(

@@ -2,7 +2,7 @@ import graphene
 from auth_manager.validators import custom_graphql_validator
 
 class CreatePostInput(graphene.InputObjectType):
-    post_title = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("postTitle", "CreatePost")()
+    post_title = custom_graphql_validator.SpecialCharacterString2_200.add_option("postTitle", "CreatePost")()
     post_text = custom_graphql_validator.NonSpecialCharacterString2_200.add_option("postText", "CreatePost")()
     post_type = custom_graphql_validator.String.add_option("postType", "CreatePost")()
     privacy = custom_graphql_validator.String.add_option("privacy", "CreatePost")()
@@ -10,8 +10,8 @@ class CreatePostInput(graphene.InputObjectType):
     
 class UpdatePostInput(graphene.InputObjectType):
     uid = graphene.String(required=True)
-    post_title = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("postTitle", "UpdatePost")()
-    post_text = custom_graphql_validator.NonSpecialCharacterString2_200.add_option("postText", "UpdatePost")()
+    post_title = custom_graphql_validator.SpecialCharacterString2_100.add_option("postTitle", "UpdatePost")()
+    post_text = custom_graphql_validator.SpecialCharacterString2_200.add_option("postText", "UpdatePost")()
     post_type = custom_graphql_validator.String.add_option("postType", "UpdatePost")()
     privacy = custom_graphql_validator.String.add_option("privacy", "UpdatePost")()
     vibe_score = custom_graphql_validator.Float.add_option("vibeScore", "UpdatePost")()
@@ -31,7 +31,7 @@ class UpdateTagInput(graphene.InputObjectType):
 
 class CreateCommentInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "CreateComment")(required=True)
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "CreateComment")(required=True)
+    content = custom_graphql_validator.SpecialCharacterString2_100.add_option("content", "CreateComment")(required=True)
 
 class UpdateCommentInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateComment")(required=True)
