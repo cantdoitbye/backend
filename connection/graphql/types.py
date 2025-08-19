@@ -198,6 +198,18 @@ class RecommendedUserType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, user,profile=None):
+        # Convert Unix timestamp to datetime object if present
+        created_at_value = user.get("created_at")
+        if created_at_value is not None:
+            try:
+                # Handle Unix timestamp (with potential microseconds)
+                created_at_datetime = datetime.fromtimestamp(float(created_at_value))
+            except (ValueError, TypeError):
+                # If conversion fails, set to None
+                created_at_datetime = None
+        else:
+            created_at_datetime = None
+            
         return cls(
             uid=user["uid"],
             user_id=user["user_id"],
@@ -206,7 +218,7 @@ class RecommendedUserType(ObjectType):
             first_name=user["first_name"],
             last_name=user["last_name"],
             user_type=user["user_type"],
-            created_at=user.get("created_at"),
+            created_at=created_at_datetime,
 
             profile=ProfileRecommendedUserType.from_neomodel(profile) if profile else None,
             # connection=ConnectionType.from_neomodel(user.connection.single()) if user.connection.single() else None,
@@ -355,14 +367,33 @@ class UserCategoryType(ObjectType):
     
 
     @classmethod
-    def from_neomodel(cls,user_node,detail):
+    def from_neomodel(cls,user_node,detail,search=None):
             
             uid=user_node.uid
             params = {"uid": uid}
+            
+            # Add search parameter to params for safe querying
+            if search:
+                params["search_term"] = search.lower()
+                search_filter = """
+                WHERE (toLower(u.username) CONTAINS $search_term OR 
+                       toLower(u.email) CONTAINS $search_term OR 
+                       toLower(u.first_name) CONTAINS $search_term OR 
+                       toLower(u.last_name) CONTAINS $search_term)
+                """
+            else:
+                search_filter = ""
 
             data=[]
             if detail=="Top Vibes - Hobbies":
-                results1,_ = db.cypher_query(user_related_queries.get_top_vibes_hobbies_query)
+                query = f"""
+                MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
+                {search_filter}
+                RETURN u , p
+                ORDER BY u.created_at DESC 
+                LIMIT 20
+                """
+                results1,_ = db.cypher_query(query, params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -373,7 +404,14 @@ class UserCategoryType(ObjectType):
                         )
                     
             elif detail=="Top Vibes - Trending Topics":
-                results1,_ = db.cypher_query(user_related_queries.get_top_vibes_trending_topics_query)
+                query = f"""
+                MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
+                {search_filter}
+                RETURN u , p
+                ORDER BY u.created_at DESC 
+                LIMIT 20
+                """
+                results1,_ = db.cypher_query(query, params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -384,7 +422,14 @@ class UserCategoryType(ObjectType):
                         )
                     
             elif detail=="Top Vibes - Country":
-                results1,_ = db.cypher_query(user_related_queries.get_top_vibes_country_query)
+                query = f"""
+                MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
+                {search_filter}
+                RETURN u , p
+                ORDER BY u.created_at DESC 
+                LIMIT 20
+                """
+                results1,_ = db.cypher_query(query, params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -395,7 +440,14 @@ class UserCategoryType(ObjectType):
                         )
                     
             elif detail=="Top Vibes - Organisation":
-                results1,_ = db.cypher_query(user_related_queries.get_top_vibes_organisation_query)
+                query = f"""
+                MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
+                {search_filter}
+                RETURN u , p
+                ORDER BY u.created_at DESC 
+                LIMIT 20
+                """
+                results1,_ = db.cypher_query(query, params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -404,9 +456,16 @@ class UserCategoryType(ObjectType):
                         RecommendedUserType.from_neomodel(user_node,profile_node)
 
                         )
-
+                    
             elif detail=="Top Vibes - Sport":
-                results1,_ = db.cypher_query(user_related_queries.get_top_vibes_organisation_query)
+                query = f"""
+                MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile) 
+                {search_filter}
+                RETURN u , p
+                ORDER BY u.created_at DESC 
+                LIMIT 20
+                """
+                results1,_ = db.cypher_query(query, params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -417,7 +476,18 @@ class UserCategoryType(ObjectType):
                         )        
             
             elif detail=="Connected Circle":
-                results1,_ = db.cypher_query(user_related_queries.recommended_connected_users_query,params)
+                if search:
+                    query = f"""
+                    MATCH (u:Users {{uid: $uid}})-[:HAS_CONNECTION]->(c:Connection {{connection_status: "Accepted"}})<-[:HAS_CONNECTION]-(u2:Users)
+                    MATCH (u2)-[:HAS_PROFILE]->(p2:Profile)
+                    {search_filter.replace('u.', 'u2.').replace('p:', 'p2:')}
+                    RETURN u2, p2
+                    ORDER BY u2.created_at DESC
+                    LIMIT 20
+                    """
+                    results1,_ = db.cypher_query(query, params)
+                else:
+                    results1,_ = db.cypher_query(user_related_queries.recommended_connected_users_query,params)
                 for user in results1:
                     user_node = user[0]
                     profile_node=user[1]
@@ -426,9 +496,19 @@ class UserCategoryType(ObjectType):
                         RecommendedUserType.from_neomodel(user_node,profile_node)
 
                         )
-                
+                 
             elif detail=="New Arrivals":
-                results2,_ = db.cypher_query(user_related_queries.recommended_recent_users_query)
+                if search:
+                    query = f"""
+                    MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile)-[:HAS_ONBOARDING_STATUS]->(o:OnboardingStatus {{email_verified: true}})
+                    {search_filter}
+                    RETURN u, p
+                    ORDER BY u.created_at DESC
+                    LIMIT 20
+                    """
+                    results2,_ = db.cypher_query(query, params)
+                else:
+                    results2,_ = db.cypher_query(user_related_queries.recommended_recent_users_query)
                 for user in results2:
                     user_node = user[0]
                     profile_node=user[1]

@@ -858,14 +858,25 @@ class PostCategoryType(ObjectType):
     data=graphene.List(lambda:PostRecommendedType)
 
     @classmethod
-    def from_neomodel(cls,user_node=None,detail=None):
+    def from_neomodel(cls,user_node=None,detail=None,search=None):
             uid=user_node.uid
             params = {"uid": uid}
             data=[]
             
+            # Build search filter if search term is provided
+            search_filter = ""
+            if search:
+                search_term = search.strip().lower()
+                params["search_term"] = search_term
+                search_filter = "WHERE (toLower(p.post_title) CONTAINS $search_term OR toLower(p.post_text) CONTAINS $search_term)"
+            
 
             if detail=="Top Vibes - Meme":
-                results3,_ = db.cypher_query(post_queries.get_top_vibes_meme_query)
+                if search:
+                    query = f"MATCH (p:Post) {search_filter} RETURN p ORDER BY rand() LIMIT 20"
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.get_top_vibes_meme_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(
@@ -873,7 +884,11 @@ class PostCategoryType(ObjectType):
                         )
                     
             elif detail=="Top Vibes - Podcasts":
-                results3,_ = db.cypher_query(post_queries.get_top_vibes_podcasts_query)
+                if search:
+                    query = f"MATCH (p:Post) {search_filter} RETURN p ORDER BY rand() LIMIT 20"
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.get_top_vibes_podcasts_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(
@@ -881,7 +896,11 @@ class PostCategoryType(ObjectType):
                         )
 
             elif detail=="Top Vibes - Videos":
-                results3,_ = db.cypher_query(post_queries.get_top_vibes_videos_query)
+                if search:
+                    query = f"MATCH (p:Post) {search_filter} RETURN p ORDER BY rand() LIMIT 20"
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.get_top_vibes_videos_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(
@@ -889,7 +908,11 @@ class PostCategoryType(ObjectType):
                         )
                     
             elif detail=="Top Vibes - Music":
-                results3,_ = db.cypher_query(post_queries.get_top_vibes_music_query)
+                if search:
+                    query = f"MATCH (p:Post) {search_filter} RETURN p ORDER BY rand() LIMIT 20"
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.get_top_vibes_music_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(
@@ -897,7 +920,11 @@ class PostCategoryType(ObjectType):
                         )
 
             elif detail=="Top Vibes - Articles":
-                results3,_ = db.cypher_query(post_queries.get_top_vibes_articles_query)
+                if search:
+                    query = f"MATCH (p:Post) {search_filter} RETURN p ORDER BY rand() LIMIT 20"
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.get_top_vibes_articles_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(
@@ -905,8 +932,15 @@ class PostCategoryType(ObjectType):
                         )
 
             elif detail=="Post From Connection":
-
-                results1,_ = db.cypher_query(post_queries.recommended_post_from_connected_user_query, params)
+                if search:
+                    query = f"""MATCH (u:Users {{uid: $uid}})-[:HAS_CONNECTION]->(c:Connection {{connection_status: "Accepted"}})<-[:HAS_CONNECTION]-(p_user:Users)
+                        MATCH (p_user)-[:HAS_POST]->(post:Post{{is_deleted: false}})
+                        {search_filter.replace('p.', 'post.')}
+                        RETURN post
+                        ORDER BY post.created_at DESC LIMIT 20"""
+                    results1,_ = db.cypher_query(query, params)
+                else:
+                    results1,_ = db.cypher_query(post_queries.recommended_post_from_connected_user_query, params)
                 
                 for post in results1:
                     post_node = post[0]
@@ -915,8 +949,21 @@ class PostCategoryType(ObjectType):
                         )
 
             elif detail=="Popular Post":
-
-                results2,_ = db.cypher_query(post_queries.recommended_post_highest_engagement_score_query)
+                if search:
+                    query = f"""MATCH (post:Post {{is_deleted: false}})
+                        {search_filter.replace('p.', 'post.')}
+                        OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
+                        OPTIONAL MATCH (post)-[:HAS_LIKE]->(like:Like)
+                        WITH post, 
+                            COUNT(comment) AS comment_count, 
+                            COUNT(like) AS like_count
+                        WITH post,
+                            comment_count + like_count AS engagement_score
+                        RETURN post, engagement_score
+                        ORDER BY engagement_score DESC LIMIT 20"""
+                    results2,_ = db.cypher_query(query, params)
+                else:
+                    results2,_ = db.cypher_query(post_queries.recommended_post_highest_engagement_score_query)
                 for post in results2:
                     post_node = post[0]
                     data.append(
@@ -924,7 +971,14 @@ class PostCategoryType(ObjectType):
                         )
                 
             elif detail=="Recent Post":
-                results3,_ = db.cypher_query(post_queries.recommended_recent_post_query)
+                if search:
+                    query = f"""MATCH (post:Post {{is_deleted: false}})
+                        {search_filter.replace('p.', 'post.')}
+                        RETURN post
+                        ORDER BY post.created_at DESC LIMIT 20"""
+                    results3,_ = db.cypher_query(query, params)
+                else:
+                    results3,_ = db.cypher_query(post_queries.recommended_recent_post_query)
                 for post in results3:
                     post_node = post[0]
                     data.append(

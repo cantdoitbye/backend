@@ -75,6 +75,7 @@ class Post(DjangoNode, StructuredNode):
     postsave = RelationshipTo('SavedPost','HAS_SAVED_POST')    # Users who saved this post
     review = RelationshipTo('Review','HAS_REVIEW')             # Reviews of this post
     pinpost = RelationshipTo('PinedPost','HAS_PINNED_POST')    # Users who pinned this post
+    tags = ArrayProperty(base_property=StringProperty())  # Array of tags for post categorization
 
     def save(self, *args, **kwargs):
         """

@@ -7,6 +7,7 @@ class CreatePostInput(graphene.InputObjectType):
     post_type = custom_graphql_validator.String.add_option("postType", "CreatePost")()
     privacy = custom_graphql_validator.String.add_option("privacy", "CreatePost")()
     post_file_id=custom_graphql_validator.ListString.add_option("postFileId", "CreatePost")()
+    tags = graphene.List(graphene.String, description="List of tags/keywords for post categorization")
     
 class UpdatePostInput(graphene.InputObjectType):
     uid = graphene.String(required=True)

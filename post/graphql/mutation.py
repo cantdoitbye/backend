@@ -86,6 +86,7 @@ class CreatePost(Mutation):
             post_type=input.post_type
             privacy=input.privacy
             post_file_id = input.post_file_id if input.post_file_id else None
+            tags = input.tags if input.tags else None
             
             # Create and save the new post
             post = Post(
@@ -93,7 +94,8 @@ class CreatePost(Mutation):
                 post_text=post_text,
                 post_type=post_type,
                 privacy=privacy,
-                post_file_id=post_file_id
+                post_file_id=post_file_id,
+                tags=tags
             )
             post.save()
             

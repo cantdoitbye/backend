@@ -163,7 +163,12 @@ class Query(graphene.ObjectType):
         - Administrative queries for superusers
     """
 
-    all_users = graphene.List(UserType)
+    all_users = graphene.List(
+        UserType,
+        first=graphene.Int(description="Number of users to return (limit)"),
+        skip=graphene.Int(description="Number of users to skip (offset)"),
+        search=graphene.String(description="Search term to filter users by firstName, lastName, username, or email")
+    )
     
     @login_required
     def resolve_all_users(self, info, **kwargs):
@@ -952,19 +957,22 @@ class Query(graphene.ObjectType):
     # Administrative queries requiring superuser access
     @login_required
     @superuser_required
-    def resolve_all_users(self, info, **kwargs):
+    def resolve_all_users(self, info, first=None, skip=None, search=None, **kwargs):
         """
-        Retrieves all users in the system (Administrative).
+        Retrieves all users in the system with pagination and search (Administrative).
         
-        Returns a complete list of all registered users for administrative
+        Returns a paginated and searchable list of all registered users for administrative
         purposes. Requires superuser privileges.
         
         Args:
             info: GraphQL resolve info context
+            first (int, optional): Number of users to return (limit)
+            skip (int, optional): Number of users to skip (offset)
+            search (str, optional): Search term to filter users by firstName, lastName, username, or email
             **kwargs: Additional keyword arguments
         
         Returns:
-            List[UserType]: List of all user objects
+            List[UserType]: Paginated and filtered list of user objects
         
         Raises:
             GraphQLError: If user is not authenticated or not a superuser
@@ -972,9 +980,35 @@ class Query(graphene.ObjectType):
         Note:
             - Requires login authentication and superuser privileges
             - Administrative API not used by frontend
-            - Returns all users without filtering
+            - Supports pagination with first (limit) and skip (offset) parameters
+            - Supports search across username, email, first_name, and last_name fields
+            - Search is case-insensitive and matches partial strings
+            - Default behavior returns all users if no pagination or search params provided
         """
-        return [UserType.from_neomodel(user) for user in Users.nodes.all()]
+        # Get all users from the database
+        all_users = Users.nodes.all()
+        
+        # Apply search filter if search term is provided
+        if search:
+            search_term = search.lower()
+            filtered_users = []
+            for user in all_users:
+                # Check if search term matches any of the searchable fields
+                if (user.username and search_term in user.username.lower()) or \
+                   (user.email and search_term in user.email.lower()) or \
+                   (user.first_name and search_term in user.first_name.lower()) or \
+                   (user.last_name and search_term in user.last_name.lower()):
+                    filtered_users.append(user)
+            all_users = filtered_users
+        
+        # Apply pagination if parameters are provided
+        if skip is not None:
+            all_users = all_users[skip:]
+        
+        if first is not None:
+            all_users = all_users[:first]
+        
+        return [UserType.from_neomodel(user) for user in all_users]
 
 
     @login_required
@@ -1823,6 +1857,27 @@ class Query(graphene.ObjectType):
         """
         skill_data = Skill.nodes.get(uid=skill_uid)
         return [SkillType.from_neomodel(skill_data)]
+
+    # Statistics query
+    statistics = graphene.Field(StatisticsType)
+    
+    @login_required
+    @superuser_required
+    def resolve_statistics(self, info):
+        """
+        Retrieve platform statistics including total counts of users, communities, and posts.
+        
+        Args:
+            info: GraphQL resolve info
+            
+        Returns:
+            StatisticsType: Object containing total counts
+            
+        Note:
+            - Requires login authentication and superuser privileges
+            - Returns aggregated counts from the database
+        """
+        return StatisticsType.get_statistics()
 
 
 

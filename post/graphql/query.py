@@ -700,6 +700,8 @@ class Query(graphene.ObjectType):
     @staticmethod
     def build_feed_response(sorted_results, circle_type):
         """Build the final feed response from sorted results."""
+        sorted_results = sorted_results[:20]
+
         result_feed = []
         user_has_connection = False
 
@@ -826,19 +828,24 @@ class Query(graphene.ObjectType):
             logger.error(
                 f"Error processing emergency fallback feed for user {user_id}: {e}")
             return []
-    recommended_post = graphene.List(PostCategoryType)
+    recommended_post = graphene.List(PostCategoryType, search=graphene.String())
 
     @handle_graphql_post_errors
     @login_required
-    def resolve_recommended_post(self, info):
-
+    def resolve_recommended_post(self, info, search=None):
+        """
+        Resolve recommended posts with optional search functionality.
+        
+        Args:
+            search (str, optional): Search term to filter posts by postTitle and postText
+        """
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
 
         details = ["Top Vibes - Meme", "Top Vibes - Podcasts", "Top Vibes - Videos", "Top Vibes - Music",
                    "Top Vibes - Articles", "Post From Connection", "Popular Post", "Recent Post"]
-        return [PostCategoryType.from_neomodel(user_node, detail) for detail in details]
+        return [PostCategoryType.from_neomodel(user_node, detail, search) for detail in details]
 
 
 class QueryV2(graphene.ObjectType):

@@ -1101,6 +1101,11 @@ class CommunityDetailsType(ObjectType):
     vibes_count = graphene.Int()
     post_count = graphene.Int()
     
+    # Agent management fields
+    leader_agent = graphene.Field('agentic.graphql.types.AgentType')
+    has_leader_agent = graphene.Boolean()
+    agent_assignments = graphene.List('agentic.graphql.types.AgentAssignmentType')
+    
     
     @classmethod
     def from_neomodel(cls, community=None,subcommunity=None,user_node=None):
@@ -1149,6 +1154,11 @@ class CommunityDetailsType(ObjectType):
 
 
             
+            # Get agent-related data
+            leader_agent = cls._get_leader_agent(community)
+            has_leader_agent = leader_agent is not None
+            agent_assignments = cls._get_agent_assignments(community)
+            
             return cls(
                     uid=community.uid,
                     name=community.name,
@@ -1193,6 +1203,11 @@ class CommunityDetailsType(ObjectType):
                     permission=[CommunityPermissionType.from_neomodel(community)],
                     vibes_count=vibes_count,
                     post_count=post_count,
+                    
+                    # Agent management fields
+                    leader_agent=leader_agent,
+                    has_leader_agent=has_leader_agent,
+                    agent_assignments=agent_assignments
                 )
         
         elif subcommunity:
@@ -1236,6 +1251,12 @@ class CommunityDetailsType(ObjectType):
                 is_login_user_mem = True
                 if membership_exists.is_admin == True:
                     i_admin = True
+            
+            # Get agent-related data for subcommunity
+            leader_agent = cls._get_leader_agent(subcommunity)
+            has_leader_agent = leader_agent is not None
+            agent_assignments = cls._get_agent_assignments(subcommunity)
+            
             return cls(
                     uid=subcommunity.uid,
                     name=subcommunity.name,
@@ -1268,8 +1289,52 @@ class CommunityDetailsType(ObjectType):
                     permission=[CommunityPermissionType.from_neomodel(subcommunity)],
                     vibes_count=vibes_count,
                     post_count=post_count,
+                    
+                    # Agent management fields
+                    leader_agent=leader_agent,
+                    has_leader_agent=has_leader_agent,
+                    agent_assignments=agent_assignments
             )
     
+    @classmethod
+    def _get_leader_agent(cls, community):
+        """Get the current leader agent for the community."""
+        try:
+            # Import here to avoid circular imports
+            from agentic.models import AgentCommunityAssignment
+            from agentic.graphql.types import AgentType
+            
+            # Find active leader assignments for this community
+            all_assignments = AgentCommunityAssignment.nodes.all()
+            
+            for assignment in all_assignments:
+                assignment_community = assignment.community.single()
+                if (assignment_community and 
+                    assignment_community.uid == community.uid and 
+                    assignment.is_active()):
+                    
+                    agent = assignment.agent.single()
+                    if agent and agent.agent_type == 'COMMUNITY_LEADER':
+                        return AgentType.from_neomodel(agent)
+            
+            return None
+        except Exception as e:
+            print(f"Error getting leader agent: {e}")
+            return None
+    
+    @classmethod
+    def _get_agent_assignments(cls, community):
+        """Get all agent assignments for the community."""
+        try:
+            assignments = community.get_agent_assignments()
+            if assignments:
+                # Import here to avoid circular imports
+                from agentic.graphql.types import AgentAssignmentType
+                return [AgentAssignmentType.from_neomodel(assignment, include_community=False) for assignment in assignments if assignment]
+            return []
+        except Exception as e:
+            print(f"Error getting agent assignments: {e}")
+            return []
 
 
 class CommunityPermissionType(ObjectType):
@@ -1689,16 +1754,76 @@ class CommunityCategoryType(ObjectType):
    
 
     @classmethod
-    def from_neomodel(cls,details,community_type=None):
+    def from_neomodel(cls,details,community_type=None, search=None):
             
             
             data=[]
+            
+            # Build search filter if search term is provided
+            search_filter = ""
+            params = {}
+            if search:
+                search_filter = "AND (toLower(entity.name) CONTAINS toLower($search_term) OR toLower(entity.description) CONTAINS toLower($search_term))"
+                params["search_term"] = search
+            
             if details=="Popular Community":
                 if community_type:
-                    params = {"community_type": community_type.value}
-                    results1,_ = db.cypher_query(fetch_popular_community_feed_with_filter,params)
+                    params["community_type"] = community_type.value
+                    if search:
+                        # Create search-enabled query for popular communities with filter
+                        query = f"""
+                        call(){{
+                            // First part for Community
+                            MATCH (c:Community {{community_type:$community_type}})
+                            WITH c AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                            
+                            UNION ALL
+                            
+                            MATCH (sc:SubCommunity {{sub_community_group_type:$community_type}})
+                            WITH sc AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                        }}
+                        
+                        RETURN entity
+                        ORDER by entity.number_of_members DESC, entity.created_date DESC
+                        LIMIT 20
+                        """
+                        results1,_ = db.cypher_query(query, params)
+                    else:
+                        results1,_ = db.cypher_query(fetch_popular_community_feed_with_filter,params)
                 else:
-                    results1,_ = db.cypher_query(fetch_popular_community_feed)
+                    if search:
+                        # Create search-enabled query for popular communities
+                        query = f"""
+                        call(){{
+                            // First part for Community
+                            MATCH (c:Community)
+                            WITH c AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                            
+                            UNION ALL
+                            
+                            MATCH (sc:SubCommunity)
+                            WITH sc AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                        }}
+                        
+                        RETURN entity
+                        ORDER by entity.number_of_members DESC, entity.created_date DESC
+                        LIMIT 20
+                        """
+                        results1,_ = db.cypher_query(query, params)
+                    else:
+                        results1,_ = db.cypher_query(fetch_popular_community_feed)
                 for community in results1:
                     community_node = community[0]
                     data.append(
@@ -1708,10 +1833,64 @@ class CommunityCategoryType(ObjectType):
                 
             elif details=="Recent Community":
                 if community_type:
-                    params = {"community_type": community_type.value}
-                    results2,_ = db.cypher_query(fetch_newest_community_feed_with_filter,params)
+                    params["community_type"] = community_type.value
+                    if search:
+                        # Create search-enabled query for recent communities with filter
+                        query = f"""
+                        call(){{
+                            // First part for Community
+                            MATCH (c:Community{{community_type:$community_type}})
+                            WITH c AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            ORDER by entity.created_date DESC
+                            LIMIT 15
+                            
+                            UNION ALL
+                            
+                            MATCH (sc:SubCommunity{{sub_community_group_type:$community_type}})
+                            WITH sc AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            ORDER by entity.created_date DESC
+                            LIMIT 15
+                        }}
+                        
+                        RETURN entity
+                        ORDER by entity.created_date DESC
+                        LIMIT 20
+                        """
+                        results2,_ = db.cypher_query(query, params)
+                    else:
+                        results2,_ = db.cypher_query(fetch_newest_community_feed_with_filter,params)
                 else:
-                    results2,_ = db.cypher_query(fetch_newest_community_feed)
+                    if search:
+                        # Create search-enabled query for recent communities
+                        query = f"""
+                        call(){{
+                            // First part for Community
+                            MATCH (c:Community)
+                            WITH c AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                            
+                            UNION ALL
+                            
+                            MATCH (sc:SubCommunity)
+                            WITH sc AS entity
+                            WHERE true {search_filter}
+                            RETURN entity
+                            LIMIT 15
+                        }}
+                        
+                        RETURN entity
+                        ORDER by entity.created_date DESC
+                        LIMIT 20
+                        """
+                        results2,_ = db.cypher_query(query, params)
+                    else:
+                        results2,_ = db.cypher_query(fetch_newest_community_feed)
                 for community in results2:
                     community_node = community[0]
                     data.append(

@@ -144,13 +144,15 @@ class CreateCommunity(Mutation):
                 room_id=room_id,
                 category=input.get('category', ''),
                 group_icon_id=input.get('group_icon_id', ''),
+                cover_image_id=input.get('cover_image_id', ''),
                 ai_generated = input.get('ai_generated', False),
+                tags = input.get('tags', []),
             )
             
             print("Checking member_uid...")
             member_uid=input.get('member_uid') or []
-            if member_uid:
-                member_uid.append('bf577b8e39f24a02805879461baf9561')
+            
+            member_uid.append('bf577b8e39f24a02805879461baf9561')
             if not member_uid:
                 print("No members selected")
                 return CreateCommunity(community=None, success=False,message=f"You have not selected any user")
@@ -284,6 +286,32 @@ class CreateCommunity(Mutation):
                 print(f"Agent assignment failed (non-critical): {agent_error}")
                 import traceback
                 traceback.print_exc()
+            
+            # Process tags if provided
+            tags = input.get('tags') or []
+            if tags:
+                print(f"Processing {len(tags)} tags for community...")
+                from community.models import CommunityKeyword
+                
+                for tag in tags:
+                    if tag and tag.strip():  # Only process non-empty tags
+                        tag_cleaned = tag.strip().lower()
+                        try:
+                            # Check if keyword already exists
+                            existing_keyword = CommunityKeyword.nodes.get(keyword=tag_cleaned)
+                            print(f"Tag '{tag_cleaned}' already exists, skipping...")
+                        except CommunityKeyword.DoesNotExist:
+                            # Create new keyword and associate with community
+                            keyword = CommunityKeyword(
+                                keyword=tag_cleaned
+                            )
+                            keyword.save()
+                            keyword.community.connect(community)
+                            print(f"Created and associated tag: {tag_cleaned}")
+                        except Exception as tag_error:
+                            print(f"Error processing tag '{tag_cleaned}': {tag_error}")
+                            # Don't fail community creation for tag errors
+                            continue
             
             print("Community creation completed successfully!")
             
@@ -2594,13 +2622,14 @@ class CreateSubCommunity(Mutation):
             sub_community_group_type=input.get('sub_community_group_type').value,
             category=input.get('category', ''),
             room_id=room_id,
+            cover_image_id=input.get('cover_image_id', ''),
             group_icon_id=input.get('group_icon_id', ''), # This should be gather from env files
         )
             
-        member_uid=input.get('member_uid')
+        member_uid=input.get('member_uid') or []
+        member_uid.append('bf577b8e39f24a02805879461baf9561')
         if not member_uid:
             return CreateSubCommunity(success=False,message=f"You have not selected any user")
-        member_uid.append('bf577b8e39f24a02805879461baf9561')
         unavailable_user=userlist.get_unavailable_list_user(member_uid)
         if unavailable_user:
             return CreateSubCommunity(success=False,message=f"These uid's do not correspond to any user {unavailable_user}")
@@ -3412,13 +3441,15 @@ class CreateCommunityPost(Mutation):
             post_type=input.post_type
             privacy=input.privacy
             post_file_id = input.post_file_id if input.post_file_id else None
+            tags = input.tags if input.tags else None
 
             post = CommunityPost(
                 post_title=post_title,
                 post_text=post_text,
                 post_type=post_type,
                 privacy=privacy,
-                post_file_id=post_file_id
+                post_file_id=post_file_id,
+                tags=tags
             )
             post.save()
             post.creator.connect(creator)
@@ -3430,13 +3461,16 @@ class CreateCommunityPost(Mutation):
                 post.created_by_subcommunity.connect(community)
 
             community_obj = community
-            if flag:
-                community_obj = community
-            else:
-                community_obj = community
             community_name = community_obj.name
             community_id = community_obj.uid
-            members = community_obj.members.all()
+            
+            # Get members based on community type
+            if flag:
+                # For Community objects, use members relationship
+                members = community_obj.members.all()
+            else:
+                # For SubCommunity objects, use sub_community_members relationship
+                members = community_obj.sub_community_members.all()
 
             members_to_notify = []
             for member in members:

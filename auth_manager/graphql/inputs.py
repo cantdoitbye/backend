@@ -177,9 +177,9 @@ class SelectUsernameInput(graphene.InputObjectType):
 
 
 class CreateAchievementInput(graphene.InputObjectType):
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "CreateAchievement")(required=True)
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateAchievement")(required=True)
     from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "CreateAchievement")(required=True)
-    description = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("description", "CreateAchievement")()
+    description = custom_graphql_validator.SpecialCharacterString2_100.add_option("description", "CreateAchievement")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateAchievement")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateAchievement")()
     created_on = graphene.DateTime()
@@ -187,9 +187,9 @@ class CreateAchievementInput(graphene.InputObjectType):
     
 class UpdateAchievementInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateAchievement")(required=True)
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "UpdateAchievement")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "UpdateAchievement")()
     from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "UpdateAchievement")()
-    description = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("description", "UpdateAchievement")()
+    description = custom_graphql_validator.SpecialCharacterString2_100.add_option("description", "UpdateAchievement")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateAchievement")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateAchievement")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateAchievement")()
@@ -246,10 +246,10 @@ class UpdateProfileCommentInputV2(graphene.InputObjectType):
     content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "UpdateProfileCommentV2")(required=True)
 
 class CreateEducationInput(graphene.InputObjectType):
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "CreateEducation")(required=True)
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateEducation")(required=True)
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateEducation")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateEducation")()
-    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "CreateEducation")(required=True)
+    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateEducation")(required=True)
     field_of_study=custom_graphql_validator.String.add_option("fieldOfStudy", "CreateEducation")()
     created_on = graphene.DateTime()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateEducation")()
@@ -257,19 +257,19 @@ class CreateEducationInput(graphene.InputObjectType):
 
 class UpdateEducationInput(graphene.InputObjectType):
     uid= custom_graphql_validator.String.add_option("uid", "UpdateEducation")(required=True)
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "UpdateEducation")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "UpdateEducation")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateEducation")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateEducation")()
-    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "UpdateEducation")()
+    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "UpdateEducation")()
     field_of_study=custom_graphql_validator.NonSpecialCharacterString2_50.add_option("fieldOfStudy", "UpdateEducation")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateEducation")()
 
 
 class CreateExperienceInput(graphene.InputObjectType):
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "CreateExperience")()
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "CreateExperience")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateExperience")()
+    description = custom_graphql_validator.SpecialCharacterString10_200.add_option("description", "CreateExperience")()
     created_on = graphene.DateTime()
-    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "CreateExperience")()
+    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateExperience")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateExperience")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateExperience")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateExperience")()
@@ -277,16 +277,16 @@ class CreateExperienceInput(graphene.InputObjectType):
 
 class UpdateExperienceInput(graphene.InputObjectType):
     uid= custom_graphql_validator.String.add_option("uid", "UpdateExperience")(required=True)
-    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "UpdateExperience")()
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "UpdateExperience")()
-    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "UpdateExperience")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "UpdateExperience")()
+    description = custom_graphql_validator.SpecialCharacterString10_200.add_option("description", "UpdateExperience")()
+    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "UpdateExperience")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateExperience")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateExperience")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateExperience")()
 
 class CreateSkillInput(graphene.InputObjectType):
-    what = custom_graphql_validator.NonSemiSpecialCharacterString2_100.add_option("what", "CreateSkill")()
-    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "CreateSkill")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateSkill")()
+    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateSkill")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateSkill")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateSkill")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateSkill")()
@@ -294,7 +294,7 @@ class CreateSkillInput(graphene.InputObjectType):
 
 class UpdateSkillInput(graphene.InputObjectType):
     uid= custom_graphql_validator.String.add_option("uid", "UpdateSkill")(required=True)
-    what = custom_graphql_validator.NonSemiSpecialCharacterString2_100.add_option("what", "UpdateSkill")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "UpdateSkill")()
     from_source = custom_graphql_validator.NonSemiSpecialCharacterString2_100.add_option("fromSource", "UpdateSkill")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateSkill")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateSkill")()

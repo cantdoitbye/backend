@@ -80,6 +80,7 @@ class Community(DjangoNode, StructuredNode):
     cover_image_id = StringProperty()          # Reference to uploaded cover/banner image
     category = StringProperty()                # Broad categorization for discovery and filtering
     ai_generated = BooleanProperty(default=False)
+    tags = ArrayProperty(StringProperty())
     # Community behavior and origin flags
     generated_community = BooleanProperty(default=False)  # True if AI-generated, False if user-created
     
@@ -1602,6 +1603,7 @@ class CommunityPost(DjangoNode, StructuredNode):
     created_at = DateTimeProperty(default_now=True)  # Timestamp of post creation
     updated_at = DateTimeProperty(default_now=True)  # Timestamp of last update
     is_deleted = BooleanProperty(default=False)  # Soft deletion flag
+    tags = ArrayProperty(base_property=StringProperty())  # Array of tags for post categorization
     # Relationship Properties - Community/Sub-community Context
     created_by = RelationshipTo('Community', 'HAS_COMMUNITY')  # Community where post was created
     created_by_subcommunity = RelationshipTo('SubCommunity', 'HAS_SUBCOMMUNITY')  # Sub-community context if applicable

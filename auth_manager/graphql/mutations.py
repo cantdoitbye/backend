@@ -3723,6 +3723,90 @@ class UpdateSkill(Mutation):
 
 
 
+class GenerateTokenByEmail(graphene.Mutation):
+    """
+    Generates authentication tokens for a user by email ID.
+    
+    This mutation allows generating JWT tokens for an existing user
+    using only their email address. Useful for administrative purposes
+    or trusted integrations.
+    
+    Args:
+        email (str): User's email address
+    
+    Returns:
+        GenerateTokenByEmail: Response containing:
+            - user: User object from Neo4j
+            - token: JWT access token
+            - refresh_token: JWT refresh token
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not found or token generation fails
+        Exception: If authentication process fails
+    
+    Note:
+        - Requires user to exist in both Django and Neo4j databases
+        - Generates fresh JWT tokens without password verification
+        - Updates last login timestamp
+        - Should be used with appropriate authorization controls
+    """
+    user = graphene.Field(UserType)
+    token = graphene.String()
+    refresh_token = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+    
+    class Arguments:
+        email = graphene.String(required=True)
+    
+    def mutate(self, info, email):
+        try:
+            # Validate email format
+            if not email or '@' not in email:
+                raise GraphQLError('Invalid email format')
+            
+            # Check if user exists in Django
+            django_user = User.objects.filter(email=email).first()
+            if not django_user:
+                raise GraphQLError('User not found')
+            
+            # Check if user exists in Neo4j
+            neo4j_user = Users.nodes.get_or_none(email=email)
+            if not neo4j_user:
+                raise GraphQLError('User profile not found in Neo4j')
+            
+            # Generate JWT tokens
+            token = get_token(django_user)
+            refresh_token = create_refresh_token(django_user)
+            
+            # Update last login
+            django_user.last_login = timezone.now()
+            django_user.save()
+            update_last_login(None, django_user)
+            
+            return GenerateTokenByEmail(
+                user=neo4j_user,
+                token=token,
+                refresh_token=refresh_token,
+                success=True,
+                message="Tokens generated successfully"
+            )
+            
+        except GraphQLError:
+            raise
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return GenerateTokenByEmail(
+                user=None,
+                token=None,
+                refresh_token=None,
+                success=False,
+                message=f"Token generation failed: {message}"
+            )
+
+
 class Mutation(graphene.ObjectType):
     register_user = CreateUser.Field()
     register_userV2 = CreateUserV2.Field()
@@ -3730,6 +3814,7 @@ class Mutation(graphene.ObjectType):
     social_login = SocialLogin.Field()
     apple_social_login = AppleSocialLogin.Field()
     logout=Logout.Field()
+    generate_token_by_email = GenerateTokenByEmail.Field()
 
     update_user_profile = UpdateUserProfile.Field()
 
@@ -3791,6 +3876,7 @@ class MutationV2(graphene.ObjectType):
     register_user = CreateUserV2.Field()
     login_by_username_email=LoginUsingUsernameEmail.Field()
     logout=Logout.Field()
+    generate_token_by_email = GenerateTokenByEmail.Field()
 
     update_user_profile = UpdateUserProfile.Field()
     select_username = SelectUsername.Field()

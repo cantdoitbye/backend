@@ -17,6 +17,8 @@ from auth_manager.Utils import generate_presigned_url
 from connection.utils import relation as RELATIONUTILLS
 from vibe_manager.models import IndividualVibe
 from datetime import datetime
+from community.models import Community
+from post.models import Post
 
 
 class FileDetailType(graphene.ObjectType):
@@ -1944,3 +1946,42 @@ class UserProfileDataType(ObjectType):
             return 0
         except Exception:
             return 0
+
+
+class StatisticsType(ObjectType):
+    """GraphQL type for platform statistics"""
+    total_users = graphene.Int()
+    total_communities = graphene.Int()
+    total_posts = graphene.Int()
+    
+    @classmethod
+    def get_statistics(cls):
+        """Get platform statistics using Cypher queries"""
+        try:
+            # Count total users
+            user_query = "MATCH (u:Users) RETURN count(u) as total_users"
+            user_result = db.cypher_query(user_query)
+            total_users = user_result[0][0][0] if user_result[0] else 0
+            
+            # Count total communities
+            community_query = "MATCH (c:Community) RETURN count(c) as total_communities"
+            community_result = db.cypher_query(community_query)
+            total_communities = community_result[0][0][0] if community_result[0] else 0
+            
+            # Count total posts
+            post_query = "MATCH (p:Post) RETURN count(p) as total_posts"
+            post_result = db.cypher_query(post_query)
+            total_posts = post_result[0][0][0] if post_result[0] else 0
+            
+            return cls(
+                total_users=total_users,
+                total_communities=total_communities,
+                total_posts=total_posts
+            )
+        except Exception as e:
+            print(f"Error getting statistics: {e}")
+            return cls(
+                total_users=0,
+                total_communities=0,
+                total_posts=0
+            )

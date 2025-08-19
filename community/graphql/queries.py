@@ -1182,10 +1182,10 @@ class Query(graphene.ObjectType):
                 CommunityDetailsByCategoryType.from_neomodel("parentCommunity", parent_communities)
             ]
 
-    my_community_feed = graphene.List(CommunityCategoryType,community_type=GroupTypeEnum())
+    my_community_feed = graphene.List(CommunityCategoryType,community_type=GroupTypeEnum(), search=graphene.String())
     @handle_graphql_community_errors
     @login_required
-    def resolve_my_community_feed(self, info,community_type=None):
+    def resolve_my_community_feed(self, info,community_type=None, search=None):
         """Retrieve community feed for the authenticated user.
         
         Returns categorized community feed including popular and recent communities.
@@ -1193,6 +1193,7 @@ class Query(graphene.ObjectType):
         Args:
             info: GraphQL resolve info containing request context
             community_type (GroupTypeEnum, optional): Filter by community type
+            search (str, optional): Search term to filter communities by name and description
             
         Returns:
             List[CommunityCategoryType]: Categorized community feed
@@ -1202,7 +1203,7 @@ class Query(graphene.ObjectType):
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)       
         details=["Popular Community","Recent Community"]             
-        return [CommunityCategoryType.from_neomodel(detail,community_type) for detail in details]
+        return [CommunityCategoryType.from_neomodel(detail,community_type, search) for detail in details]
 
 
         

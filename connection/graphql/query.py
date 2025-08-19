@@ -88,11 +88,11 @@ class Query(graphene.ObjectType):
 
     
     # User feed and discovery queries
-    my_users_feed = graphene.List(UserCategoryType)
+    my_users_feed = graphene.List(UserCategoryType, search=graphene.String())
 
     @handle_graphql_connection_errors
     @login_required
-    def resolve_my_users_feed(self, info):
+    def resolve_my_users_feed(self, info, search=None):
         """
         Generate personalized user feed categories for the authenticated user.
         
@@ -103,6 +103,7 @@ class Query(graphene.ObjectType):
         
         Args:
             info: GraphQL resolve info containing request context and user payload
+            search: Optional search string to filter users by username, email, firstName, or lastName
             
         Returns:
             List[UserCategoryType]: List of user categories with associated users
@@ -124,8 +125,8 @@ class Query(graphene.ObjectType):
         details = ["Top Vibes - Hobbies", "Top Vibes - Trending Topics", "Top Vibes - Country",
                    "Top Vibes - Organisation", "Top Vibes - Sport", "Connected Circle", "New Arrivals"]
         
-        # Generate category-based user feed
-        return [UserCategoryType.from_neomodel(user_node, detail) for detail in details]
+        # Generate category-based user feed with search filter
+        return [UserCategoryType.from_neomodel(user_node, detail, search) for detail in details]
     
     
     # Administrative connection queries

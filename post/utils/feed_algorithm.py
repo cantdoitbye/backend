@@ -417,22 +417,25 @@ class FeedAlgorithm:
             diversified_content = []
             
             for content, score in scored_content:
+                if len(diversified_content) >= 20:
+                   break
                 author_id = content.get('author_id') or content.get('user_id', 'unknown')
                 current_count = author_count.get(author_id, 0)
                 
-                # Limit posts from same author (max 3 in top 20)
-                if current_count < 3 or len(diversified_content) > 20:
+                # Limit posts from same author (max 2 in top 20)
+                # if current_count < 2 or len(diversified_content) < 20:
+                if current_count < 2:
                     diversified_content.append((content, score))
                     author_count[author_id] = current_count + 1
-                else:
-                    # Apply penalty for over-representation
-                    penalty_factor = 0.5
-                    diversified_content.append((content, score * penalty_factor))
+                # else:
+                #     # Apply penalty for over-representation
+                #     penalty_factor = 0.5
+                #     diversified_content.append((content, score * penalty_factor))
             
             return diversified_content
         except Exception as e:
             logger.error(f"Error applying diversity filter: {e}")
-            return scored_content
+            return scored_content[:20]
     
     def handle_edge_cases(self, content_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Handle edge cases as specified in the algorithm documentation."""
@@ -607,48 +610,123 @@ class FeedGenerator:
         
         return algorithm_content
     
-    def _convert_back_to_original_format(self, scored_content: List[Tuple[Dict, float]], original_content: List[Any]) -> List[Any]:
-        """Convert scored content back to original format."""
+    def _convert_back_to_original_format(
+        self,
+        scored_content: List[Tuple[Dict, float]],
+        original_content: List[Any]
+    ) -> List[Any]:
+        """
+        Convert scored content back to original format with proper diversity.
+        """
         try:
-            # Create a mapping from UIDs to original content
+            if not scored_content:
+                logger.warning("No scored content, using original with diversity")
+                return self._apply_simple_diversity(original_content)
+
+            # Create mapping from UID to original content (Neo4j nodes)
             uid_to_original = {}
             for item in original_content:
                 try:
                     if isinstance(item, (list, tuple)) and len(item) >= 1:
-                        post_node = item[0]
-                        uid = post_node.get('uid') if hasattr(post_node, 'get') else getattr(post_node, 'uid', None)
+                        post_node = item[0]  # Neo4j Post node
+                        if hasattr(post_node, 'get'):
+                            uid = post_node.get('uid')
+                        else:
+                            uid = getattr(post_node, 'uid', None)
                         if uid:
                             uid_to_original[uid] = item
-                except:
+                except Exception as e:
+                    logger.debug(f"Error processing item: {e}")
                     continue
-            
-            # Rebuild in scored order
+
+            logger.info(f"DEBUG: Created mapping for {len(uid_to_original)} UIDs from original content")
+
+            # Match scored content with original content
             result = []
+            seen_uids = set()
+            matched_count = 0
+
             for content_data, score in scored_content:
                 uid = content_data.get('uid')
-                if uid and uid in uid_to_original:
+                if uid and uid in uid_to_original and uid not in seen_uids:
                     result.append(uid_to_original[uid])
-            
-            return result
-            
+                    seen_uids.add(uid)
+                    matched_count += 1
+
+            logger.info(f"DEBUG: Matched {matched_count} items from algorithm output")
+
+            # If we got good matches, use them; otherwise fallback
+            if len(result) >= 10:  # If we got at least 10 good matches
+                return result[:20]
+            else:
+                logger.warning(f"Only matched {len(result)} items, using diversity fallback")
+                return self._apply_simple_diversity(original_content)
+
         except Exception as e:
-            logger.error(f"Error converting back to original format: {e}")
-            return [item[0] for item in scored_content if item[0]]
+            logger.error(f"Error in conversion: {e}")
+            return self._apply_simple_diversity(original_content)
+
+    def _apply_simple_diversity(
+        self,
+        original_content: List[Any]
+    ) -> List[Any]:
+        """
+        Apply simple diversity filtering as fallback.
+        """
+        try:
+            author_counts = {}
+            result = []
+
+            for item in original_content:
+                if len(result) >= 20:
+                    break
+                try:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        user_node = item[1]  # Neo4j User node
+                        if hasattr(user_node, 'get'):
+                            author_id = user_node.get('user_id')
+                        else:
+                            author_id = getattr(user_node, 'user_id', None)
+                        if author_id:
+                            current_count = author_counts.get(author_id, 0)
+                            if current_count < 2:  # Max 2 posts per author
+                                result.append(item)
+                                author_counts[author_id] = current_count + 1
+                        else:
+                            # If no author_id found, still include the post
+                            result.append(item)
+                except Exception as e:
+                    logger.debug(f"Error in diversity filter: {e}")
+                    # If there's an error processing, still try to include the item
+                    if len(result) < 20:
+                        result.append(item)
+                    continue
+
+            logger.info(f"Simple diversity: {len(original_content)} -> {len(result)} items")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in simple diversity: {e}")
+            return original_content[:20]
 
 
-# Integration function for the GraphQL resolver
-def apply_feed_algorithm(user_id: str, raw_content: List[Any], circle_type: Optional[str] = None) -> List[Any]:
+
+def apply_feed_algorithm(
+    user_id: str,
+    raw_content: List[Any],
+    circle_type: Optional[str] = None
+) -> List[Any]:
     """
     Main integration function to apply the feed algorithm.
-    
+
     This function should be called from the my_feed_test GraphQL resolver
     to apply the personalized feed algorithm to the raw content.
-    
+
     Args:
         user_id: ID of the user requesting the feed
         raw_content: Raw content from the database query
         circle_type: Optional circle type filter
-        
+
     Returns:
         Algorithmically sorted and filtered content list
     """

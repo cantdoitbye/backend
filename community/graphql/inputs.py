@@ -16,6 +16,7 @@ class CreateCommunityInput(graphene.InputObjectType):
     cover_image_id=custom_graphql_validator.String.add_option("coverImageId", "CreateCommunity")()
     member_uid=custom_graphql_validator.ListString.add_option("memberUid", "CreateCommunity")()
     ai_generated = custom_graphql_validator.Boolean.add_option("aiGenerated", "CreateCommunity")(default_value=False, description="Indicates if this community is AI-generated")
+    tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
 
 class UpdateCommunityInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunity")(required=True)
@@ -245,8 +246,11 @@ class CommunityPermissionInput(graphene.InputObjectType):
 
 class CreateCommunityPostInput(graphene.InputObjectType):
     community_uid=custom_graphql_validator.String.add_option("communityUid", "CreateCommunityPost")(required=True, desc="The unique identifier of the community.")
-    post_title = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("postTitle", "CreateCommunityPost")(desc="The title of the post.")
-    post_text = custom_graphql_validator.NonSpecialCharacterString2_500.add_option("postText", "CreateCommunityPost")(desc="The text content of the post.")
+    post_title = custom_graphql_validator.SpecialCharacterString2_100.add_option("postTitle", "CreateCommunityPost")(desc="The title of the post.")
+    post_text = custom_graphql_validator.SpecialCharacterString2_500.add_option("postText", "CreateCommunityPost")(desc="The text content of the post.")
     post_type = custom_graphql_validator.String.add_option("postType", "CreateCommunityPost")(desc="The type of the post.")
     privacy = custom_graphql_validator.String.add_option("privacy", "CreateCommunityPost")(desc="The privacy setting of the post.")
     post_file_id=graphene.List(graphene.String)
+    tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
+
+    

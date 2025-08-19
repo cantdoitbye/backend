@@ -263,10 +263,9 @@ mutation StoreAgentContext($input: StoreAgentContextInput!) {
 ```graphql
 {
   "input": {
-    "agent_uid": "agent-123",
-    "community_uid": "community-456",
+    "agent_uid": "",
+    "community_uid": "",
     "context_data": {
-      "user_preferences": {"theme": "dark"},
       "interaction_count": 15,
       "last_topics": ["community rules", "event planning"]
     },
