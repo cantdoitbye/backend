@@ -182,66 +182,235 @@ class Query(graphene.ObjectType):
 
     # Tag Queries by Post
     postcomments_by_post_uid = graphene.List(
-        CommentType, post_uid=graphene.String(required=True))
+        CommentType, 
+        post_uid=graphene.String(required=True),
+        include_replies=graphene.Boolean(default_value=True),  # NEW: Option to include/exclude replies
+        max_depth=graphene.Int(default_value=2)  # NEW: Control nesting depth
+    )
 
     @handle_graphql_post_errors
     @login_required
-    def resolve_postcomments_by_post_uid(self, info, post_uid):
-        # try:
-        #     post_node = Post.nodes.get(uid=post_uid)
-        #     if post_node.is_deleted:
-        #         return []
-        #     comments = list(post_node.comment.all())
-        #     return [CommentType.from_neomodel(comment) for comment in comments]
-        # except Post.DoesNotExist:
-        #     post_node = CommunityPost.nodes.get(uid=post_uid)
-        #     if post_node.is_deleted:
-        #         return []
-        #     comments = list(post_node.comment.all())
-        #     return [CommentType.from_neomodel(comment) for comment in comments]
-        # try:÷
-        params = {"post_uid": post_uid}
-        results, _ = db.cypher_query(
-            post_queries.post_comments_with_metrics_query, params)
+    def resolve_postcomments_by_post_uid(self, info, post_uid, include_replies=True, max_depth=2):
+        """
+        UPDATED: Your existing resolver with nested comment support.
+        Preserves all existing functionality while adding nested features.
+        """
+        try:
+            if include_replies:
+                # Use enhanced query that includes nested structure
+                params = {"post_uid": post_uid}
+                results, _ = db.cypher_query(
+                    post_queries.post_comments_with_metrics_nested_query, params)
+            else:
+                # Use optimized query for top-level comments only
+                params = {"post_uid": post_uid}
+                results, _ = db.cypher_query(
+                    post_queries.top_level_comments_with_metrics_query, params)
 
-        if not results:
-            return []
+            if not results:
+                return []
 
-        enhanced_comments = []
-        for result in results:
-            comment_data = result[0]
-            vibes_count = result[4]
-            comments_count = result[5]
-            shares_count = result[6]
-            views_count = result[7]
-            calculated_score = result[8]
+            enhanced_comments = []
+            comment_cache = {}  # Cache to build nested structure efficiently
 
-            # Create comment object from neomodel
-            comment_uid = comment_data.get('uid')
-            comment_node = Comment.nodes.get(uid=comment_uid)
+            for result in results:
+                comment_data = result[0]
+                parent_comment_data = result[1] if len(result) > 1 and result[1] else None
+                post_data = result[2] if len(result) > 2 and result[2] else None  # Fixed: Get post data
+                vibes_count = result[3] if len(result) > 3 else 0
+                views_count = result[4] if len(result) > 4 else 0
+                comments_count = result[5] if len(result) > 5 else 0
+                shares_count = result[6] if len(result) > 6 else 0
+                likes_count = result[7] if len(result) > 7 else 0
+                calculated_score = result[8] if len(result) > 8 else 2.0
+                reply_count = result[9] if len(result) > 9 else 0
+                is_reply = result[10] if len(result) > 10 else 0
 
-            # Create CommentType with metrics from Cypher
-            enhanced_comment = CommentType(
-                uid=comment_node.uid,
-                post=PostType.from_neomodel(comment_node.post.single(
-                ), info) if comment_node.post.single() else None,
-                user=UserType.from_neomodel(
-                    comment_node.user.single()) if comment_node.user.single() else None,
-                content=comment_node.content,
-                timestamp=comment_node.timestamp,
-                is_deleted=comment_node.is_deleted,
-                score=float(
-                    calculated_score) if calculated_score is not None else 2.0,
-                views=int(views_count) if views_count is not None else 0,
-                comments=int(
-                    comments_count) if comments_count is not None else 0,
-                shares=int(shares_count) if shares_count is not None else 0,
-                vibes=int(vibes_count) if vibes_count is not None else 0
-            )
-            enhanced_comments.append(enhanced_comment)
+                # Create comment object from neomodel
+                comment_uid = comment_data.get('uid')
+                comment_node = Comment.nodes.get(uid=comment_uid)
 
-        return enhanced_comments
+                # Get post object from neomodel for full PostType data
+                post_object = None
+                if post_data:
+                    try:
+                        post_uid_from_data = post_data.get('uid')
+                        post_node = Post.nodes.get(uid=post_uid_from_data)
+                        post_object = PostType.from_neomodel(post_node, info)
+                    except Exception as e:
+                        print(f"Error getting post object: {e}")
+                        # Fallback to the relationship-based approach
+                        post_object = PostType.from_neomodel(comment_node.post.single(), info) if comment_node.post.single() else None
 
+                # Create parent comment if this is a reply
+                parent_comment = None
+                if parent_comment_data and include_replies:
+                    parent_uid = parent_comment_data.get('uid')
+                    if parent_uid not in comment_cache:
+                        parent_node = Comment.nodes.get(uid=parent_uid)
+                        parent_comment = CommentType(
+                            uid=parent_node.uid,
+                            post=post_object,  # Use the same post object
+                            user=UserType.from_neomodel(parent_node.user.single()) if parent_node.user.single() else None,
+                            content=parent_node.content,
+                            timestamp=parent_node.timestamp,
+                            is_deleted=parent_node.is_deleted,
+                            score=2.0,  # Simplified for parent
+                            views=0,
+                            comments=0,
+                            shares=0,
+                            vibes=0,
+                            # Nested fields
+                            parent_comment=None,
+                            replies=[],
+                            reply_count=0,
+                            depth_level=0,
+                            is_reply=False
+                        )
+                        comment_cache[parent_uid] = parent_comment
+                    else:
+                        parent_comment = comment_cache[parent_uid]
+
+                # Create CommentType with metrics from Cypher (PRESERVE YOUR EXISTING STRUCTURE)
+                enhanced_comment = CommentType(
+                    uid=comment_node.uid,
+                    post=post_object,  # Fixed: Use the post object from Cypher query
+                    user=UserType.from_neomodel(comment_node.user.single()) if comment_node.user.single() else None,
+                    content=comment_node.content,
+                    timestamp=comment_node.timestamp,
+                    is_deleted=comment_node.is_deleted,
+                    score=float(calculated_score) if calculated_score is not None else 2.0,
+                    views=int(views_count) if views_count is not None else 0,
+                    comments=int(comments_count) if comments_count is not None else 0,
+                    shares=int(shares_count) if shares_count is not None else 0,
+                    vibes=int(vibes_count) if vibes_count is not None else 0,
+                    
+                    # NEW: Add nested comment fields
+                    parent_comment=parent_comment,
+                    replies=[],  # Will be populated in a second pass
+                    reply_count=int(reply_count) if reply_count is not None else 0,
+                    depth_level=1 if is_reply else 0,
+                    is_reply=bool(is_reply)
+                )
+
+                enhanced_comments.append(enhanced_comment)
+                comment_cache[comment_uid] = enhanced_comment
+
+            # Second pass: Build nested structure if including replies
+            if include_replies and max_depth > 1:
+                # Organize comments into nested structure
+                top_level_comments = []
+                for comment in enhanced_comments:
+                    if not comment.is_reply:
+                        top_level_comments.append(comment)
+                    else:
+                        # Find parent and add this as a reply
+                        parent_uid = comment.parent_comment.uid if comment.parent_comment else None
+                        if parent_uid and parent_uid in comment_cache:
+                            parent = comment_cache[parent_uid]
+                            if parent.replies is None:
+                                parent.replies = []
+                            parent.replies.append(comment)
+
+                return top_level_comments
+            else:
+                # Return all comments (flat structure) or just top-level
+                return [c for c in enhanced_comments if not c.is_reply] if not include_replies else enhanced_comments
+
+        except Exception as e:
+            print(f"Error in resolve_postcomments_by_post_uid: {e}")
+            return []       
+    comment_replies = graphene.List(
+        CommentType,
+        comment_uid=graphene.String(required=True),
+        max_depth=graphene.Int(default_value=2)
+    )    
+
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_comment_replies(self, info, comment_uid, max_depth=2):
+        """
+        NEW: Get replies for a specific comment with metrics.
+        """
+        try:
+            params = {"parent_comment_uid": comment_uid}
+            results, _ = db.cypher_query(
+                post_queries.comment_replies_with_metrics_query, params)
+
+            if not results:
+                return []
+
+            replies = []
+            for result in results:
+                reply_data = result[0]
+                vibes_count = result[1] if len(result) > 1 else 0
+                views_count = result[2] if len(result) > 2 else 0
+                comments_count = result[3] if len(result) > 3 else 0
+                shares_count = result[4] if len(result) > 4 else 0
+                likes_count = result[5] if len(result) > 5 else 0
+                calculated_score = result[6] if len(result) > 6 else 2.0
+                reply_count = result[7] if len(result) > 7 else 0
+
+                # Create reply object from neomodel
+                reply_uid = reply_data.get('uid')
+                reply_node = Comment.nodes.get(uid=reply_uid)
+
+                # Get parent comment for context
+                parent_comment = None
+                try:
+                    parent_node = Comment.nodes.get(uid=comment_uid)
+                    parent_comment = CommentType(
+                        uid=parent_node.uid,
+                        post=None,  # Simplified for performance
+                        user=UserType.from_neomodel(parent_node.user.single()) if parent_node.user.single() else None,
+                        content=parent_node.content,
+                        timestamp=parent_node.timestamp,
+                        is_deleted=parent_node.is_deleted,
+                        score=2.0,
+                        views=0,
+                        comments=0,
+                        shares=0,
+                        vibes=0,
+                        parent_comment=None,
+                        replies=[],
+                        reply_count=0,
+                        depth_level=0,
+                        is_reply=False
+                    )
+                except:
+                    pass
+
+                # Create reply with metrics
+                reply = CommentType(
+                    uid=reply_node.uid,
+                    post=PostType.from_neomodel(reply_node.post.single(), info) if reply_node.post.single() else None,
+                    user=UserType.from_neomodel(reply_node.user.single()) if reply_node.user.single() else None,
+                    content=reply_node.content,
+                    timestamp=reply_node.timestamp,
+                    is_deleted=reply_node.is_deleted,
+                    score=float(calculated_score) if calculated_score is not None else 2.0,
+                    views=int(views_count) if views_count is not None else 0,
+                    comments=int(comments_count) if comments_count is not None else 0,
+                    shares=int(shares_count) if shares_count is not None else 0,
+                    vibes=int(vibes_count) if vibes_count is not None else 0,
+                    
+                    # Nested fields
+                    parent_comment=parent_comment,
+                    replies=[],  # Can be expanded recursively if needed
+                    reply_count=int(reply_count) if reply_count is not None else 0,
+                    depth_level=1,
+                    is_reply=True
+                )
+
+                replies.append(reply)
+
+            return replies
+
+        except Exception as e:
+            print(f"Error in resolve_comment_replies: {e}")
+            return [] 
+  
     # except Exception as e:
     #     print(f"Error in resolve_postcomments_by_post_uid: {e}")
     #     return []

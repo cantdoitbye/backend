@@ -391,12 +391,13 @@ class DeleteTag(Mutation):
 class CreateComment(Mutation):
     """
     CreateComment mutation for adding user comments to posts.
+    NOW SUPPORTS: Optional nested replies via parent_comment_uid
     
     Creates comment entities, updates engagement metrics, and sends notifications
     to post creators. Supports both regular posts and community posts.
     
     Used in: Post detail screen, comment sections, user discussions
-    Expects: CreateCommentInput with post UID and comment content
+    Expects: CreateCommentInput with post UID and comment content, optional parent_comment_uid
     Returns: Created CommentType object with relationships
     Side effects: Increments comment count in Redis, sends notifications
     """
@@ -412,9 +413,9 @@ class CreateComment(Mutation):
     def mutate(self, info, input):
         """
         Create comment with engagement tracking and notifications.
-        
         Process: Validate auth → find post (regular or community) → create comment
         → update metrics → send notification to post creator
+        NOW ALSO: Handle optional parent comment for replies
         """
         user = info.context.user
         if user.is_anonymous:
@@ -425,49 +426,98 @@ class CreateComment(Mutation):
         user_node = Users.nodes.get(user_id=user_id)
         
         try:
-            # Try to find regular post first, fallback to community post
+            # EXISTING LOGIC - Try to find regular post first, fallback to community post
             try:
                 post = Post.nodes.get(uid=input.post_uid)
             except Post.DoesNotExist:
-                post=CommunityPost.nodes.get(uid=input.post_uid)
+                post = CommunityPost.nodes.get(uid=input.post_uid)
 
-            # Create and save comment
+            # NEW LOGIC - Validate parent comment if this is a reply
+            parent_comment = None
+            if hasattr(input, 'parent_comment_uid') and input.parent_comment_uid:
+                try:
+                    parent_comment = Comment.nodes.get(uid=input.parent_comment_uid)
+                    
+                    # Ensure parent comment belongs to the same post
+                    parent_post = parent_comment.post.single()
+                    if not parent_post or parent_post.uid != post.uid:
+                        raise GraphQLError("Parent comment does not belong to the specified post")
+                    
+                    # Check if parent comment is deleted
+                    if parent_comment.is_deleted:
+                        raise GraphQLError("Cannot reply to a deleted comment")
+                    
+                    # Optional: Limit reply depth to prevent excessive nesting
+                    if hasattr(parent_comment, 'get_reply_depth') and parent_comment.get_reply_depth() >= 5:
+                        raise GraphQLError("Maximum reply depth reached")
+                        
+                except Comment.DoesNotExist:
+                    raise GraphQLError("Parent comment not found")
+
+            # EXISTING LOGIC - Create and save comment
             comment = Comment(
                 content=input.content
             )
             comment.save()
             
-            # Establish relationships
             comment.user.connect(user_node)
             post.comment.connect(comment)
+            comment.post.connect(post) 
+            
+            if parent_comment:
+                comment.parent_comment.connect(parent_comment)
 
-            # Increment comment count in Redis for performance
+            # EXISTING LOGIC - Increment comment count in Redis for performance
             increment_post_comment_count(post.uid)
             
-            # Send notification to post creator about new comment
+            # EXISTING LOGIC - Send notification to post creator about new comment
             post_creator = post.created_by.single()
-            if post_creator and post_creator.uid != user_node.uid:  # Don't notify if commenting on own post
-                profile = post_creator.profile.single()
-                if profile and profile.device_id:
-                    notification_service = NotificationService()
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(notification_service.notifyNewComment(
-                            commenter_name=user_node.username,
-                            post_creator_device_id=profile.device_id,
-                            post_id=post.uid,
-                            comment_id=comment.uid,
-                            comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content  # Truncate long comments
-                        ))
-                    finally:
-                        loop.close()
+            # if post_creator and post_creator.uid != user_node.uid:  # Don't notify if commenting on own post
+            #     profile = post_creator.profile.single()
+            #     if profile and profile.device_id:
+            #         notification_service = NotificationService()
+            #         loop = asyncio.new_event_loop()
+            #         asyncio.set_event_loop(loop)
+            #         try:
+            #             loop.run_until_complete(notification_service.notifyNewComment(
+            #                 commenter_name=user_node.username,
+            #                 post_creator_device_id=profile.device_id,
+            #                 post_id=post.uid,
+            #                 comment_id=comment.uid,
+            #                 comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content  # Truncate long comments
+            #             ))
+            #         finally:
+            #             loop.close()
 
-            return CreateComment(comment=CommentType.from_neomodel(comment), success=True, message=PostMessages.POST_COMMENT_CREATED)
+            # NEW LOGIC - Also notify parent comment author if this is a reply
+            # if parent_comment:
+            #     parent_comment_author = parent_comment.user.single()
+            #     if (parent_comment_author and 
+            #         parent_comment_author.uid != user_node.uid and 
+            #         parent_comment_author.uid != post_creator.uid):
+                    
+            #         parent_profile = parent_comment_author.profile.single()
+            #         if parent_profile and parent_profile.device_id:
+            #             notification_service = NotificationService()
+            #             loop = asyncio.new_event_loop()
+            #             asyncio.set_event_loop(loop)
+            #             try:
+            #                 # You can extend your notification service to handle reply notifications
+            #                 loop.run_until_complete(notification_service.notifyNewComment(
+            #                     commenter_name=user_node.username,
+            #                     post_creator_device_id=parent_profile.device_id,
+            #                     post_id=post.uid,
+            #                     comment_id=comment.uid,
+            #                     comment_content=f"Replied: {input.content[:50]}..." if len(input.content) > 50 else f"Replied: {input.content}"
+            #                 ))
+            #             finally:
+            #                 loop.close()
+
+            return CreateComment(comment=CommentType.from_neomodel(comment, info), success=True, message=PostMessages.POST_COMMENT_CREATED)
+            
         except Exception as error:
-            message=getattr(error , 'message' , str(error) )
+            message = getattr(error, 'message', str(error))
             return CreateComment(comment=None, success=False, message=message)
-
 
 class UpdateComment(Mutation):
     """

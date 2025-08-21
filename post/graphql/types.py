@@ -175,14 +175,25 @@ class CommentType(ObjectType):
     is_deleted = graphene.Boolean()
     score = graphene.Float()
     views = graphene.Int()
-    comments = graphene.Int()
+    comments = graphene.Int()  # Reply count
     shares = graphene.Int()
-    vibes = graphene.Int()   
+    vibes = graphene.Int()
+    
+    # NEW: Nested comment fields (added to existing structure)
+    parent_comment = graphene.Field(lambda: CommentType)  # Parent comment for replies
+    replies = graphene.List(lambda: CommentType)          # Direct child replies
+    reply_count = graphene.Int()                          # Total number of replies
+    depth_level = graphene.Int()                          # Nesting depth (0 = top-level)
+    is_reply = graphene.Boolean()                         # True if this is a reply to another comment
 
     @classmethod
-    def from_neomodel(cls, comment):
+    def from_neomodel(cls, comment, info=None, max_reply_depth=2, current_depth=0):
+        """
+        Enhanced from_neomodel method with nested reply support.
+        Preserves existing post metrics calculation logic.
+        """
+        # EXISTING LOGIC - Keep your current post metrics calculation
         related_post = comment.post.single() if comment.post.single() else None
-        
         post_metrics = {
             'score': 2.0,
             'views': 0,
@@ -202,21 +213,105 @@ class CommentType(ObjectType):
                 }
             except Exception as e:
                 print(f"Error calculating post metrics: {e}")
-        
+
+        # NEW LOGIC - Add nested comment functionality
+        parent_comment_node = None
+        parent_comment = None
+        replies = []
+        reply_count = 0
+        depth_level = current_depth
+        is_reply = False
+
+        try:
+            # Get parent comment if this is a reply
+            if hasattr(comment, 'parent_comment'):
+                parent_comment_node = comment.parent_comment.single()
+                if parent_comment_node and not parent_comment_node.is_deleted:
+                    is_reply = True
+                    # Don't fetch nested structure for parent to avoid infinite recursion
+                    parent_comment = cls.from_neomodel(
+                        parent_comment_node, 
+                        info, 
+                        max_reply_depth=0, 
+                        current_depth=0
+                    )
+
+            # Get direct replies if we haven't reached max depth
+            if hasattr(comment, 'replies') and current_depth < max_reply_depth:
+                try:
+                    direct_replies = list(comment.replies.all())
+                    # Filter out deleted replies and sort by timestamp
+                    active_replies = [r for r in direct_replies if not r.is_deleted]
+                    active_replies.sort(key=lambda x: x.timestamp)
+                    
+                    # Recursively build reply structure
+                    for reply in active_replies:
+                        reply_obj = cls.from_neomodel(
+                            reply, 
+                            info, 
+                            max_reply_depth=max_reply_depth, 
+                            current_depth=current_depth + 1
+                        )
+                        replies.append(reply_obj)
+                    
+                    reply_count = len(active_replies)
+                except Exception as e:
+                    print(f"Error fetching replies: {e}")
+                    reply_count = 0
+            elif hasattr(comment, 'replies'):
+                # Just count replies at max depth without fetching them
+                try:
+                    reply_count = len([r for r in comment.replies.all() if not r.is_deleted])
+                except Exception as e:
+                    print(f"Error counting replies: {e}")
+                    reply_count = 0
+
+            # Calculate depth level if this is a reply
+            if is_reply and hasattr(comment, 'get_reply_depth'):
+                try:
+                    depth_level = comment.get_reply_depth()
+                except Exception as e:
+                    print(f"Error calculating depth: {e}")
+                    depth_level = current_depth
+
+        except Exception as e:
+            print(f"Error processing nested comment data: {e}")
+
+        # RETURN WITH BOTH EXISTING AND NEW FIELDS
         return cls(
+            # EXISTING FIELDS - Keep exactly as they were
             uid=comment.uid,
-            post=PostType.from_neomodel(related_post) if related_post else None,
+            post=PostType.from_neomodel(related_post, info) if related_post else None,
             user=UserType.from_neomodel(comment.user.single()) if comment.user.single() else None,
             content=comment.content,
             timestamp=comment.timestamp,
             is_deleted=comment.is_deleted,
             score=post_metrics['score'],
             views=post_metrics['views'],
-            comments=post_metrics['comments'],
+            comments=post_metrics['comments'],  # This remains the post's total comment count
             shares=post_metrics['shares'],
-            vibes=post_metrics['vibes']
+            vibes=post_metrics['vibes'],
+            
+            # NEW FIELDS - Add nested comment functionality
+            parent_comment=parent_comment,
+            replies=replies,
+            reply_count=reply_count,  # This is the count of replies to THIS comment
+            depth_level=depth_level,
+            is_reply=is_reply
         )
+    
+class NestedCommentsResponse(ObjectType):
+    """Response type for nested comment queries with metadata."""
+    comments = graphene.List(CommentType)
+    total_count = graphene.Int()
+    max_depth_reached = graphene.Boolean()
+    has_more = graphene.Boolean()
 
+class CommentReplyInput(graphene.InputObjectType):
+    """Input type specifically for creating replies to comments."""
+    parent_comment_uid = graphene.String(required=True)
+    content = graphene.String(required=True)    
+    
 class LikeType(ObjectType):
     uid = graphene.String()
     # post = graphene.Field(PostType)

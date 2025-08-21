@@ -146,11 +146,50 @@ class Comment(DjangoNode, StructuredNode):
     # Relationships
     post = RelationshipTo('Post','HAS_POST')          # Post this comment belongs to
     user = RelationshipTo('Users','HAS_USER')         # User who wrote the comment
+    #Self-referencing relationships for nested replies
+    parent_comment = RelationshipTo('Comment', 'REPLIED_TO')  # Parent comment if this is a reply
+    replies = RelationshipFrom('Comment', 'REPLIED_TO') 
 
     def save(self, *args, **kwargs):
         """Update timestamp on save"""
         self.timestamp = datetime.now()
         super().save(*args, **kwargs)
+
+    def get_reply_depth(self):
+        """
+        Calculate the depth level of this comment in the reply chain.
+        Returns 0 for top-level comments, 1 for direct replies, etc.
+        """
+        depth = 0
+        current_comment = self
+        while current_comment.parent_comment.single():
+            depth += 1
+            current_comment = current_comment.parent_comment.single()
+            if depth > 10:  # Max depth limit
+                break
+        return depth
+
+    def get_root_comment(self):
+        """
+        Get the root (top-level) comment in this reply chain.
+        """
+        current_comment = self
+        while current_comment.parent_comment.single():
+            current_comment = current_comment.parent_comment.single()
+        return current_comment
+
+    def get_all_descendants(self):
+        """
+        Get all nested replies recursively.
+        Returns a flat list of all descendant comments.
+        """
+        descendants = []
+        direct_replies = list(self.replies.all())
+        for reply in direct_replies:
+            if not reply.is_deleted:
+                descendants.append(reply)
+                descendants.extend(reply.get_all_descendants())
+        return descendants            
 
     class Meta:
         app_label = 'post'

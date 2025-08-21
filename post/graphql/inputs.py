@@ -33,6 +33,8 @@ class UpdateTagInput(graphene.InputObjectType):
 class CreateCommentInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "CreateComment")(required=True)
     content = custom_graphql_validator.SpecialCharacterString2_100.add_option("content", "CreateComment")(required=True)
+    parent_comment_uid = custom_graphql_validator.String.add_option("parentCommentUid", "CreateComment")()
+
 
 class UpdateCommentInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateComment")(required=True)
@@ -72,3 +74,9 @@ class UpdateReviewInput(graphene.InputObjectType):
 
 class CreatePinedPostInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "CreatePinedPost")(required=True)
+
+class GetNestedCommentsInput(graphene.InputObjectType):
+    post_uid = custom_graphql_validator.String.add_option("postUid", "GetNestedComments")(required=True)
+    max_depth = graphene.Int(default_value=3)  # Maximum nesting depth to fetch
+    limit = graphene.Int(default_value=10)     # Comments per level
+    offset = graphene.Int(default_value=0)       
