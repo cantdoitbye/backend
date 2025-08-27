@@ -1,0 +1,4 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   777  100   575  100   202   201k  72375 --:--:-- --:--:-- --:--:--  379k
+{"errors":[{"message":"Unknown argument 'agentUid' on field 'Mutation.deleteMatrixMessageByAgent'.","locations":[{"line":1,"column":39}]},{"message":"Unknown argument 'roomId' on field 'Mutation.deleteMatrixMessageByAgent'.","locations":[{"line":1,"column":85}]},{"message":"Unknown argument 'eventId' on field 'Mutation.deleteMatrixMessageByAgent'.","locations":[{"line":1,"column":132}]},{"message":"Field 'deleteMatrixMessageByAgent' argument 'input' of type 'DeleteMatrixMessageByAgentInput!' is required, but it was not provided.","locations":[{"line":1,"column":12}]}]}

@@ -1958,8 +1958,8 @@ class StatisticsType(ObjectType):
     def get_statistics(cls):
         """Get platform statistics using Cypher queries"""
         try:
-            # Count total users
-            user_query = "MATCH (u:Users) RETURN count(u) as total_users"
+            # Count total users with verified emails
+            user_query = "MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile)-[:HAS_ONBOARDING_STATUS]->(o:OnboardingStatus {email_verified: true}) RETURN count(u) as total_users"
             user_result = db.cypher_query(user_query)
             total_users = user_result[0][0][0] if user_result[0] else 0
             

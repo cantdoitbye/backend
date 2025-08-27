@@ -178,8 +178,10 @@ class CommentType(ObjectType):
     comments = graphene.Int()  # Reply count
     shares = graphene.Int()
     vibes = graphene.Int()
+
+    comment_file_id = graphene.List(graphene.String)
+    comment_file_url = graphene.List(FileDetailType)
     
-    # NEW: Nested comment fields (added to existing structure)
     parent_comment = graphene.Field(lambda: CommentType)  # Parent comment for replies
     replies = graphene.List(lambda: CommentType)          # Direct child replies
     reply_count = graphene.Int()                          # Total number of replies
@@ -193,7 +195,13 @@ class CommentType(ObjectType):
         Preserves existing post metrics calculation logic.
         """
         # EXISTING LOGIC - Keep your current post metrics calculation
-        related_post = comment.post.single() if comment.post.single() else None
+        # related_post = comment.post.single() if comment.post.single() else None
+        related_post = None
+        try:
+            related_post = comment.post.single()
+        except Exception as e:
+            print(f"Could not get post relationship: {e}")
+            related_post = None
         post_metrics = {
             'score': 2.0,
             'views': 0,
@@ -213,6 +221,18 @@ class CommentType(ObjectType):
                 }
             except Exception as e:
                 print(f"Error calculating post metrics: {e}")
+
+        comment_file_url = []
+        comment_file_id = getattr(comment, 'comment_file_id', []) or []
+        
+        if comment_file_id:
+            try:
+                  # Use the same import and pattern as PostType
+                from auth_manager.Utils import generate_presigned_url
+                comment_file_url = [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in comment_file_id if file_id]
+            except Exception as e:
+                print(f"Error generating file URLs: {e}")
+                comment_file_url = []    
 
         # NEW LOGIC - Add nested comment functionality
         parent_comment_node = None
@@ -277,9 +297,7 @@ class CommentType(ObjectType):
         except Exception as e:
             print(f"Error processing nested comment data: {e}")
 
-        # RETURN WITH BOTH EXISTING AND NEW FIELDS
         return cls(
-            # EXISTING FIELDS - Keep exactly as they were
             uid=comment.uid,
             post=PostType.from_neomodel(related_post, info) if related_post else None,
             user=UserType.from_neomodel(comment.user.single()) if comment.user.single() else None,
@@ -291,8 +309,10 @@ class CommentType(ObjectType):
             comments=post_metrics['comments'],  # This remains the post's total comment count
             shares=post_metrics['shares'],
             vibes=post_metrics['vibes'],
+            comment_file_id=comment_file_id,
+            comment_file_url=comment_file_url,
+
             
-            # NEW FIELDS - Add nested comment functionality
             parent_comment=parent_comment,
             replies=replies,
             reply_count=reply_count,  # This is the count of replies to THIS comment
@@ -738,6 +758,8 @@ class FeedTestType(ObjectType):
     vibe_feed_List=graphene.List(lambda:VibeFeedListType)
     overall_score = graphene.Float()
     total_shares = graphene.Int()
+    cursor = graphene.String()  # ADD THIS LINE ONLY
+
 
 
     @classmethod
@@ -759,6 +781,18 @@ class FeedTestType(ObjectType):
         overall_score = query_overall_score if query_overall_score is not None else 2.0
         share_count = query_share_count if query_share_count is not None else 0
 
+        import base64
+        # Replace the cursor generation with this:
+        try:
+            timestamp_iso = created_at.isoformat() if created_at else "2025-08-01T00:00:00.000000"
+            cursor = base64.b64encode(f"{timestamp_iso}_{uid}".encode()).decode()
+        except Exception as e:
+            logger.warning(f"Cursor generation failed: {e}")
+            cursor = base64.b64encode(f"2025-08-01T00:00:00.000000_{uid}".encode()).decode()
+        logger.info(f"🔍 FeedTestType.from_neomodel called with:")
+        logger.info(f"   - connection_node: {type(connection_node)} - {connection_node}")
+        logger.info(f"   - circle_node: {type(circle_node)} - {circle_node}")
+        
         logger.info(f"🔍 FeedTestType.from_neomodel called with:")
         logger.info(f"   - connection_node: {type(connection_node)} - {connection_node}")
         logger.info(f"   - circle_node: {type(circle_node)} - {circle_node}")
@@ -784,7 +818,9 @@ class FeedTestType(ObjectType):
             connection=ConnectionFeedType.from_neomodel(connection_node, circle_node) if connection_node else None,
             vibe_feed_List=[VibeFeedListType.from_neomodel(vibe) for vibe in sorted_reactions],
             overall_score=overall_score,
-            total_shares=share_count
+            total_shares=share_count,
+            cursor=cursor  # ADD THIS LINE ONLY
+
         )
 
     

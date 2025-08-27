@@ -235,6 +235,19 @@ class CreateCommunity(Mutation):
                 print("Initiating Matrix room invitations in background...")
                 matrix_logger.info(f"Starting background process to invite {len(member_uid)} members to Matrix room {room_id}")
                 
+                # Print Matrix members being invited to the room
+                print(f"\n=== MATRIX ROOM MEMBERS FOR COMMUNITY '{community.name}' ===")
+                print(f"Room ID: {room_id}")
+                print(f"Total members to invite: {len(member_uid)}")
+                print("Members being invited:")
+                for i, uid in enumerate(member_uid, 1):
+                    try:
+                        user_node = Users.nodes.get(uid=uid)
+                        print(f"  {i}. {user_node.username} (UID: {uid})")
+                    except Exception as e:
+                        print(f"  {i}. Unknown user (UID: {uid}) - Error: {e}")
+                print("=" * 60)
+                
                 # Process member invites in a separate thread
                 process_matrix_invites(
                     admin_user_id=user_id,
@@ -245,6 +258,7 @@ class CreateCommunity(Mutation):
             # Auto-assign agent to community after creation
             agent_assignment_success = False
             agent_name = None
+            assigned_agent = None
             try:
                 print("Auto-assigning agent to community...")
                 from agentic.services.agent_service import AgentService
@@ -263,6 +277,7 @@ class CreateCommunity(Mutation):
                     print(f"Successfully assigned agent {default_agent.uid} to community {community.uid}")
                     agent_assignment_success = True
                     agent_name = default_agent.name
+                    assigned_agent = default_agent
                     
                     # Log the agent assignment
                     from agentic.services.auth_service import AgentAuthService
@@ -278,6 +293,23 @@ class CreateCommunity(Mutation):
                         },
                         success=True
                     )
+                    
+                    # Add agent to Matrix room if room was created and agent has Matrix profile
+                    if room_id and assigned_agent:
+                        try:
+                            print(f"Adding agent {assigned_agent.name} to Matrix room {room_id}...")
+                            from agentic.matrix_utils import join_agent_to_community_matrix_room
+                            
+                            join_agent_to_community_matrix_room(
+                                agent=assigned_agent,
+                                community=community
+                            )
+                            print(f"Successfully added agent {assigned_agent.name} to Matrix room")
+                        except Exception as matrix_error:
+                            print(f"Failed to add agent to Matrix room (non-critical): {matrix_error}")
+                            # Don't fail community creation if agent Matrix join fails
+                            import traceback
+                            traceback.print_exc()
                 else:
                     print("No default agent available for assignment")
                     

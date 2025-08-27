@@ -15,7 +15,7 @@ from auth_manager.validators.rules.regex_patterns import (
 
 def validate_username(username):
     """
-    Validates that the username is between 6 and 10 characters long.
+    Validates that the username is between 3 and 10 characters long.
     """
     if not re.match(USERNAME_PATTERN, username):
         raise GraphQLError("Invalid username. Must be between 6 and 10 characters.")

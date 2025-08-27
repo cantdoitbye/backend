@@ -5,9 +5,9 @@ from auth_manager.validators import custom_graphql_validator
 
 class CreateStoryInput(graphene.InputObjectType):
     """Input fields required to create a new story."""
-    title = custom_graphql_validator.NonSpecialCharacterString2_200.add_option("title", "CreateStory")( desc="The title of the story to display.")
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "CreateStory")(desc="The main content or body of the story.")
-    captions = custom_graphql_validator.NonSpecialCharacterString2_200.add_option("captions", "CreateStory")(desc="A brief caption or tagline for the story.")
+    title = custom_graphql_validator.SpecialCharacterString2_200.add_option("title", "CreateStory")( desc="The title of the story to display.")
+    content = custom_graphql_validator.SpecialCharacterString2_100.add_option("content", "CreateStory")(desc="The main content or body of the story.")
+    captions = custom_graphql_validator.SpecialCharacterString2_200.add_option("captions", "CreateStory")(desc="A brief caption or tagline for the story.")
     privacy = custom_graphql_validator.ListString.add_option("privacy", "CreateStory")(desc="Privacy level of the story, determining visibility.", required=True)
     story_image_id = custom_graphql_validator.String.add_option("storyImageId", "CreateStory")(desc="ID of the image associated with the story.")
 

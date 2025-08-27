@@ -29,7 +29,7 @@ PASSWORD_PATTERN = (
 
 # Matches usernames containing alphanumeric characters and underscores,
 # with a length between 6 and 10 characters.
-USERNAME_PATTERN = r"^[a-zA-Z0-9_]{6,10}$"
+USERNAME_PATTERN = r"^[a-zA-Z0-9_]{3,9}$"
 # USERNAME_PATTERN = r"^[a-zA-Z0-9_]{4,10}$"
 
 # Matches job titles of any characters (letters, numbers, or special characters),

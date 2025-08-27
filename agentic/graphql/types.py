@@ -41,6 +41,11 @@ class AgentType(ObjectType):
     updated_date = DateTime()
     version = String()
     
+    # Matrix integration fields
+    matrix_user_id = String()
+    has_matrix_profile = Boolean()
+    pending_matrix_registration = Boolean()
+    
     # Relationships
     created_by = graphene.Field(UserType)
     assigned_communities = List(lambda: AgentAssignmentType)
@@ -79,6 +84,9 @@ class AgentType(ObjectType):
                 created_date=getattr(agent, 'created_date', None),
                 updated_date=getattr(agent, 'updated_date', None),
                 version=getattr(agent, 'version', '1.0'),
+                matrix_user_id=getattr(agent, 'matrix_user_id', None),
+                has_matrix_profile=bool(getattr(agent, 'matrix_user_id', None)),
+                pending_matrix_registration=getattr(agent, 'pending_matrix_registration', False),
                 created_by=None,
                 assigned_communities=[]
             )
@@ -121,6 +129,9 @@ class AgentType(ObjectType):
                 created_date=agent.created_date,
                 updated_date=agent.updated_date,
                 version=agent.version,
+                matrix_user_id=agent.matrix_user_id,
+                has_matrix_profile=bool(agent.matrix_user_id),
+                pending_matrix_registration=agent.pending_matrix_registration,
                 created_by=UserType.from_neomodel(agent.created_by.single()) if agent.created_by.single() else None,
                 assigned_communities=assigned_communities
             )

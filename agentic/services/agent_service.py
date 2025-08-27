@@ -7,6 +7,7 @@ from datetime import datetime
 import logging
 
 from ..models import Agent, AgentCommunityAssignment
+from ..matrix_utils import create_agent_matrix_profile, MatrixRegistrationError, MatrixLoginError, MatrixProfileUpdateError
 from auth_manager.models import Users
 from community.models import Community
 from neomodel import DoesNotExist
@@ -121,6 +122,26 @@ class AgentService:
                 except DoesNotExist:
                     logger.warning(f"Creator user {created_by_uid} not found, agent created without creator link")
                     # Don't fail agent creation if creator link fails
+            
+            # Create Matrix profile for the agent
+            try:
+                matrix_success = create_agent_matrix_profile(agent)
+                if matrix_success:
+                    logger.info(f"Successfully created Matrix profile for agent {agent.uid}")
+                else:
+                    logger.warning(f"Matrix profile creation failed for agent {agent.uid}, marked as pending")
+            except MatrixRegistrationError as e:
+                logger.error(f"Matrix registration error for agent {agent.uid}: {str(e)}")
+                # Agent is already marked as pending in matrix_utils
+            except MatrixLoginError as e:
+                logger.error(f"Matrix login error for agent {agent.uid}: {str(e)}")
+                # Agent is already marked as pending in matrix_utils
+            except MatrixProfileUpdateError as e:
+                logger.error(f"Matrix profile update error for agent {agent.uid}: {str(e)}")
+                # Agent is already marked as pending in matrix_utils
+            except Exception as e:
+                logger.error(f"Unexpected error during Matrix profile creation for agent {agent.uid}: {str(e)}")
+                # Don't fail agent creation if Matrix profile creation fails
             
             logger.info(f"Successfully created agent {agent.uid}: {name}")
             return agent

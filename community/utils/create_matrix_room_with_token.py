@@ -100,6 +100,53 @@ async def create_room(
         )
         if isinstance(response, RoomCreateResponse) and response.room_id:
             matrix_logger.info(f"Room created successfully: {response.room_id}")
+            
+            # Explicitly set the creator's power level to 100 (admin)
+            try:
+                matrix_logger.info(f"Setting creator {user_id} as admin (power level 100) in room {response.room_id}")
+                
+                # Get current power levels (should be default)
+                power_response = await asyncio.wait_for(
+                    client.room_get_state_event(response.room_id, "m.room.power_levels"),
+                    timeout=timeout
+                )
+                
+                if hasattr(power_response, 'content'):
+                    power_levels = power_response.content
+                else:
+                    # Create default power levels structure
+                    power_levels = {
+                        "users": {},
+                        "users_default": 0,
+                        "events": {},
+                        "events_default": 0,
+                        "state_default": 50,
+                        "ban": 50,
+                        "kick": 50,
+                        "redact": 50,
+                        "invite": 50
+                    }
+                
+                # Ensure the creator has admin power level
+                if "users" not in power_levels:
+                    power_levels["users"] = {}
+                power_levels["users"][user_id] = 100
+                
+                # Update power levels
+                power_update_response = await asyncio.wait_for(
+                    client.room_put_state(response.room_id, "m.room.power_levels", power_levels),
+                    timeout=timeout
+                )
+                
+                if hasattr(power_update_response, 'event_id'):
+                    matrix_logger.info(f"Successfully set creator {user_id} as admin in room {response.room_id}")
+                else:
+                    matrix_logger.warning(f"Failed to set creator power level in room {response.room_id}: {power_update_response}")
+                    
+            except Exception as power_error:
+                matrix_logger.warning(f"Failed to set creator power level in room {response.room_id}: {power_error}")
+                # Don't fail room creation if power level setting fails
+            
             return response.room_id
         else:
             error_msg = f"Failed to create room: {response}"

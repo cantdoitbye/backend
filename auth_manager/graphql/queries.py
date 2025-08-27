@@ -985,8 +985,13 @@ class Query(graphene.ObjectType):
             - Search is case-insensitive and matches partial strings
             - Default behavior returns all users if no pagination or search params provided
         """
-        # Get all users from the database
-        all_users = Users.nodes.all()
+        # Get all users with verified emails from the database using Cypher query
+        query = """
+        MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile)-[:HAS_ONBOARDING_STATUS]->(os:OnboardingStatus {email_verified: true})
+        RETURN u
+        """
+        results, meta = db.cypher_query(query)
+        all_users = [Users.inflate(row[0]) for row in results]
         
         # Apply search filter if search term is provided
         if search:

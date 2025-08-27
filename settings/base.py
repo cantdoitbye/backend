@@ -169,12 +169,12 @@ AUTH_PASSWORD_VALIDATORS = [
 
 GRAPHQL_JWT = {
     'JWT_PAYLOAD_HANDLER': 'custom_backends.utils.custom_jwt_payload',
-    'JWT_VERIFY_EXPIRATION': True,
+    'JWT_VERIFY_EXPIRATION': False,  # Disable token expiration
     'JWT_LONG_RUNNING_REFRESH_TOKEN': True,
     'JWT_SECRET_KEY': SECRET_KEY,
     'JWT_ALGORITHM': 'HS256',
-    'JWT_EXPIRATION_DELTA': timedelta(days=3),  # 30 minutes
-    'JWT_REFRESH_EXPIRATION_DELTA': timedelta(days=7),  # 7 days
+    # 'JWT_EXPIRATION_DELTA': timedelta(days=3),  # Disabled - tokens don't expire
+    # 'JWT_REFRESH_EXPIRATION_DELTA': timedelta(days=7),  # Disabled - tokens don't expire
     'JWT_ALLOW_ANY_CLASSES': [
         'graphql_jwt.mutations.Verify',
         'graphql_jwt.mutations.Refresh',

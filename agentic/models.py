@@ -78,6 +78,11 @@ class Agent(DjangoNode, StructuredNode):
     # Version tracking for schema evolution and compatibility
     version = StringProperty(default='1.0')                    # Agent schema version for compatibility
     
+    # Matrix integration fields for chat functionality
+    matrix_user_id = StringProperty()                          # Matrix user ID for chat integration
+    access_token = StringProperty()                            # Matrix access token for API calls
+    pending_matrix_registration = BooleanProperty(default=False)  # Flag for pending Matrix registration
+    
     # Core relationships - define how agents connect to other entities
     assigned_communities = RelationshipTo('AgentCommunityAssignment', 'ASSIGNED_TO')  # Communities this agent is assigned to
     created_by = RelationshipTo('Users', 'CREATED_BY')         # User who created this agent (typically admin)

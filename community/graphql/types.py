@@ -2247,6 +2247,20 @@ class CommunityDetailsByUidType(ObjectType):
             sibling_community=CommunityDetailsByCategoryType.from_neomodel("siblingCommunity", sibling_communities),
             parent_community=CommunityDetailsByCategoryType.from_neomodel("parentCommunity", parent_communities)
         )
+
+
+class UserAdminCommunitiesResponseType(ObjectType):
+    """Paginated response type for user admin communities with total count"""
+    communities = graphene.List(CommunityType)
+    total = graphene.Int()
+
+    @classmethod
+    def create(cls, communities, total):
+        """Create a paginated response with communities list and total count"""
+        return cls(
+            communities=communities,
+            total=total
+        )
     
 
 

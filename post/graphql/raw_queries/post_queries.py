@@ -273,12 +273,18 @@ post_feed_query="""
                 THEN round(post.vibe_score + (engagement_score * 0.1), 1)
                 ELSE 2.0 
              END AS calculated_overall_score
-
+        // Apply optional cursor filter for pagination (first page passes NULLs)
+        WHERE (
+    $cursor_timestamp IS NULL 
+    OR post.created_at < toFloat($cursor_timestamp)
+    OR (post.created_at = toFloat($cursor_timestamp) AND post.uid > $cursor_post_uid)
+)
         RETURN post, user, profile, reactions, 
                {uid: conn.uid, connection_status: conn.connection_status, timestamp: toString(conn.timestamp)} AS connection,
                {uid: circle.uid, circle_type: circle.circle_type, sub_relation: circle.sub_relation} AS circle, 
                post.created_at AS created_at, share_count, calculated_overall_score
-        LIMIT 25
+        ORDER BY post.created_at DESC  // Add this line      
+        LIMIT toInteger($limit * 0.8)
 
         UNION ALL
         // Subquery 2: Fetch Community Post (FIXED - Removed non-existent profile relationship)
@@ -298,10 +304,17 @@ post_feed_query="""
                 THEN round(community_post.vibe_score + (engagement_score * 0.1), 1)
                 ELSE 2.0 
              END AS calculated_overall_score
+        // Apply optional cursor filter for pagination
+        WHERE (
+            $cursor_timestamp IS NULL 
+            OR community_post.created_at < toFloat($cursor_timestamp)
+            OR (community_post.created_at = toFloat($cursor_timestamp) AND community_post.uid > $cursor_post_uid)
+        )
         RETURN community_post AS post, community AS user, community AS profile, NULL AS reactions, 
                NULL AS connection, NULL AS circle, community_post.created_at AS created_at, 
                share_count, calculated_overall_score
-        LIMIT 10
+        ORDER BY community_post.created_at DESC       
+        LIMIT toInteger($limit * 0.4)
 
         UNION ALL
 // Subquery 3: Fetch ALL SubCommunity Posts (Direct, Child, and Sibling) - CORRECTED
@@ -355,13 +368,14 @@ WITH community_post, subcommunity, subcommunity_profile, share_count, comment_co
         THEN round(community_post.vibe_score + (engagement_score * 0.1), 1)
         ELSE 2.0
      END AS calculated_overall_score
+WHERE ($cursor_timestamp IS NULL OR community_post.created_at < toFloat($cursor_timestamp))
 RETURN community_post AS post, subcommunity AS user,
        CASE WHEN subcommunity_profile IS NOT NULL THEN subcommunity_profile ELSE subcommunity END AS profile,
        NULL AS reactions,
        NULL AS connection, NULL AS circle, community_post.created_at AS created_at,
        share_count, calculated_overall_score
 ORDER BY community_post.created_at DESC
-LIMIT 15
+LIMIT toInteger($limit * 0.4)
 
         UNION ALL
         // Subquery 4: Fetch recent posts from non-connected users (LOWER PRIORITY)
@@ -385,19 +399,18 @@ LIMIT 15
                 THEN round(post.vibe_score + (engagement_score * 0.1), 1)
                 ELSE 2.0 
              END AS calculated_overall_score
+        WHERE ($cursor_timestamp IS NULL OR post.created_at < toFloat($cursor_timestamp))
         RETURN post, user, profile, reactions, NULL AS connection, NULL AS circle, 
                post.created_at AS created_at, share_count, calculated_overall_score
         ORDER BY post.created_at DESC
-        LIMIT 15
+        LIMIT toInteger($limit * 0.6)
 
         }
-        RETURN post, user, profile, reactions, connection, circle, share_count, calculated_overall_score
+        RETURN post, user, profile, reactions, connection, circle, share_count, calculated_overall_score, created_at
         ORDER BY 
-            CASE WHEN connection IS NOT NULL THEN 1 
-                 WHEN labels(user)[0] IN ['Community', 'SubCommunity'] THEN 2
-                 ELSE 3 END,
-            created_at DESC
-        LIMIT 60;
+              created_at DESC,
+              CASE WHEN connection IS NOT NULL THEN 1 ELSE 2 END
+        LIMIT $limit;
 """
 
 get_top_vibes_meme_query="""
@@ -685,4 +698,124 @@ WITH comment, post, vibes_count, views_count, comments_count, shares_count, like
 ORDER BY comment.timestamp DESC
 
 RETURN comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count
+"""
+
+
+
+# File: post/graphql/raw_queries/post_queries.py
+# REPLACE the post_feed_query_cursor with this FIXED version:
+
+post_feed_query_cursor = """
+        CALL {
+        // Subquery 1: Fetch posts from connected users (PRIORITIZE THIS)
+        MATCH (me:Users {user_id: $log_in_user_node_id})-[:HAS_CONNECTION]->(conn:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(friend:Users)-[:HAS_POST]->(post:Post {is_deleted: false}),
+              (friend)-[:HAS_PROFILE]->(profile:Profile)
+        
+        // Apply cursor filter for pagination - FIXED SYNTAX
+        WHERE (
+            $cursor_timestamp IS NULL 
+            OR post.created_at < toFloat($cursor_timestamp)
+            OR (post.created_at = toFloat($cursor_timestamp) AND post.uid > $cursor_post_uid)
+        )
+        
+        OPTIONAL MATCH (conn)-[:HAS_CIRCLE]->(circle:Circle)
+        OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
+        OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
+        OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
+        
+        WITH post, friend as user, profile, collect(vibe) AS reactions, conn, circle,
+             COUNT(DISTINCT share) AS share_count,
+             COUNT(DISTINCT comment) AS comment_count,
+             COUNT(DISTINCT vibe) AS like_count
+        WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count,
+             (comment_count + like_count + share_count) AS engagement_score
+        WITH post, user, profile, reactions, conn, circle, share_count, comment_count, like_count, engagement_score,
+             CASE 
+                WHEN post.vibe_score IS NOT NULL 
+                THEN round(post.vibe_score + (engagement_score * 0.1), 1)
+                ELSE 2.0 
+             END AS calculated_overall_score
+        
+        RETURN post, user, profile, reactions, conn as connection, circle, post.created_at AS created_at, 
+               share_count, calculated_overall_score
+        ORDER BY post.created_at DESC, post.uid ASC
+        LIMIT toInteger($limit * 0.4)
+
+        UNION ALL
+        
+        // Subquery 2: Fetch posts from non-connected users
+        MATCH (post:Post {is_deleted: false})<-[:HAS_POST]-(user:Users)-[:HAS_PROFILE]->(profile:Profile)
+        WHERE user.user_id <> $log_in_user_node_id
+        AND NOT EXISTS {
+            MATCH (me:Users {user_id: $log_in_user_node_id})-[:HAS_CONNECTION]->(:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(user)
+        }
+        // Apply cursor filter - FIXED SYNTAX
+        AND (
+            $cursor_timestamp IS NULL 
+            OR post.created_at < toFloat($cursor_timestamp)
+            OR (post.created_at = toFloat($cursor_timestamp) AND post.uid > $cursor_post_uid)
+        )
+        
+        OPTIONAL MATCH (post)-[reaction:HAS_LIKE]->(vibe:Like)
+        OPTIONAL MATCH (post)-[:HAS_POST_SHARE]->(share:PostShare)
+        OPTIONAL MATCH (post)-[:HAS_COMMENT]->(comment:Comment)
+        
+        WITH post, user, profile, collect(vibe) AS reactions,
+             COUNT(DISTINCT share) AS share_count,
+             COUNT(DISTINCT comment) AS comment_count,
+             COUNT(DISTINCT vibe) AS like_count
+        WITH post, user, profile, reactions, share_count, comment_count, like_count,
+             (comment_count + like_count + share_count) AS engagement_score
+        WITH post, user, profile, reactions, share_count, comment_count, like_count, engagement_score,
+             CASE 
+                WHEN post.vibe_score IS NOT NULL 
+                THEN round(post.vibe_score + (engagement_score * 0.1), 1)
+                ELSE 2.0 
+             END AS calculated_overall_score
+        
+        RETURN post, user, profile, reactions, NULL AS connection, NULL AS circle, post.created_at AS created_at, 
+               share_count, calculated_overall_score
+        ORDER BY post.created_at DESC, post.uid ASC
+        LIMIT toInteger($limit * 0.5)
+
+        UNION ALL
+        
+        // Subquery 3: Fetch Community Posts
+        MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_COMMUNITY]->(community:Community)
+        WHERE (
+            $cursor_timestamp IS NULL 
+            OR community_post.created_at < toFloat($cursor_timestamp)
+            OR (community_post.created_at = toFloat($cursor_timestamp) AND community_post.uid > $cursor_post_uid)
+        )
+        
+        OPTIONAL MATCH (community_post)-[:HAS_POST_SHARE]->(share:PostShare)
+        OPTIONAL MATCH (community_post)-[:HAS_COMMENT]->(comment:Comment)
+        OPTIONAL MATCH (community_post)-[:HAS_LIKE]->(like:Like)
+        
+        WITH community_post, community,
+             COUNT(DISTINCT share) AS share_count,
+             COUNT(DISTINCT comment) AS comment_count,
+             COUNT(DISTINCT like) AS like_count
+        WITH community_post, community, share_count, comment_count, like_count,
+             (comment_count + like_count + share_count) AS engagement_score
+        WITH community_post, community, share_count, comment_count, like_count, engagement_score,
+             CASE 
+                WHEN community_post.vibe_score IS NOT NULL 
+                THEN round(community_post.vibe_score + (engagement_score * 0.1), 1)
+                ELSE 2.0 
+             END AS calculated_overall_score
+        
+        RETURN community_post AS post, community AS user, community AS profile, NULL AS reactions, 
+               NULL AS connection, NULL AS circle, community_post.created_at AS created_at, 
+               share_count, calculated_overall_score
+        ORDER BY community_post.created_at DESC, community_post.uid ASC
+        LIMIT toInteger($limit * 0.1)
+
+        }
+        
+        // Final ordering and limit
+        WITH post, user, profile, reactions, connection, circle, created_at, share_count, calculated_overall_score
+        ORDER BY created_at DESC, post.uid ASC
+        LIMIT $limit
+        RETURN post, user, profile, reactions, connection, circle, share_count, calculated_overall_score;
 """

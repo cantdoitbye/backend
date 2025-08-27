@@ -1422,6 +1422,155 @@ class Query(graphene.ObjectType):
         """
         community_affiliations = CommunityAffiliation.nodes.all()
         return [CommunityAffiliationType.from_neomodel(affiliation) for affiliation in community_affiliations]
+
+    # New API: Get user admin communities with search and pagination
+    user_admin_communities = graphene.Field(
+        UserAdminCommunitiesResponseType,
+        first=graphene.Int(description="Number of communities to return (limit)"),
+        skip=graphene.Int(description="Number of communities to skip (offset)"),
+        search=graphene.String(description="Search term to filter communities by name or description")
+    )
+
+    @handle_graphql_community_errors
+    @login_required
+    def resolve_user_admin_communities(self, info, first=None, skip=None, search=None):
+        """Retrieve communities where the authenticated user has admin membership status.
+        
+        Fetches all communities where the current user is an admin member,
+        with optional search and pagination functionality.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            first (int, optional): Number of communities to return (limit)
+            skip (int, optional): Number of communities to skip (offset)
+            search (str, optional): Search term to filter communities by name or description
+            
+        Returns:
+            UserAdminCommunitiesResponseType: Paginated response with communities list and total count
+            
+        Business Logic:
+            - Only returns communities where user has is_admin=True in membership
+            - Supports case-insensitive search across community name and description
+            - Implements pagination with first (limit) and skip (offset)
+            - Results are ordered by community creation date (newest first)
+        """
+        from neomodel import db
+        from auth_manager.Utils import generate_presigned_url
+        
+        payload = info.context.payload
+        user_id = str(payload.get('user_id'))  # Convert to string for Cypher query
+        
+        # Base query for filtering
+        base_query = """
+        MATCH (u:Users {user_id: $user_id})<-[:MEMBER]-(m:Membership {is_admin: true})-[:MEMBEROF]->(c:Community)
+        """
+        
+        # Add search filter if provided
+        search_filter = """
+        WHERE toLower(c.name) CONTAINS toLower($search) OR toLower(c.description) CONTAINS toLower($search)
+        """ if search else ""
+        
+        # Query for total count
+        count_query = base_query + search_filter + """
+        RETURN count(c) as total
+        """
+        
+        # Query for paginated results
+        data_query = base_query + search_filter + """
+        WITH c, count{(c)<-[:MEMBEROF]-(:Membership)} as member_count,
+             EXISTS((c)<-[:MEMBEROF]-(:Membership {is_leader: true})) as has_leader
+        RETURN c, member_count, has_leader
+        ORDER BY c.created_date DESC
+        """
+        
+        # Add pagination to data query
+        if skip:
+            data_query += f" SKIP {skip}"
+        if first:
+            data_query += f" LIMIT {first}"
+        
+        # Prepare parameters
+        params = {'user_id': user_id}
+        if search:
+            params['search'] = search
+        
+        # Execute count query
+        count_results, _ = db.cypher_query(count_query, params)
+        total_count = count_results[0][0] if count_results else 0
+        
+        # Execute data query
+        data_results, _ = db.cypher_query(data_query, params)
+        
+        # Convert results to CommunityType objects efficiently
+        admin_communities = []
+        for result in data_results:
+            community_data = result[0]
+            member_count = result[1]
+            has_leader = result[2]
+            
+            # Create CommunityType directly without expensive operations
+            community_type = Query._create_lightweight_community_type(
+                community_data, member_count, has_leader
+            )
+            admin_communities.append(community_type)
+        
+        # Return paginated response with total count
+        return UserAdminCommunitiesResponseType.create(
+            communities=admin_communities,
+            total=total_count
+        )
+    
+    @staticmethod
+    def _create_lightweight_community_type(community_data, member_count, has_leader):
+        """Create a lightweight CommunityType object without expensive operations."""
+        from auth_manager.Utils import generate_presigned_url
+        from datetime import datetime
+        
+        # Generate file URLs only if needed
+        group_icon_url = None
+        if community_data.get('group_icon_id'):
+            try:
+                file_info = generate_presigned_url.generate_file_info(community_data['group_icon_id'])
+                if file_info and file_info.get('url'):
+                    group_icon_url = FileDetailType(**file_info)
+            except Exception:
+                pass
+        
+        cover_image_url = None
+        if community_data.get('cover_image_id'):
+            try:
+                file_info = generate_presigned_url.generate_file_info(community_data['cover_image_id'])
+                if file_info and file_info.get('url'):
+                    cover_image_url = FileDetailType(**file_info)
+            except Exception:
+                pass
+        
+        return CommunityType(
+            uid=community_data.get('uid'),
+            name=community_data.get('name'),
+            description=community_data.get('description'),
+            community_type=community_data.get('community_type'),
+            community_circle=community_data.get('community_circle'),
+            room_id=community_data.get('room_id'),
+            created_date=datetime.fromtimestamp(community_data.get('created_date')) if community_data.get('created_date') else None,
+            updated_date=datetime.fromtimestamp(community_data.get('updated_date')) if community_data.get('updated_date') else None,
+            number_of_members=member_count,
+            group_invite_link=community_data.get('group_invite_link'),
+            group_icon_id=community_data.get('group_icon_id'),
+            group_icon_url=group_icon_url,
+            cover_image_id=community_data.get('cover_image_id'),
+            cover_image_url=cover_image_url,
+            category=community_data.get('category'),
+            generated_community=community_data.get('generated_community'),
+            has_leader_agent=has_leader,
+            # Skip expensive operations for admin list view
+            created_by=None,
+            communitymessage=[],
+            community_review=[],
+            members=[],
+            leader_agent=None,
+            agent_assignments=[]
+        )
     
     
     all_community_achievements = graphene.List(CommunityAchievementType)

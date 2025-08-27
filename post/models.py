@@ -142,9 +142,10 @@ class Comment(DjangoNode, StructuredNode):
     content = StringProperty()                         # The actual comment text
     timestamp = DateTimeProperty(default_now=True)    # When comment was posted
     is_deleted = BooleanProperty(default=False)       # Soft delete flag
-    
+    comment_file_id = ArrayProperty(base_property=StringProperty())  # Array of file IDs for media
+
     # Relationships
-    post = RelationshipTo('Post','HAS_POST')          # Post this comment belongs to
+    post = RelationshipTo('StructuredNode','HAS_POST')
     user = RelationshipTo('Users','HAS_USER')         # User who wrote the comment
     #Self-referencing relationships for nested replies
     parent_comment = RelationshipTo('Comment', 'REPLIED_TO')  # Parent comment if this is a reply

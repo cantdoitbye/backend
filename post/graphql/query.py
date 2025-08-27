@@ -24,6 +24,8 @@ from post.utils.feed_algorithm import apply_feed_algorithm
 from datetime import datetime
 import time
 import logging
+import base64
+
 
 logger = logging.getLogger(__name__)
 
@@ -744,18 +746,17 @@ class Query(graphene.ObjectType):
     #             return []  # No feed if a circle type is selected but no connections
 
     #     return result_feed
-    my_feed_test = graphene.List(FeedTestType, circle_type=CircleTypeEnum())
+    my_feed_test = graphene.List(FeedTestType, circle_type=CircleTypeEnum(), first=graphene.Int(default_value=20), after=graphene.String())
+
 
     @handle_graphql_post_errors
     @login_required
     @monitor_feed_performance
-    def resolve_my_feed_test(self, info, circle_type=None):
+    def resolve_my_feed_test(self, info, circle_type=None, first=20, after=None):
         """
-        Enhanced feed resolver with comprehensive algorithm integration.
-
-        This resolver implements the full feed algorithm as specified in the
-        documentation, providing personalized content ranking based on multiple factors.
+        Working pagination that provides all required parameters to existing query.
         """
+        import base64
         start_time = time.time()
 
         try:
@@ -763,44 +764,77 @@ class Query(graphene.ObjectType):
             payload = info.context.payload
             user_id = payload.get('user_id')
 
-            logger.info(f"Generating personalized feed for user {user_id}")
+            # Validate pagination parameters
+            first = min(max(1, first), 50)
+            logger.info(f"Generating feed for user {user_id}: first={first}, after={after}")
+
+            # Parse cursor for timestamp-based pagination
+            cursor_timestamp = None
+            cursor_post_uid = None
+            if after:
+                try:
+                    raw = str(after).strip()
+                    if 'cursor' in raw:
+                        import re
+                        m = re.search(r'"?cursor"?\s*:\s*"([A-Za-z0-9_\-+/=]+)"', raw)
+                        if m:
+                            raw = m.group(1)
+                    if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
+                        raw = raw[1:-1]
+                    pad = (-len(raw)) % 4
+                    if pad:
+                        raw = raw + ('=' * pad)
+                    decoded_cursor = base64.b64decode(raw.encode()).decode()
+                    cursor_parts = decoded_cursor.split('_', 1)
+                    if len(cursor_parts) == 2:
+                        cursor_timestamp = cursor_parts[0]
+                        cursor_post_uid = cursor_parts[1]
+                        logger.info(f"Using cursor: timestamp={cursor_timestamp}, post_uid={cursor_post_uid}")
+                    else:
+                        logger.warning(f"Invalid cursor format after decode: {decoded_cursor}")
+                except Exception as cursor_error:
+                    logger.warning(f"Cursor parsing failed: {cursor_error}")
+                    cursor_timestamp = None
+                    cursor_post_uid = None
 
             # Validate algorithm requirements
             validation = validate_feed_algorithm_requirements(user_id)
             if not validation.get('algorithm_ready'):
-                logger.warning(
-                    f"Algorithm not ready for user {user_id}: {validation.get('error')}")
+                logger.warning(f"Algorithm not ready for user {user_id}")
                 fallback_feed = get_appropriate_fallback_feed(
                     validation.get('user_category', 'unknown'),
                     user_id
                 )
-                return Query.process_fallback_feed(fallback_feed)
+                if fallback_feed:
+                    return fallback_feed[:first]  # Simple slice for fallback
+                return []
 
-            # Prepare database query parameters
-            params = {"log_in_user_node_id": str(user_id)}
+            # Provide ALL required parameters to your existing query
+            params = {
+                "log_in_user_node_id": str(user_id),
+                "cursor_timestamp": cursor_timestamp,  # Can be None for first page
+                "cursor_post_uid": cursor_post_uid,    # Can be None for first page
+                "limit": first * 2  # Get more posts to account for algorithm filtering
+            }
 
-            # Execute the base content query
-            logger.debug("Executing base content query...")
+            # Execute your existing query with all required parameters
+            logger.debug("Executing post_feed_query with all parameters...")
+            logger.info(f"Debug: About to query with cursor_timestamp={cursor_timestamp}")
+            logger.info(f"Debug: Will show posts older than: {cursor_timestamp}")
+
             results, _ = db.cypher_query(post_queries.post_feed_query, params)
 
             if not results:
                 logger.warning(f"No content found for user {user_id}")
-                # Use fallback for empty results
-                fallback_feed = get_appropriate_fallback_feed(
-                    validation.get('user_category', 'regular'),
-                    user_id
-                )
-                return Query.process_fallback_feed(fallback_feed)
+                return []
 
-            logger.info(f"Retrieved {len(results)} raw content items")
+            logger.info(f"Retrieved {len(results)} items from query")
 
-            # Initialize reaction and vibe systems
+            # Initialize utilities (your existing code)
             Query.initialize_feed_utilities(results)
 
-            # Apply the comprehensive feed algorithm
-            logger.info("Applying feed algorithm...")
+            # Apply your existing algorithm
             algorithm_start = time.time()
-
             try:
                 algorithmically_sorted_results = apply_feed_algorithm(
                     user_id=user_id,
@@ -808,46 +842,163 @@ class Query(graphene.ObjectType):
                     circle_type=circle_type
                 )
                 algorithm_time = time.time() - algorithm_start
-                logger.info(
-                    f"Feed algorithm completed in {algorithm_time:.3f} seconds")
-
+                logger.info(f"Algorithm completed in {algorithm_time:.3f}s")
             except Exception as algo_error:
-                logger.error(f"Feed algorithm failed: {algo_error}")
-                logger.info("Falling back to original content ordering")
+                logger.error(f"Algorithm failed: {algo_error}")
                 algorithmically_sorted_results = results
                 algorithm_time = 0.0
 
-            # Process results and build feed response
-            result_feed = Query.build_feed_response(
-                algorithmically_sorted_results, circle_type)
+            # Use your existing build_feed_response method
+            result_feed = Query.build_feed_response(algorithmically_sorted_results, circle_type)
 
+            # Limit to requested amount
+            final_feed = result_feed[:first]
+
+            # Add cursors using timestamp + uid format (matching your query expectations)
+            for item in final_feed:
+                if hasattr(item, 'uid'):
+                    try:
+                        # Find the real Unix timestamp from the original results
+                        real_unix_timestamp = None
+                        for result in algorithmically_sorted_results:
+                            post_data = result[0] if result[0] else {}
+                            if post_data.get('uid') == item.uid:
+                                real_unix_timestamp = post_data.get('created_at')
+                                break
+                        # Use the Unix timestamp directly in cursor
+                        if real_unix_timestamp:
+                            cursor_data = f"{real_unix_timestamp}_{item.uid}"
+                        else:
+                            cursor_data = f"1000000000_{item.uid}"  # Very old Unix timestamp
+                        item.cursor = base64.b64encode(cursor_data.encode()).decode()
+                    except Exception as cursor_error:
+                        logger.warning(f"Cursor generation failed for {item.uid}: {cursor_error}")
+                        item.cursor = base64.b64encode(f"1000000000_{item.uid}".encode()).decode()
             # Validate feed quality
-            quality_metrics = validate_feed_quality(result_feed)
-            if quality_metrics['quality_score'] < 0.3:
-                logger.warning(
-                    f"Low quality feed detected for user {user_id}: {quality_metrics}")
+            if result_feed:
+                quality_metrics = validate_feed_quality(result_feed)
+                if quality_metrics['quality_score'] < 0.3:
+                    logger.warning(f"Low quality feed detected for user {user_id}")
 
-            # Log performance metrics
+            # Log metrics
             total_time = time.time() - start_time
-            log_feed_metrics(user_id, len(results), len(
-                result_feed), algorithm_time, total_time)
+            log_feed_metrics(user_id, len(results), len(final_feed), algorithm_time, total_time)
 
-            logger.info(
-                f"Feed generation completed: {len(result_feed)} items in {total_time:.3f} seconds")
-
-            return result_feed
+            # Debug: check what we got from the query
+            logger.info(f"Debug: Query returned {len(results)} results")
+            if results:
+                first_post = results[0][0] if results[0] and results[0][0] else {}
+                logger.info(f"Debug: First post timestamp: {first_post.get('created_at')}, uid: {first_post.get('uid')}")
+                logger.info(f"Debug: Cursor timestamp: {cursor_timestamp}, cursor_post_uid: {cursor_post_uid}")
+                logger.info(f"Feed completed: {len(final_feed)} items in {total_time:.3f}s")
+            return final_feed
 
         except Exception as e:
-            logger.error(f"Critical error in my_feed_test resolver: {e}")
-            # Emergency fallback
+            logger.error(f"Error in my_feed_test: {e}")
             try:
-                emergency_feed = get_appropriate_fallback_feed(
-                    'unknown', user_id)
-                return Query.process_emergency_fallback_feed(emergency_feed, user_id)
-            except:
-                logger.error(
-                    f"Emergency fallback also failed for user {user_id}")
+                # Emergency fallback
+                emergency_feed = get_appropriate_fallback_feed('unknown', user_id, limit=first)
+                return emergency_feed[:first] if emergency_feed else []
+            except Exception:
                 return []
+        
+
+    @staticmethod
+    def simple_sort_posts(results):
+        """
+        Simple sorting without complex algorithm - just by engagement and time.
+        """
+        # Sort by created_at (most recent first) and engagement score
+        def sort_key(post):
+            try:
+                # Get created_at from post data
+                post_data = post[0] if post[0] else {}
+                created_at = post_data.get('created_at', 0)
+
+                # Get engagement metrics
+                share_count = post[6] if len(post) > 6 and post[6] is not None else 0
+                overall_score = post[7] if len(post) > 7 and post[7] is not None else 2.0
+
+                # Simple engagement calculation
+                engagement = overall_score + (share_count * 0.1)
+
+                # Return tuple for sorting: (engagement_desc, time_desc)
+                return (-engagement, -created_at)
+            except Exception:
+                return (0, 0)
+
+        try:
+            sorted_results = sorted(results, key=sort_key)
+            logger.info(f"Simple sort: {len(results)} -> {len(sorted_results)} items")
+            return sorted_results
+        except Exception as e:
+            logger.error(f"Simple sorting failed: {e}")
+            return results
+
+    @staticmethod
+    def build_feed_response_no_diversity(sorted_results, circle_type):
+        """
+        Build feed response WITHOUT diversity filtering to keep more posts.
+        """
+        result_feed = []
+        user_has_connection = False
+
+        for post in sorted_results:
+            try:
+                # Extract post components (your existing logic)
+                post_node = post[0] if post[0] else None
+                user_node = post[1] if len(post) > 1 and post[1] else None
+                profile_node = post[2] if len(post) > 2 and post[2] else None
+                likes = post[3] if len(post) > 3 and post[3] else None
+                connection = post[4] if len(post) > 4 and post[4] else None
+                circle = post[5] if len(post) > 5 and post[5] else None
+                share_count = post[6] if len(post) > 6 and post[6] is not None else 0
+                calculated_overall_score = post[7] if len(post) > 7 and post[7] is not None else 2.0
+
+                if connection is not None:
+                    user_has_connection = True
+
+                # Circle type filtering (your existing logic)
+                original_circle_type = None
+                if circle:
+                    if isinstance(circle, dict):
+                        original_circle_type = circle.get('circle_type')
+                    else:
+                        original_circle_type = getattr(circle, 'circle_type', None)
+
+                # Apply circle filter - simplified logic
+                should_include_post = True
+                if circle_type is not None:
+                    # Only apply filter if circle_type is specified
+                    if connection is None or not circle:
+                        should_include_post = False
+                    elif original_circle_type != circle_type.value:
+                        should_include_post = False
+
+                if should_include_post:
+                    feed_item = FeedTestType.from_neomodel(
+                        post_data=post_node,
+                        reactions_nodes=likes,
+                        connection_node=connection,
+                        circle_node=circle,
+                        user_node=user_node,
+                        profile=profile_node,
+                        query_share_count=share_count,
+                        query_overall_score=calculated_overall_score
+                    )
+                    result_feed.append(feed_item)
+
+            except Exception as item_error:
+                logger.error(f"Error processing feed item: {item_error}")
+                continue
+
+        # Handle edge case for circle filter
+        if not user_has_connection and circle_type is not None:
+            logger.info(f"No connections found with circle filter {circle_type}")
+            return []
+
+        logger.info(f"Feed response built: {len(result_feed)} items (no diversity filter)")
+        return result_feed
 
     @staticmethod
     def initialize_feed_utilities(results):
@@ -869,7 +1020,6 @@ class Query(graphene.ObjectType):
     @staticmethod
     def build_feed_response(sorted_results, circle_type):
         """Build the final feed response from sorted results."""
-        sorted_results = sorted_results[:20]
 
         result_feed = []
         user_has_connection = False

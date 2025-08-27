@@ -121,4 +121,30 @@ class VibeOptionType(ObjectType):
     emoji = graphene.String()
     color = graphene.String()  # For UI theming
 
+class MatrixMessageType(ObjectType):
+    """Type for Matrix room messages with agent flagging"""
+    event_id = graphene.String()
+    sender = graphene.String()
+    timestamp = graphene.Float()
+    content = graphene.String()
+    formatted_content = graphene.String()
+    message_type = graphene.String()
+    is_agent = graphene.Boolean()
+    raw_event = graphene.JSONString()
+
+class MatrixMessagesResponse(ObjectType):
+    """Response type for paginated Matrix messages"""
+    messages = graphene.List(MatrixMessageType)
+    next_token = graphene.String()
+    prev_token = graphene.String()
+    total_messages = graphene.Int()
+    success = graphene.Boolean()
+    message = graphene.String()
+
+class SendMatrixMessageResponse(ObjectType):
+    """Response type for sending Matrix messages"""
+    event_id = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+
 

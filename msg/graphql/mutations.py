@@ -1,19 +1,32 @@
+import asyncio
 import graphene
 from graphene import Mutation
 from graphql import GraphQLError
-import asyncio
 
 from .raw_query.block_exist import relationship_exists
 from .types import *
 from auth_manager.models import Users
 from msg.models import *
 from msg.util.matrix_vibe_sender import send_vibe_reaction_to_matrix
+from msg.util.matrix_message_utils import (
+    get_community_matrix_messages,
+    send_matrix_message,
+    get_matrix_credentials_for_community,
+    flag_agent_messages,
+    MatrixMessageError,
+    delete_matrix_message,
+    kick_user_from_room,
+    ban_user_from_room,
+    unban_user_from_room
+)
+from agentic.models import Agent
 from vibe_manager.utils import VibeUtils
 from vibe_manager.models import IndividualVibe
 from .inputs import *
 from .messages import MsgMessages
 from graphql_jwt.decorators import login_required,superuser_required
 from msg.services.notification_service import NotificationService
+from community.models import Community, Membership
 
 class CreateConversation(Mutation):
     conversation = graphene.Field(ConversationType)
@@ -551,6 +564,653 @@ class SendVibeToMessage(graphene.Mutation):
             )
 
 
+class GetMatrixMessages(graphene.Mutation):
+    """
+    Fetches paginated messages from a community's Matrix room with agent flagging.
+    
+    This mutation retrieves messages from the Matrix room associated with a community,
+    automatically flags messages sent by agents, and supports pagination for efficient
+    message loading.
+    
+    Args:
+        input (GetMatrixMessagesInput): Contains:
+            - community_uid: UID of the community
+            - limit: Number of messages to retrieve (default: 20)
+            - from_token: Pagination token for older messages
+    
+    Returns:
+        MatrixMessagesResponse: Contains messages, pagination tokens, and status
+    
+    Note:
+        - Uses community creator's Matrix credentials for access
+        - Automatically flags messages from assigned agents
+        - Supports pagination for large message histories
+    """
+    
+    class Arguments:
+        input = GetMatrixMessagesInput(required=True)
+    
+    Output = MatrixMessagesResponse
+    
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            
+            community_uid = input.community_uid
+            limit = input.limit or 20
+            from_token = input.from_token
+            
+            # Get the community and verify it exists
+            try:
+                community = Community.nodes.get(uid=community_uid)
+            except Community.DoesNotExist:
+                return MatrixMessagesResponse(
+                    messages=[],
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if community has a Matrix room
+            if not community.room_id:
+                return MatrixMessagesResponse(
+                    messages=[],
+                    success=False,
+                    message="Community does not have a Matrix room"
+                )
+            
+            # Get Matrix credentials for the community
+            credentials = get_matrix_credentials_for_community(community_uid)
+            if not credentials:
+                return MatrixMessagesResponse(
+                    messages=[],
+                    success=False,
+                    message="No Matrix credentials available for this community"
+                )
+            
+            # Fetch messages from Matrix
+            try:
+                result = asyncio.run(get_community_matrix_messages(
+                    access_token=credentials['access_token'],
+                    user_id=credentials['user_id'],
+                    room_id=community.room_id,
+                    limit=limit,
+                    from_token=from_token
+                ))
+                
+                # Flag agent messages
+                flagged_messages = flag_agent_messages(result['messages'], community_uid)
+                
+                # Convert to GraphQL types
+                matrix_messages = [
+                    MatrixMessageType(
+                        event_id=msg['event_id'],
+                        sender=msg['sender'],
+                        timestamp=msg['timestamp'],
+                        content=msg['content'],
+                        formatted_content=msg.get('formatted_content'),
+                        message_type=msg['message_type'],
+                        is_agent=msg['is_agent'],
+                        raw_event=msg['raw_event']
+                    ) for msg in flagged_messages
+                ]
+                
+                return MatrixMessagesResponse(
+                    messages=matrix_messages,
+                    next_token=result['next_token'],
+                    prev_token=result['prev_token'],
+                    total_messages=result['total_messages'],
+                    success=True,
+                    message="Messages retrieved successfully"
+                )
+                
+            except MatrixMessageError as e:
+                return MatrixMessagesResponse(
+                    messages=[],
+                    success=False,
+                    message=f"Matrix error: {str(e)}"
+                )
+                
+        except Exception as e:
+            return MatrixMessagesResponse(
+                messages=[],
+                success=False,
+                message=f"Error retrieving messages: {str(e)}"
+            )
+
+
+class SendMatrixMessage(graphene.Mutation):
+    """
+    Sends a message to a community's Matrix room.
+    
+    This mutation allows authenticated users to send messages to the Matrix room
+    associated with a community. It uses the community creator's Matrix credentials
+    for sending the message.
+    
+    Args:
+        input (SendMatrixMessageInput): Contains:
+            - community_uid: UID of the community
+            - message: Message content to send
+            - message_type: Type of message (default: "m.text")
+    
+    Returns:
+        SendMatrixMessageResponse: Contains event ID and status
+    
+    Note:
+        - Requires user authentication
+        - Uses community creator's Matrix credentials
+        - Returns Matrix event ID for the sent message
+    """
+    
+    class Arguments:
+        input = SendMatrixMessageInput(required=True)
+    
+    Output = SendMatrixMessageResponse
+    
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            
+            community_uid = input.community_uid
+            message = input.message
+            message_type = input.message_type or "m.text"
+            
+            # Get the community and verify it exists
+            try:
+                community = Community.nodes.get(uid=community_uid)
+            except Community.DoesNotExist:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if community has a Matrix room
+            if not community.room_id:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Community does not have a Matrix room"
+                )
+            
+            # Get Matrix credentials for the community
+            credentials = get_matrix_credentials_for_community(community_uid)
+            if not credentials:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="No Matrix credentials available for this community"
+                )
+            
+            # Send message to Matrix using agent's credentials
+            try:
+                event_id = asyncio.run(send_matrix_message(
+                    access_token=agent.access_token,
+                    user_id=agent.matrix_user_id,
+                    room_id=community.room_id,
+                    message=message,
+                    message_type=message_type
+                ))
+                
+                return SendMatrixMessageResponse(
+                    event_id=event_id,
+                    success=True,
+                    message="Message sent successfully"
+                )
+                
+            except MatrixMessageError as e:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message=f"Matrix error: {str(e)}"
+                )
+                
+        except Exception as e:
+            return SendMatrixMessageResponse(
+                success=False,
+                message=f"Error sending message: {str(e)}"
+            )
+
+
+class SendMatrixMessageByAgent(graphene.Mutation):
+    """
+    Sends a message to a community's Matrix room using agent ID and community ID.
+    
+    This mutation allows agents to send messages to the Matrix room
+    associated with a community using agent and community identifiers.
+    
+    Args:
+        input (SendMatrixMessageByAgentInput): Contains:
+            - agent_id: ID of the agent sending the message
+            - community_id: ID of the community
+            - message: Message content to send
+            - message_type: Type of message (default: "m.text")
+    
+    Returns:
+        SendMatrixMessageResponse: Contains event ID and status
+    
+    Note:
+        - Does not require user authentication (agent-based)
+        - Uses agent's own Matrix credentials
+        - Returns Matrix event ID for the sent message
+    """
+    
+    class Arguments:
+        input = SendMatrixMessageByAgentInput(required=True)
+    
+    Output = SendMatrixMessageResponse
+    
+    def mutate(self, info, input):
+        try:
+            agent_id = input.agent_uid
+            community_id = input.community_id
+            message = input.content
+            message_type = input.message_type or "m.text"
+            
+            # Get the agent and verify it exists
+            try:
+                agent = Agent.nodes.get(uid=agent_id)
+            except Agent.DoesNotExist:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Agent not found"
+                )
+            
+            # Check if agent has Matrix credentials
+            if not agent.matrix_user_id or not agent.access_token:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Agent does not have Matrix credentials"
+                )
+            
+            # Get the community and verify it exists
+            try:
+                community = Community.nodes.get(uid=community_id)
+            except Community.DoesNotExist:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if community has a Matrix room
+            if not community.room_id:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message="Community does not have a Matrix room"
+                )
+            
+            # Send message to Matrix
+            try:
+                event_id = asyncio.run(send_matrix_message(
+                    access_token=agent.access_token,
+                    user_id=agent.matrix_user_id,
+                    room_id=community.room_id,
+                    message=message,
+                    message_type=message_type
+                ))
+                
+                return SendMatrixMessageResponse(
+                    event_id=event_id,
+                    success=True,
+                    message=f"Message sent successfully by agent {agent_id}"
+                )
+                
+            except MatrixMessageError as e:
+                return SendMatrixMessageResponse(
+                    success=False,
+                    message=f"Matrix error: {str(e)}"
+                )
+                
+        except Exception as e:
+            return SendMatrixMessageResponse(
+                success=False,
+                message=f"Error sending message: {str(e)}"
+            )
+
+
+class DeleteMatrixMessageByAgent(graphene.Mutation):
+    class Arguments:
+        input = DeleteMatrixMessageByAgentInput(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, input):
+        try:
+            # Get agent by UID
+            try:
+                agent = Agent.nodes.get(uid=input.agent_uid)
+            except Agent.DoesNotExist:
+                return DeleteMatrixMessageByAgent(
+                    success=False,
+                    message="Agent not found"
+                )
+            
+            if not hasattr(agent, 'access_token') or not agent.access_token:
+                return DeleteMatrixMessageByAgent(
+                    success=False,
+                    message="Agent does not have Matrix credentials"
+                )
+
+            # Get community and validate agent membership
+            try:
+                community = Community.nodes.get(uid=input.community_id)
+            except Community.DoesNotExist:
+                return DeleteMatrixMessageByAgent(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if agent is assigned to community
+            try:
+                from agentic.models import AgentCommunityAssignment
+                # Find assignment by checking all assignments and matching connected nodes
+                assignment = None
+                for assign in AgentCommunityAssignment.nodes.filter(status='ACTIVE'):
+                    assign_agent = assign.agent.single()
+                    assign_community = assign.community.single()
+                    if (assign_agent and assign_agent.uid == agent.uid and 
+                        assign_community and assign_community.uid == community.uid):
+                        assignment = assign
+                        break
+                is_assigned = assignment is not None
+            except Exception:
+                is_assigned = False
+            
+            if not is_assigned:
+                return DeleteMatrixMessageByAgent(
+                    success=False,
+                    message="Agent is not assigned to this community"
+                )
+
+            # Delete the message
+            asyncio.run(delete_matrix_message(
+                access_token=agent.access_token,
+                user_id=agent.matrix_user_id,
+                room_id=community.room_id,
+                event_id=input.event_id,
+                reason=input.reason
+            ))
+
+            return DeleteMatrixMessageByAgent(
+                success=True,
+                message="Message deleted successfully"
+            )
+
+        except Agent.DoesNotExist:
+            return DeleteMatrixMessageByAgent(
+                success=False,
+                message="Agent not found"
+            )
+        except Community.DoesNotExist:
+            return DeleteMatrixMessageByAgent(
+                success=False,
+                message="Community not found"
+            )
+        except Exception as e:
+            return DeleteMatrixMessageByAgent(
+                success=False,
+                message=f"Error deleting message: {str(e)}"
+            )
+
+
+class KickUserByAgent(graphene.Mutation):
+    class Arguments:
+        input = KickUserByAgentInput(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, input):
+        try:
+            # Get agent by UID
+            try:
+                agent = Agent.nodes.get(uid=input.agent_uid)
+            except Agent.DoesNotExist:
+                return KickUserByAgent(
+                    success=False,
+                    message="Agent not found"
+                )
+            
+            if not hasattr(agent, 'access_token') or not agent.access_token:
+                return KickUserByAgent(
+                    success=False,
+                    message="Agent does not have Matrix credentials"
+                )
+
+            # Get community and validate agent membership
+            try:
+                community = Community.nodes.get(uid=input.community_id)
+            except Community.DoesNotExist:
+                return KickUserByAgent(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if agent is assigned to community
+            try:
+                from agentic.models import AgentCommunityAssignment
+                # Find assignment by checking all assignments and matching connected nodes
+                assignment = None
+                for assign in AgentCommunityAssignment.nodes.filter(status='ACTIVE'):
+                    assign_agent = assign.agent.single()
+                    assign_community = assign.community.single()
+                    if (assign_agent and assign_agent.uid == agent.uid and 
+                        assign_community and assign_community.uid == community.uid):
+                        assignment = assign
+                        break
+                is_assigned = assignment is not None
+            except Exception:
+                is_assigned = False
+            
+            if not is_assigned:
+                return KickUserByAgent(
+                    success=False,
+                    message="Agent is not assigned to this community"
+                )
+
+            # Kick the user
+            asyncio.run(kick_user_from_room(
+                access_token=agent.access_token,
+                user_id=agent.matrix_user_id,
+                room_id=community.room_id,
+                target_user_id=input.target_user_id,
+                reason=input.reason
+            ))
+
+            return KickUserByAgent(
+                success=True,
+                message="User kicked successfully"
+            )
+
+        except Agent.DoesNotExist:
+            return KickUserByAgent(
+                success=False,
+                message="Agent not found"
+            )
+        except Community.DoesNotExist:
+            return KickUserByAgent(
+                success=False,
+                message="Community not found"
+            )
+        except Exception as e:
+            return KickUserByAgent(
+                success=False,
+                message=f"Error kicking user: {str(e)}"
+            )
+
+
+class BanUserByAgent(graphene.Mutation):
+    class Arguments:
+        input = BanUserByAgentInput(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, input):
+        try:
+            # Get agent by UID
+            try:
+                agent = Agent.nodes.get(uid=input.agent_uid)
+            except Agent.DoesNotExist:
+                return BanUserByAgent(
+                    success=False,
+                    message="Agent not found"
+                )
+            
+            if not hasattr(agent, 'access_token') or not agent.access_token:
+                return BanUserByAgent(
+                    success=False,
+                    message="Agent does not have Matrix credentials"
+                )
+
+            # Get community and validate agent membership
+            try:
+                community = Community.nodes.get(uid=input.community_id)
+            except Community.DoesNotExist:
+                return BanUserByAgent(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if agent is assigned to community
+            try:
+                from agentic.models import AgentCommunityAssignment
+                # Find assignment by checking all assignments and matching connected nodes
+                assignment = None
+                for assign in AgentCommunityAssignment.nodes.filter(status='ACTIVE'):
+                    assign_agent = assign.agent.single()
+                    assign_community = assign.community.single()
+                    if (assign_agent and assign_agent.uid == agent.uid and 
+                        assign_community and assign_community.uid == community.uid):
+                        assignment = assign
+                        break
+                is_assigned = assignment is not None
+            except Exception:
+                is_assigned = False
+            
+            if not is_assigned:
+                return BanUserByAgent(
+                    success=False,
+                    message="Agent is not assigned to this community"
+                )
+
+            # Ban the user
+            asyncio.run(ban_user_from_room(
+                access_token=agent.access_token,
+                user_id=agent.matrix_user_id,
+                room_id=community.room_id,
+                target_user_id=input.target_user_id,
+                reason=input.reason
+            ))
+
+            return BanUserByAgent(
+                success=True,
+                message="User banned successfully"
+            )
+
+        except Agent.DoesNotExist:
+            return BanUserByAgent(
+                success=False,
+                message="Agent not found"
+            )
+        except Community.DoesNotExist:
+            return BanUserByAgent(
+                success=False,
+                message="Community not found"
+            )
+        except Exception as e:
+            return BanUserByAgent(
+                success=False,
+                message=f"Error banning user: {str(e)}"
+            )
+
+
+class UnbanUserByAgent(graphene.Mutation):
+    class Arguments:
+        input = UnbanUserByAgentInput(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, input):
+        try:
+            # Get agent by UID
+            try:
+                agent = Agent.nodes.get(uid=input.agent_uid)
+            except Agent.DoesNotExist:
+                return UnbanUserByAgent(
+                    success=False,
+                    message="Agent not found"
+                )
+            
+            if not hasattr(agent, 'access_token') or not agent.access_token:
+                return UnbanUserByAgent(
+                    success=False,
+                    message="Agent does not have Matrix credentials"
+                )
+
+            # Get community and validate agent membership
+            try:
+                community = Community.nodes.get(uid=input.community_id)
+            except Community.DoesNotExist:
+                return UnbanUserByAgent(
+                    success=False,
+                    message="Community not found"
+                )
+            
+            # Check if agent is assigned to community
+            try:
+                from agentic.models import AgentCommunityAssignment
+                # Find assignment by checking all assignments and matching connected nodes
+                assignment = None
+                for assign in AgentCommunityAssignment.nodes.filter(status='ACTIVE'):
+                    assign_agent = assign.agent.single()
+                    assign_community = assign.community.single()
+                    if (assign_agent and assign_agent.uid == agent.uid and 
+                        assign_community and assign_community.uid == community.uid):
+                        assignment = assign
+                        break
+                is_assigned = assignment is not None
+            except Exception:
+                is_assigned = False
+            
+            if not is_assigned:
+                return UnbanUserByAgent(
+                    success=False,
+                    message="Agent is not assigned to this community"
+                )
+
+            # Unban the user
+            asyncio.run(unban_user_from_room(
+                access_token=agent.access_token,
+                user_id=agent.matrix_user_id,
+                room_id=community.room_id,
+                target_user_id=input.target_user_id
+            ))
+
+            return UnbanUserByAgent(
+                success=True,
+                message="User unbanned successfully"
+            )
+
+        except Agent.DoesNotExist:
+            return UnbanUserByAgent(
+                success=False,
+                message="Agent not found"
+            )
+        except Community.DoesNotExist:
+            return UnbanUserByAgent(
+                success=False,
+                message="Community not found"
+            )
+        except Exception as e:
+            return UnbanUserByAgent(
+                success=False,
+                message=f"Error unbanning user: {str(e)}"
+            )
+
 
 class Mutation(graphene.ObjectType):
     Create_Conversation = CreateConversation.Field()
@@ -565,3 +1225,10 @@ class Mutation(graphene.ObjectType):
     block_user=CreateBlock.Field()
     unblock_user=DeleteBlock.Field()
     send_vibe_to_message = SendVibeToMessage.Field()
+    get_matrix_messages = GetMatrixMessages.Field()
+    send_matrix_message = SendMatrixMessage.Field()
+    send_matrix_message_by_agent = SendMatrixMessageByAgent.Field()
+    delete_matrix_message_by_agent = DeleteMatrixMessageByAgent.Field()
+    kick_user_by_agent = KickUserByAgent.Field()
+    ban_user_by_agent = BanUserByAgent.Field()
+    unban_user_by_agent = UnbanUserByAgent.Field()

@@ -34,12 +34,14 @@ class CreateCommentInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "CreateComment")(required=True)
     content = custom_graphql_validator.SpecialCharacterString2_100.add_option("content", "CreateComment")(required=True)
     parent_comment_uid = custom_graphql_validator.String.add_option("parentCommentUid", "CreateComment")()
+    comment_file_id = custom_graphql_validator.ListString.add_option("commentFileId", "CreateComment")()
 
 
 class UpdateCommentInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateComment")(required=True)
     content = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("content", "UpdateComment")()
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateComment")()
+    comment_file_id = custom_graphql_validator.ListString.add_option("commentFileId", "UpdateComment")()
 
 class CreateLikeInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "CreateLike")(required=True)

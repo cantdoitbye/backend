@@ -38,3 +38,46 @@ class UpdateReactionInput(graphene.InputObjectType):
 
 class CreateBlockInput(graphene.InputObjectType):
     blocked_uid = graphene.String(required=True)
+
+class GetMatrixMessagesInput(graphene.InputObjectType):
+    community_uid = graphene.String(required=True)
+    limit = graphene.Int(default_value=20)
+    from_token = graphene.String()
+
+class SendMatrixMessageInput(graphene.InputObjectType):
+    community_uid = graphene.String(required=True)
+    message = graphene.String(required=True)
+    message_type = graphene.String(default_value="m.text")
+
+class SendMatrixMessageByAgentInput(graphene.InputObjectType):
+    agent_uid = graphene.String(required=True)
+    community_id = graphene.ID(required=True)
+    content = graphene.String(required=True)
+    message_type = graphene.String(required=False, default_value="m.text")
+
+
+class DeleteMatrixMessageByAgentInput(graphene.InputObjectType):
+    agent_uid = graphene.String(required=True)
+    community_id = graphene.ID(required=True)
+    event_id = graphene.String(required=True)
+    reason = graphene.String(required=False, default_value="Message deleted by moderator")
+
+
+class KickUserByAgentInput(graphene.InputObjectType):
+    agent_uid = graphene.String(required=True)
+    community_id = graphene.ID(required=True)
+    target_user_id = graphene.String(required=True)
+    reason = graphene.String(required=False, default_value="Kicked by moderator")
+
+
+class BanUserByAgentInput(graphene.InputObjectType):
+    agent_uid = graphene.String(required=True)
+    community_id = graphene.ID(required=True)
+    target_user_id = graphene.String(required=True)
+    reason = graphene.String(required=False, default_value="Banned by moderator")
+
+
+class UnbanUserByAgentInput(graphene.InputObjectType):
+    agent_uid = graphene.String(required=True)
+    community_id = graphene.ID(required=True)
+    target_user_id = graphene.String(required=True)
