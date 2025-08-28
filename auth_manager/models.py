@@ -246,6 +246,7 @@ class Score(DjangoNode,StructuredNode):
     social_score = FloatProperty(default=2.0)  # Social interaction score
     human_score = FloatProperty(default=2.0)  # Human connection score
     repo_score = FloatProperty(default=2.0)  # Repository/content score
+    overall_score = FloatProperty(default=0.0) # user's overall score
     profile = RelationshipTo('Profile', 'HAS_SCORE')  # Link to user profile
 
 

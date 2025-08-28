@@ -228,6 +228,7 @@ class ScoreType(ObjectType):
     social_score = graphene.Float()
     human_score = graphene.Float()
     repo_score = graphene.Float()
+    overall_score = graphene.Float()
     profile = graphene.Field(ProfileType)  # Ensure 'ProfileType' is defined
 
     @classmethod

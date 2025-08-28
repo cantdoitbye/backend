@@ -555,10 +555,70 @@ post_comments_with_metrics_query = """
 # Add these queries to your existing post/graphql/raw_queries.py file
 # Add these queries to your existing post/graphql/raw_queries.py file
 
-# Enhanced version of your existing post_comments_with_metrics_query with nested support
+# # Enhanced version of your existing post_comments_with_metrics_query with nested support
+# post_comments_with_metrics_nested_query = """
+# MATCH (post:Post {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
+# WHERE NOT comment.is_deleted
+
+# // Check if this is a top-level comment or reply
+# OPTIONAL MATCH (comment)-[:REPLIED_TO]->(parent_comment:Comment)
+
+# // Get comment metrics using the same logic as your original query
+# OPTIONAL MATCH (comment)-[:HAS_REACTION]->(reaction)
+# WHERE NOT reaction.is_deleted
+
+# OPTIONAL MATCH (post)-[:HAS_VIEW]->(view)
+# WHERE NOT view.is_deleted
+
+# OPTIONAL MATCH (post)-[:HAS_COMMENT]->(all_comments)
+# WHERE NOT all_comments.is_deleted
+
+# OPTIONAL MATCH (post)-[:HAS_SHARE]->(share)
+# WHERE NOT share.is_deleted
+
+# OPTIONAL MATCH (post)-[:HAS_LIKE]->(like)
+# WHERE NOT like.is_deleted
+
+# // Count replies to this specific comment
+# OPTIONAL MATCH (comment)<-[:REPLIED_TO]-(reply:Comment)
+# WHERE NOT reply.is_deleted
+
+# WITH comment, parent_comment, post,
+#      COUNT(DISTINCT reaction) as vibes_count,
+#      COUNT(DISTINCT view) as views_count,
+#      COUNT(DISTINCT all_comments) as comments_count,
+#      COUNT(DISTINCT share) as shares_count,
+#      COUNT(DISTINCT like) as likes_count,
+#      COUNT(DISTINCT reply) as reply_count,
+#      CASE WHEN parent_comment IS NULL THEN 0 ELSE 1 END as is_reply
+
+# // Calculate score (your existing logic)
+# WITH comment, parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count, is_reply,
+#      CASE 
+#        WHEN (vibes_count + views_count + comments_count + shares_count) > 0 
+#        THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
+#        ELSE 2.0 
+#      END as calculated_score
+
+# // Order by: top-level comments first, then by timestamp
+# ORDER BY is_reply ASC, comment.timestamp DESC
+
+# RETURN comment, parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count, is_reply
+# """
 post_comments_with_metrics_nested_query = """
-MATCH (post:Post {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
-WHERE NOT comment.is_deleted
+CALL {
+    // Try to get Post first
+    MATCH (post:Post {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
+    WHERE NOT comment.is_deleted
+    RETURN post, comment, 'Post' as post_type
+    
+    UNION ALL
+    
+    // Try to get CommunityPost
+    MATCH (post:CommunityPost {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
+    WHERE NOT comment.is_deleted
+    RETURN post, comment, 'CommunityPost' as post_type
+}
 
 // Check if this is a top-level comment or reply
 OPTIONAL MATCH (comment)-[:REPLIED_TO]->(parent_comment:Comment)
@@ -583,7 +643,7 @@ WHERE NOT like.is_deleted
 OPTIONAL MATCH (comment)<-[:REPLIED_TO]-(reply:Comment)
 WHERE NOT reply.is_deleted
 
-WITH comment, parent_comment, post,
+WITH comment, parent_comment, post, post_type,
      COUNT(DISTINCT reaction) as vibes_count,
      COUNT(DISTINCT view) as views_count,
      COUNT(DISTINCT all_comments) as comments_count,
@@ -593,11 +653,11 @@ WITH comment, parent_comment, post,
      CASE WHEN parent_comment IS NULL THEN 0 ELSE 1 END as is_reply
 
 // Calculate score (your existing logic)
-WITH comment, parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count, is_reply,
-     CASE 
-       WHEN (vibes_count + views_count + comments_count + shares_count) > 0 
-       THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
-       ELSE 2.0 
+WITH comment, parent_comment, post, post_type, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count, is_reply,
+     CASE
+         WHEN (vibes_count + views_count + comments_count + shares_count) > 0
+         THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
+         ELSE 2.0
      END as calculated_score
 
 // Order by: top-level comments first, then by timestamp
@@ -605,7 +665,6 @@ ORDER BY is_reply ASC, comment.timestamp DESC
 
 RETURN comment, parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count, is_reply
 """
-
 # Query to get replies for a specific comment
 comment_replies_with_metrics_query = """
 MATCH (parent_comment:Comment {uid: $parent_comment_uid})<-[:REPLIED_TO]-(reply:Comment)

@@ -20,7 +20,7 @@ from community.utils.community_decorator import handle_graphql_community_errors
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 from community import matrix_logger
 from community.services.notification_service import NotificationService
-
+from community.utils.matrix_avatar_manager import set_room_avatar_and_score_from_image_id
 
 
 
@@ -134,7 +134,29 @@ class CreateCommunity(Mutation):
             except Exception as e:
                 print(f"Matrix room creation error: {e}")
                 matrix_logger.error(f"Failed to create Matrix room: {e}")
-                # Continue with community creation even if room creation fails
+            
+            if room_id and input.get('group_icon_id'):
+                 try:
+                    print("Setting community room avatar and score...")
+                    avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
+                        access_token=access_token,
+                        user_id=matrix_user_id,
+                        room_id=room_id,
+                        image_id=input.get('group_icon_id')
+                    ))
+                    
+                    if avatar_result["success"]:
+                        matrix_logger.info(f"Set avatar and score for community room {room_id}")
+                        print(f"Community avatar and score set successfully: {avatar_result}")
+                    else:
+                        matrix_logger.warning(f"Failed to set community avatar: {avatar_result.get('error')}")
+                        print(f"Failed to set community avatar: {avatar_result.get('error')}")
+                    
+                 except Exception as e:
+                    matrix_logger.warning(f"Error setting community avatar: {e}")
+                    print(f"Error setting community avatar: {e}")
+            else:
+                print(f"DEBUG: Avatar not set. room_id={room_id}, group_icon_id={input.get('group_icon_id')}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
 
             community = Community(
                 name=input.get('name', ''),
@@ -449,6 +471,33 @@ class UpdateCommunity(Mutation):
             for key, value in input.items():
                 setattr(community, key, value)
             community.save()
+
+            if input.group_icon_id and community.room_id:
+                try:
+                    print(f"Updating Matrix room avatar for community {community.uid}")
+                    matrix_profile = MatrixProfile.objects.get(user=user_id)
+                    if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                        avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
+                            access_token=matrix_profile.access_token,
+                            user_id=matrix_profile.matrix_user_id,
+                            room_id=community.room_id,
+                            image_id=input.group_icon_id
+                        ))
+                        
+                        if avatar_result["success"]:
+                            matrix_logger.info(f"Updated Matrix room avatar for community {community.uid}")
+                            print(f"Community Matrix avatar updated successfully: {avatar_result}")
+                        else:
+                            matrix_logger.warning(f"Failed to update community Matrix avatar: {avatar_result.get('error')}")
+                            print(f"Failed to update community Matrix avatar: {avatar_result.get('error')}")
+                    else:
+                        print("Matrix profile missing credentials for avatar update")
+                        
+                except MatrixProfile.DoesNotExist:
+                    print(f"No Matrix profile found for user {user_id}")
+                except Exception as e:
+                    matrix_logger.warning(f"Error updating community Matrix avatar: {e}")
+                    print(f"Error updating community Matrix avatar: {e}")
 
 
             members = community.members.all()

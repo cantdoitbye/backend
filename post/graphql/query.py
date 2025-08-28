@@ -198,14 +198,17 @@ class Query(graphene.ObjectType):
         Preserves all existing functionality while adding nested features.
         """
         try:
+            print(f"DEBUG: Querying post_uid: {post_uid}")
+            print(f"DEBUG: include_replies: {include_replies}")
+            params = {"post_uid": post_uid} 
             if include_replies:
+                print(f"DEBUG: Running nested query with params: {params}")
                 # Use enhanced query that includes nested structure
-                params = {"post_uid": post_uid}
                 results, _ = db.cypher_query(
                     post_queries.post_comments_with_metrics_nested_query, params)
+                print(f"DEBUG: Query results length: {len(results) if results else 0}")
             else:
                 # Use optimized query for top-level comments only
-                params = {"post_uid": post_uid}
                 results, _ = db.cypher_query(
                     post_queries.top_level_comments_with_metrics_query, params)
 
@@ -235,15 +238,21 @@ class Query(graphene.ObjectType):
                 # Get post object from neomodel for full PostType data
                 post_object = None
                 if post_data:
-                    try:
-                        post_uid_from_data = post_data.get('uid')
-                        post_node = Post.nodes.get(uid=post_uid_from_data)
-                        post_object = PostType.from_neomodel(post_node, info)
-                    except Exception as e:
-                        print(f"Error getting post object: {e}")
-                        # Fallback to the relationship-based approach
-                        post_object = PostType.from_neomodel(comment_node.post.single(), info) if comment_node.post.single() else None
-
+                   try:
+                       post_uid_from_data = post_data.get('uid')
+                       # Try Post first, then CommunityPost
+                       try:
+                           post_node = Post.nodes.get(uid=post_uid_from_data)
+                           post_object = PostType.from_neomodel(post_node, info)
+                       except Post.DoesNotExist:
+                       # Try CommunityPost
+                           from community.models import CommunityPost
+                           post_node = CommunityPost.nodes.get(uid=post_uid_from_data)
+                           post_object = None
+            
+                   except Exception as e:
+                      print(f"Error getting post object: {e}")
+                      post_object = None
                 # Create parent comment if this is a reply
                 parent_comment = None
                 if parent_comment_data and include_replies:

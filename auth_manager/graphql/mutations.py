@@ -47,8 +47,12 @@ from auth_manager.Utils.generate_presigned_url import get_valid_image
 from auth_manager.Utils.auth_manager_decorator import handle_graphql_auth_manager_errors
 from connection.models import ConnectionV2,CircleV2
 from auth_manager.services.email_template import generate_payload 
-
+from auth_manager.Utils.matrix_avatar_manager import set_user_avatar_from_image_id
 from auth_manager.redis import *
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class UploadContactType(DjangoObjectType):
     """
@@ -356,7 +360,32 @@ class CreateProfile(Mutation):
             )
 
             # Save the profile
-            profile.save()
+            profile.save() 
+            print(f"DEBUG: profile_pic_id provided1: {input.get('profile_pic_id')}")
+            # Auto-update Matrix avatar if profile_pic_id is being updated
+            if input.get('profile_pic_id'):
+               print(f"DEBUG: profile_pic_id provided: {input.get('profile_pic_id')}")
+               try:
+                   matrix_profile = MatrixProfile.objects.get(user=user_id)
+                   if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                       avatar_result = asyncio.run(set_user_avatar_from_image_id(
+                       access_token=matrix_profile.access_token,
+                       user_id=matrix_profile.matrix_user_id,
+                       image_id=input.get('profile_pic_id')
+                       ))
+            
+                       if avatar_result["success"]:
+                          logger.info(f"Auto-updated Matrix avatar for user {user_id}")
+                       else:
+                           logger.warning(f"Failed to auto-update Matrix avatar: {avatar_result.get('error')}")
+                
+               except MatrixProfile.DoesNotExist:
+                      print(f"DEBUG: No Matrix profile found for user {user_id}")
+                      logger.warning(f"No Matrix profile found for user {user_id}")
+               except Exception as e:
+                      print(f"DEBUG: Exception in Matrix avatar update: {e}")
+                      logger.warning(f"Error auto-updating Matrix avatar: {e}")
+            # Don't fail the profile update if avatar update fails
 
             # Create relationship between user and profile
             profile.user.connect(user)
@@ -511,6 +540,33 @@ class UpdateUserProfile(graphene.Mutation):
             user.save()
             profile_node.save()
             onboarding_status.save()
+
+            print(f"DEBUG: profile_pic_id provided1: {input.get('profile_pic_id')}")
+            # Auto-update Matrix avatar if profile_pic_id is being updated
+            if input.get('profile_pic_id'):
+               print(f"DEBUG: profile_pic_id provided: {input.get('profile_pic_id')}")
+               try:
+                   matrix_profile = MatrixProfile.objects.get(user=user_id)
+                   if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                       avatar_result = asyncio.run(set_user_avatar_from_image_id(
+                       access_token=matrix_profile.access_token,
+                       user_id=matrix_profile.matrix_user_id,
+                       image_id=input.get('profile_pic_id')
+                       ))
+            
+                       if avatar_result["success"]:
+                          logger.info(f"Auto-updated Matrix avatar for user {user_id}")
+                       else:
+                           logger.warning(f"Failed to auto-update Matrix avatar: {avatar_result.get('error')}")
+                
+               except MatrixProfile.DoesNotExist:
+                      print(f"DEBUG: No Matrix profile found for user {user_id}")
+                      logger.warning(f"No Matrix profile found for user {user_id}")
+               except Exception as e:
+                      print(f"DEBUG: Exception in Matrix avatar update: {e}")
+                      logger.warning(f"Error auto-updating Matrix avatar: {e}")
+            # Don't fail the profile update if avatar update fails
+
             profile=ProfileType.from_neomodel(profile_node)
             return UpdateUserProfile(profile=profile,success=True,message=UserMessages.PROFILE_UPDATED) 
         except Exception as error:
