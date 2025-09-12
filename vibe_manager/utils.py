@@ -2,6 +2,8 @@
 
 from auth_manager.models import Users, UserVibeRepo
 from vibe_manager.models import *
+from activity_tracker.handlers import ActivityTracker
+from activity_tracker.models import ActivityType
 
 # Utility class for vibe-related operations and scoring calculations
 # Contains the core business logic for how vibes affect user scores
@@ -28,7 +30,7 @@ class VibeUtils:
     # Called whenever a user sends a vibe to another user
     # Updates recipient's scores based on vibe characteristics and sending context
     @staticmethod
-    def onVibeCreated(pro, vibename, numvibe):
+    def onVibeCreated(pro, vibename, numvibe, info=None):
         """
         Processes a vibe interaction and updates user scores.
         
@@ -49,6 +51,7 @@ class VibeUtils:
             pro (Users): The user receiving/being affected by the vibe
             vibename (str): Name of the vibe being sent (must exist in database)
             numvibe (float): Score value for this specific vibe interaction
+            info (dict): Optional context information (e.g., sender user)
             
         Returns:
             None: Method has side effects on user scores and database
@@ -184,6 +187,31 @@ class VibeUtils:
             # Step 14: Establish relationships for the vibe transaction
             repo.user.connect(pro_user)  # Link transaction to user
             pro_user.userviberepo.connect(repo)  # Link user to transaction
+            
+            # Step 15: Track this activity in the activity tracker
+            try:
+                # Get the sending user from the info context if available
+                sender = getattr(info, 'context', {}).get('user', None)
+                
+                ActivityTracker.track_activity(
+                    user=pro_user,  # User receiving the vibe
+                    activity_type=ActivityType.VIBE,
+                    content_object=sender if sender else pro_user,  # Sender or fallback to receiver
+                    metadata={
+                        'vibe_type': vibename,
+                        'score': numvibe,
+                        'iq_change': iq_change,
+                        'aq_change': aq_change,
+                        'sq_change': sq_change,
+                        'hq_change': hq_change,
+                        'cumulative_score': score.cumulative_vibescore
+                    }
+                )
+            except Exception as e:
+                # Log the error but don't fail the vibe operation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track vibe activity: {str(e)}")
             
         except Exception as e:
             # Silently handle any errors during vibe processing

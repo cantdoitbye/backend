@@ -663,18 +663,22 @@ WITH comment, parent_comment, post, post_type, vibes_count, views_count, comment
 // Order by: top-level comments first, then by timestamp
 ORDER BY is_reply ASC, comment.timestamp DESC
 
+// NEW: Add pagination with SKIP and LIMIT
+SKIP $offset
+LIMIT $limit
+
 RETURN comment, parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count, is_reply
 """
 # Query to get replies for a specific comment
 comment_replies_with_metrics_query = """
-MATCH (parent_comment:Comment {uid: $parent_comment_uid})<-[:REPLIED_TO]-(reply:Comment)
+MATCH (reply:Comment)-[:REPLIED_TO]->(parent_comment:Comment {uid: $parent_comment_uid})
 WHERE NOT reply.is_deleted
 
 // Get metrics for each reply
 OPTIONAL MATCH (reply)-[:HAS_REACTION]->(reaction)
 WHERE NOT reaction.is_deleted
 
-OPTIONAL MATCH (reply)<-[:HAS_COMMENT]-(related_post)
+OPTIONAL MATCH (reply)-[:HAS_POST]->(related_post)
 OPTIONAL MATCH (related_post)-[:HAS_VIEW]->(view)
 WHERE NOT view.is_deleted
 
@@ -688,10 +692,11 @@ OPTIONAL MATCH (related_post)-[:HAS_LIKE]->(like)
 WHERE NOT like.is_deleted
 
 // Count nested replies to each reply
-OPTIONAL MATCH (reply)<-[:REPLIED_TO]-(nested_reply:Comment)
+OPTIONAL MATCH (nested_reply:Comment)-[:REPLIED_TO]->(reply)
 WHERE NOT nested_reply.is_deleted
 
-WITH reply,
+// Make sure we return primitive values, not Node objects
+WITH reply, related_post,
      COUNT(DISTINCT reaction) as vibes_count,
      COUNT(DISTINCT view) as views_count,
      COUNT(DISTINCT all_comments) as comments_count,
@@ -700,25 +705,49 @@ WITH reply,
      COUNT(DISTINCT nested_reply) as reply_count
 
 // Calculate score
-WITH reply, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count,
-     CASE 
-       WHEN (vibes_count + views_count + comments_count + shares_count) > 0 
-       THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
-       ELSE 2.0 
+WITH reply, related_post, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count,
+     CASE
+         WHEN (vibes_count + views_count + comments_count + shares_count) > 0
+         THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
+         ELSE 2.0
      END as calculated_score
 
 ORDER BY reply.timestamp ASC
 
-RETURN reply, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count
+// NEW: Add pagination with SKIP and LIMIT
+SKIP $offset
+LIMIT $limit
+
+// Return primitive values explicitly
+RETURN reply, related_post, 
+       toInteger(vibes_count) as vibes_count, 
+       toInteger(views_count) as views_count, 
+       toInteger(comments_count) as comments_count, 
+       toInteger(shares_count) as shares_count, 
+       toInteger(likes_count) as likes_count, 
+       toFloat(calculated_score) as calculated_score, 
+       toInteger(reply_count) as reply_count
 """
 
 # Query to get only top-level comments (no replies) - for better performance
 top_level_comments_with_metrics_query = """
-MATCH (post:Post {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
-WHERE NOT comment.is_deleted
-AND NOT EXISTS((comment)-[:REPLIED_TO]->())  // Only top-level comments
+CALL {
+    // Try to get Post first
+    MATCH (post:Post {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
+    WHERE NOT comment.is_deleted
+    AND NOT EXISTS((comment)-[:REPLIED_TO]->())  // Only top-level comments
+    RETURN post, comment, 'Post' as post_type
+    
+    UNION ALL
+    
+    // Try to get CommunityPost
+    MATCH (post:CommunityPost {uid: $post_uid})-[:HAS_COMMENT]->(comment:Comment)
+    WHERE NOT comment.is_deleted
+    AND NOT EXISTS((comment)-[:REPLIED_TO]->())  // Only top-level comments
+    RETURN post, comment, 'CommunityPost' as post_type
+}
 
-// Get comment metrics using the same logic as your original query
+// Get comment metrics
 OPTIONAL MATCH (comment)-[:HAS_REACTION]->(reaction)
 WHERE NOT reaction.is_deleted
 
@@ -748,21 +777,23 @@ WITH comment, post,
 
 // Calculate score
 WITH comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, reply_count,
-     CASE 
-       WHEN (vibes_count + views_count + comments_count + shares_count) > 0 
-       THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
-       ELSE 2.0 
+     CASE
+         WHEN (vibes_count + views_count + comments_count + shares_count) > 0
+         THEN (vibes_count * 2.0 + views_count * 0.5 + comments_count * 1.5 + shares_count * 3.0) / (vibes_count + views_count + comments_count + shares_count)
+         ELSE 2.0
      END as calculated_score
 
 ORDER BY comment.timestamp DESC
 
-RETURN comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count
+// NEW: Add pagination
+SKIP $offset
+LIMIT $limit
+
+RETURN comment, null as parent_comment, post, vibes_count, views_count, comments_count, shares_count, likes_count, calculated_score, reply_count, 0 as is_reply
 """
 
 
 
-# File: post/graphql/raw_queries/post_queries.py
-# REPLACE the post_feed_query_cursor with this FIXED version:
 
 post_feed_query_cursor = """
         CALL {

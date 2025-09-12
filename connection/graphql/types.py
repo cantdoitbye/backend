@@ -5,6 +5,7 @@ from graphene_django import DjangoObjectType
 from auth_manager.models import Users
 from connection.models import Relation, SubRelation
 from connection.utils import relation
+from connection.utils.score_generator import generate_connection_score
 from auth_manager.Utils import generate_presigned_url
 from connection.graphql.raw_queries import user_related_queries
 from neomodel import db
@@ -114,6 +115,7 @@ class ConnectionV2Type(ObjectType):
     user_type=graphene.String()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
     connection = graphene.Field(lambda: ConnectionConnectedUserType)
+    score=graphene.Float()
 
     
 
@@ -133,6 +135,7 @@ class ConnectionV2Type(ObjectType):
             user_type=user.user_type,
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,
             connection=ConnectionConnectedUserType.from_neomodel(user.connection.single()) if user.connection.single() else None,
+            score=generate_connection_score(),
         )
 class GroupedCommunityMemberType(ObjectType):
     uid=graphene.String()
@@ -142,6 +145,7 @@ class GroupedCommunityMemberType(ObjectType):
     first_name=graphene.String()
     last_name=graphene.String()
     user_type=graphene.String()
+    score=graphene.Float()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
 
     
@@ -159,6 +163,7 @@ class GroupedCommunityMemberType(ObjectType):
             first_name=user.first_name,
             last_name=user.last_name,
             user_type=user.user_type,
+            score=generate_connection_score(),
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,
         )
 
@@ -192,6 +197,7 @@ class RecommendedUserType(ObjectType):
     last_name=graphene.String()
     user_type=graphene.String()
     created_at = graphene.DateTime()
+    score = graphene.Float()
     
     profile = graphene.Field(lambda:ProfileRecommendedUserType)
     # connection = graphene.Field(lambda: ConnectionType)
@@ -219,6 +225,7 @@ class RecommendedUserType(ObjectType):
             last_name=user["last_name"],
             user_type=user["user_type"],
             created_at=created_at_datetime,
+            score=generate_connection_score(),
 
             profile=ProfileRecommendedUserType.from_neomodel(profile) if profile else None,
             # connection=ConnectionType.from_neomodel(user.connection.single()) if user.connection.single() else None,

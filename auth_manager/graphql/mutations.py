@@ -47,7 +47,7 @@ from auth_manager.Utils.generate_presigned_url import get_valid_image
 from auth_manager.Utils.auth_manager_decorator import handle_graphql_auth_manager_errors
 from connection.models import ConnectionV2,CircleV2
 from auth_manager.services.email_template import generate_payload 
-from auth_manager.Utils.matrix_avatar_manager import set_user_avatar_from_image_id
+from auth_manager.Utils.matrix_avatar_manager import set_user_avatar_and_score
 from auth_manager.redis import *
 import logging
 
@@ -368,10 +368,13 @@ class CreateProfile(Mutation):
                try:
                    matrix_profile = MatrixProfile.objects.get(user=user_id)
                    if matrix_profile.access_token and matrix_profile.matrix_user_id:
-                       avatar_result = asyncio.run(set_user_avatar_from_image_id(
+                       avatar_result = asyncio.run(set_user_avatar_and_score(
                        access_token=matrix_profile.access_token,
                        user_id=matrix_profile.matrix_user_id,
-                       image_id=input.get('profile_pic_id')
+                       database_user_id=user_id,
+                       user_uid=user_id,
+                       image_id=input.get('profile_pic_id'),
+                       score=4.0
                        ))
             
                        if avatar_result["success"]:
@@ -471,7 +474,7 @@ class UpdateUserProfile(graphene.Mutation):
             profile_node = Profile.nodes.get(user_id=user_id)
             onboarding_status=profile_node.onboarding.single()
             
-           
+            user_uid= profile_node.uid
 
 
         # Update user fields
@@ -548,10 +551,13 @@ class UpdateUserProfile(graphene.Mutation):
                try:
                    matrix_profile = MatrixProfile.objects.get(user=user_id)
                    if matrix_profile.access_token and matrix_profile.matrix_user_id:
-                       avatar_result = asyncio.run(set_user_avatar_from_image_id(
+                       avatar_result = asyncio.run(set_user_avatar_and_score(
                        access_token=matrix_profile.access_token,
                        user_id=matrix_profile.matrix_user_id,
-                       image_id=input.get('profile_pic_id')
+                       database_user_id=user_id,
+                       user_uid=user_uid,
+                       image_id=input.get('profile_pic_id'),
+                       score=4.0
                        ))
             
                        if avatar_result["success"]:
@@ -2667,7 +2673,8 @@ class CreateBackProfileReview(graphene.Mutation):
             - vibe: Numeric vibe score
             - title: Review title
             - content: Review content
-            - file_id: Optional file attachment ID
+            - image_ids: Optional file attachment IDs
+            - rating: user start ratings
     
     Returns:
         CreateBackProfileReview: Response containing:
@@ -2712,25 +2719,26 @@ class CreateBackProfileReview(graphene.Mutation):
                 profile_reaction_manager.initialize_reactions()  # Add the 10 vibes
                 profile_reaction_manager.save()
 
-            profile_reaction_manager.add_reaction(
-                vibes_name=input.reaction,
-                score=input.vibe  # Assuming `reaction` is a numeric score to be averaged
-            )
-            profile_reaction_manager.save()
+            # profile_reaction_manager.add_reaction(
+            #     vibes_name=input.reaction,
+            #     score=input.vibe  # Assuming `reaction` is a numeric score to be averaged
+            # )
+            # profile_reaction_manager.save()
 
             users_review = BackProfileUsersReview(
                 reaction=input.reaction,
                 vibe=input.vibe,
                 title=input.title,
                 content=input.content,
-                file_id=input.file_id
+                image_ids=input.image_ids or [],
+                rating=input.rating or 4         
             )
             users_review.save()
             users_review.byuser.connect(byuser)
             users_review.touser.connect(touser)
             touser.user_back_profile_review.connect(users_review)
 
-            return CreateBackProfileReview( success=True, message="Users Review created successfully.")
+            return CreateBackProfileReview( success=True, message="User Peer Review created successfully.")
         except Exception as error:
             message=getattr(error , "message", str(error))
             return CreateBackProfileReview(success=False, message=message)

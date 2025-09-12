@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feed Algorithm Playground</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            margin-bottom: 1.5rem;
+        }
+        .card-header {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+        }
+        .feed-item {
+            transition: transform 0.2s;
+            margin-bottom: 1rem;
+            border-left: 4px solid transparent;
+        }
+        .feed-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.1);
+        }
+        .chart-container {
+            height: 300px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="mb-4">Feed Algorithm Playground</h1>
+        <div class="alert alert-info">
+            This is a standalone version of the Feed Algorithm Playground. All processing happens in your browser.
+        </div>
+        
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5>Test Parameters</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="userSelect" class="form-label">Select User</label>
+                            <select class="form-select" id="userSelect"></select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="feedSize" class="form-label">Feed Size</label>
+                            <input type="number" class="form-control" id="feedSize" value="5" min="1" max="20">
+                        </div>
+                        
+                        <h6 class="mt-4">Composition Weights</h6>
+                        <div class="mb-3">
+                            <label for="personalConnections" class="form-label">Personal Connections</label>
+                            <input type="range" class="form-range composition-slider" min="0" max="100" value="40" id="personalConnections">
+                            <div class="d-flex justify-content-between">
+                                <small>0%</small>
+                                <span id="personalConnectionsValue">40%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="interestBased" class="form-label">Interest Based</label>
+                            <input type="range" class="form-range composition-slider" min="0" max="100" value="30" id="interestBased">
+                            <div class="d-flex justify-content-between">
+                                <small>0%</small>
+                                <span id="interestBasedValue">30%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="trending" class="form-label">Trending</label>
+                            <input type="range" class="form-range composition-slider" min="0" max="100" value="15" id="trending">
+                            <div class="d-flex justify-content-between">
+                                <small>0%</small>
+                                <span id="trendingValue">15%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="discovery" class="form-label">Discovery</label>
+                            <input type="range" class="form-range composition-slider" min="0" max="100" value="10" id="discovery">
+                            <div class="d-flex justify-content-between">
+                                <small>0%</small>
+                                <span id="discoveryValue">10%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-primary" id="generateBtn">Generate Feed</button>
+                            <button type="button" class="btn btn-outline-secondary" id="resetBtn">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-8">
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Generated Feed</h5>
+                        <div id="loadingSpinner" class="spinner-border spinner-border-sm d-none" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="feedContainer">
+                            <p class="text-muted text-center my-5">Click "Generate Feed" to see results</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5>Scoring Visualization</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="scoreChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <script>
+        // Enhanced mock data with realistic user interests and content
+        const INTERESTS = [
+            'technology', 'programming', 'ai', 'machine learning', 'data science',
+            'web development', 'mobile apps', 'cybersecurity', 'cloud computing',
+            'blockchain', 'gaming', 'esports', 'virtual reality', 'augmented reality',
+            'iot', 'robotics', 'automation', 'big data', 'analytics', 'devops'
+        ];
+
+        const CONTENT_TYPES = ['post', 'article', 'tutorial', 'video', 'podcast', 'webinar', 'event'];
+        
+        // Realistic user names for better visualization
+        const USER_NAMES = [
+            'Alex Johnson', 'Taylor Smith', 'Jordan Williams', 'Casey Brown', 'Riley Davis',
+            'Morgan Wilson', 'Jamie Taylor', 'Quinn Anderson', 'Avery Thomas', 'Skylar Jackson',
+            'Peyton White', 'Dakota Harris', 'Remy Martin', 'Sam Carter', 'Robin Lee'
+        ];
+
+        // Generate more realistic mock users with diverse interests and preferences
+        function generateUsers(count) {
+            return Array.from({length: count}, (_, i) => {
+                const primaryInterest = INTERESTS[Math.floor(Math.random() * INTERESTS.length)];
+                const relatedInterests = INTERESTS
+                    .filter(interest => interest !== primaryInterest)
+                    .sort(() => 0.5 - Math.random())
+                    .slice(0, Math.floor(Math.random() * 4) + 1);
+                
+                const interests = [primaryInterest, ...relatedInterests];
+                const preferredTypes = CONTENT_TYPES
+                    .sort(() => 0.5 - Math.random())
+                    .slice(0, Math.floor(Math.random() * 3) + 1);
+                
+                return {
+                    id: i + 1,
+                    username: `user${i + 1}`,
+                    name: USER_NAMES[i % USER_NAMES.length] + (Math.random() > 0.7 ? ' ' + USER_NAMES[(i + 5) % USER_NAMES.length].split(' ')[1] : ''),
+                    email: `user${i + 1}@example.com`,
+                    joinDate: new Date(Date.now() - Math.floor(Math.random() * 365 * 24 * 60 * 60 * 1000)).toISOString(),
+                    lastActive: new Date(Date.now() - Math.floor(Math.random() * 30 * 24 * 60 * 60 * 1000)).toISOString(),
+                    engagementScore: Math.random() * 0.7 + 0.3, // 0.3 to 1.0
+                    interests: [...new Set(interests)], // Remove duplicates
+                    contentPreferences: {
+                        preferredTypes: preferredTypes,
+                        timeSpent: Math.floor(Math.random() * 116) + 5 // 5-120 minutes
+                    },
+                    followers: Math.floor(Math.random() * 1000),
+                    following: Math.floor(Math.random() * 500)
+                };
+            });
+        }
+
+        // Generate realistic mock content with meaningful engagement metrics
+        function generateContent(users, count) {
+            const trendingTopics = INTERESTS
+                .sort(() => 0.5 - Math.random())
+                .slice(0, 5);
+                
+            const contentTitles = {
+                'post': ['My Thoughts on {topic}', 'Why {topic} Matters', 'The Future of {topic}'],
+                'article': ['Comprehensive Guide to {topic}', 'The Science Behind {topic}'],
+                'tutorial': ['Getting Started with {topic}', 'Step-by-Step {topic} Tutorial'],
+                'video': ['{topic} Explained', 'How to Master {topic}'],
+                'podcast': ['{topic} Uncovered', 'The {topic} Show'],
+                'webinar': ['Webinar: {topic} Insights', 'Masterclass: {topic}'],
+                'event': ['{topic} Conference', 'Workshop: {topic}']
+            };
+
+            const content = [];
+            const now = Date.now();
+            
+            for (let i = 0; i < count; i++) {
+                const author = users[Math.floor(Math.random() * users.length)];
+                const contentType = CONTENT_TYPES[Math.floor(Math.random() * CONTENT_TYPES.length)];
+                
+                // 70% chance to use a trending topic
+                const primaryTopic = Math.random() > 0.3 
+                    ? trendingTopics[Math.floor(Math.random() * trendingTopics.length)]
+                    : INTERESTS[Math.floor(Math.random() * INTERESTS.length)];
+                
+                // Generate related tags
+                const tags = [primaryTopic, ...INTERESTS
+                    .filter(int => int !== primaryTopic)
+                    .sort(() => 0.5 - Math.random())
+                    .slice(0, Math.floor(Math.random() * 3) + 1)];
+                
+                // Generate realistic title based on content type
+                const titleTemplates = contentTitles[contentType] || ['{topic}'];
+                const title = titleTemplates[Math.floor(Math.random() * titleTemplates.length)]
+                    .replace('{topic}', primaryTopic);
+                
+                // More recent content is more likely (exponential distribution)
+                const daysAgo = Math.floor(Math.pow(Math.random(), 2) * 30);
+                const timestamp = new Date(now - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+                
+                // Base engagement metrics
+                const baseEngagement = Math.random() * 0.7 + 0.1; // 0.1 to 0.8
+                const engagementBoost = trendingTopics.includes(primaryTopic) ? 0.2 : 0;
+                const engagementScore = Math.min(1, baseEngagement + engagementBoost);
+                
+                // Time decay (older content gets less engagement)
+                const timeDecay = 1 - (daysAgo / 30);
+                const viewCount = Math.floor(10000 * engagementScore * timeDecay * (0.8 + Math.random() * 0.4));
+                
+                // Engagement metrics with realistic ratios
+                const likeRatio = 0.05 + Math.random() * 0.1; // 5-15%
+                const commentRatio = 0.01 + Math.random() * 0.04; // 1-5%
+                const shareRatio = 0.01 + Math.random() * 0.03; // 1-4%
+                const bookmarkRatio = 0.005 + Math.random() * 0.015; // 0.5-2%
+                
+                const likes = Math.floor(viewCount * likeRatio);
+                const comments = Math.floor(viewCount * commentRatio);
+                const shares = Math.floor(viewCount * shareRatio);
+                const bookmarks = Math.floor(viewCount * bookmarkRatio);
+                
+                // Content quality and trending metrics
+                const qualityScore = (0.3 + Math.random() * 0.7).toFixed(2);
+                const recencyScore = 1 / (1 + daysAgo);
+                const trendingScore = (engagementScore * 0.6 + recencyScore * 0.4).toFixed(2);
+                
+                content.push({
+                    id: `content-${i}`,
+                    type: contentType,
+                    title: title,
+                    author: {
+                        id: author.id,
+                        name: author.name,
+                        username: author.username,
+                        avatar: `https://i.pravatar.cc/150?u=${author.id}`
+                    },
+                    timestamp: timestamp,
+                    tags: [...new Set(tags)],
+                    content: `This is a sample ${contentType} about ${tags.join(', ')}. ` +
+                            `It contains valuable insights and information that our users find engaging.`,
+                    engagement: {
+                        views: viewCount,
+                        likes: likes,
+                        comments: comments,
+                        shares: shares,
+                        bookmarks: bookmarks,
+                        clickThroughRate: (Math.random() * 0.14 + 0.01).toFixed(2), // 1-15%
+                        timeSpent: Math.floor(30 + Math.random() * 570) // 30-600 seconds
+                    },
+                    metrics: {
+                        qualityScore: qualityScore,
+                        engagementScore: engagementScore.toFixed(2),
+                        trendingScore: trendingScore,
+                        personalizationScore: 0.0, // Will be calculated
+                        isTrending: trendingScore > 0.7,
+                        isPopular: engagementScore > 0.7,
+                        isNew: daysAgo < 3
+                    },
+                    url: `#/content/content-${i}`,
+                    readTime: Math.max(1, Math.floor(Math.random() * 20)) + ' min read'
+                });
+            }
+            return content;
+        }
+
+        // Generate realistic social connections with power-law distribution
+        function generateConnections(users) {
+            const connections = {};
+            const userIds = users.map(u => u.id);
+            
+            // First pass: create connections with power-law distribution
+            users.forEach(user => {
+                // Power-law distribution: few users have many connections, most have few
+                const powerLaw = Math.pow(Math.random(), 2);
+                const maxConnections = Math.min(users.length - 1, 100); // Max 100 connections
+                const numConnections = Math.max(5, Math.floor(powerLaw * maxConnections));
+                
+                // Start with empty connections
+                connections[user.id] = [];
+                
+                // Add some reciprocal connections (if the other user is also connected)
+                Object.entries(connections).forEach(([otherUserId, otherConnections]) => {
+                    if (otherUserId !== user.id.toString() && 
+                        Math.random() < 0.3 && 
+                        otherConnections.includes(user.id)) {
+                        connections[user.id].push(parseInt(otherUserId));
+                    }
+                });
+                
+                // Add random connections up to the target number
+                while (connections[user.id].length < numConnections) {
+                    const randomUserId = userIds[Math.floor(Math.random() * userIds.length)];
+                    if (randomUserId !== user.id && 
+                        !connections[user.id].includes(randomUserId)) {
+                        connections[user.id].push(randomUserId);
+                        
+                        // 50% chance of reciprocal connection
+                        if (Math.random() > 0.5) {
+                            if (!connections[randomUserId]) {
+                                connections[randomUserId] = [];
+                            }
+                            if (!connections[randomUserId].includes(user.id)) {
+                                connections[randomUserId].push(user.id);
+                            }
+                        }
+                    }
+                }
+                
+                // Ensure each user has at least 1 connection
+                if (connections[user.id].length === 0 && userIds.length > 1) {
+                    const randomUserId = userIds.find(id => id !== user.id);
+                    connections[user.id].push(randomUserId);
+                }
+            });
+            
+            return connections;
+        }
+
+        // DOM Elements
+        const generateBtn = document.getElementById('generateBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const feedContainer = document.getElementById('feedContainer');
+        const userSelect = document.getElementById('userSelect');
+        let scoreChart = null;
+
+        // Initialize the page
+        function init() {
+            // Populate user select
+            const MOCK_USERS = generateUsers(50); // 50 users
+            const MOCK_CONTENT = generateContent(MOCK_USERS, 200); // 200 content items
+            const MOCK_CONNECTIONS = generateConnections(MOCK_USERS);
+            
+            // Add some viral content (top 5% by engagement)
+            MOCK_CONTENT
+                .sort((a, b) => b.engagement.views - a.engagement.views)
+                .slice(0, Math.floor(MOCK_CONTENT.length * 0.05))
+                .forEach(item => {
+                    item.metrics.isViral = true;
+                    // Boost engagement for viral content
+                    const boost = 3 + Math.random() * 2; // 3-5x boost
+                    item.engagement.views = Math.floor(item.engagement.views * boost);
+                    item.engagement.likes = Math.floor(item.engagement.likes * boost);
+                    item.engagement.comments = Math.floor(item.engagement.comments * boost);
+                    item.engagement.shares = Math.floor(item.engagement.shares * boost);
+                    item.metrics.engagementScore = Math.min(1, item.metrics.engagementScore * 1.3).toFixed(2);
+                });
+            
+            console.log('Generated mock data:', {
+                users: MOCK_USERS.length,
+                content: MOCK_CONTENT.length,
+                connections: Object.keys(MOCK_CONNECTIONS).length
+            });
+            
+            MOCK_USERS.forEach(user => {
+                const option = document.createElement('option');
+                option.value = user.id;
+                option.textContent = user.username;
+                userSelect.appendChild(option);
+            });
+
+            // Initialize sliders
+            initSliders();
+            
+            // Set up event listeners
+            generateBtn.addEventListener('click', generateFeed);
+            resetBtn.addEventListener('click', resetToDefaults);
+        }
+
+        // Initialize slider controls
+        function initSliders() {
+            const sliders = document.querySelectorAll('.composition-slider');
+            sliders.forEach(slider => {
+                const valueElement = document.getElementById(`${slider.id}Value`);
+                if (valueElement) {
+                    valueElement.textContent = `${slider.value}%`;
+                }
+                
+                slider.addEventListener('input', function() {
+                    if (valueElement) {
+                        valueElement.textContent = `${this.value}%`;
+                    }
+                    updateSliderValues();
+                });
+            });
+        }
+
+        // Reset form to default values
+        function resetToDefaults() {
+            document.getElementById('feedSize').value = 5;
+            
+            const defaults = {
+                'personalConnections': 40,
+                'interestBased': 30,
+                'trending': 15,
+                'discovery': 10,
+                'community': 5
+            };
+            
+            Object.entries(defaults).forEach(([id, value]) => {
+                const slider = document.getElementById(id);
+                const valueElement = document.getElementById(`${id}Value`);
+                if (slider && valueElement) {
+                    slider.value = value;
+                    valueElement.textContent = `${value}%`;
+                }
+            });
+            
+            updateSliderValues();
+        }
+
+        // Update slider values to ensure they sum to 100%
+        function updateSliderValues() {
+            const sliders = Array.from(document.querySelectorAll('.composition-slider'));
+            const values = sliders.map(slider => parseInt(slider.value));
+            const total = values.reduce((sum, value) => sum + value, 0);
+            
+            // If total is not 100, adjust the last slider
+            if (total !== 100) {
+                const lastSlider = sliders[sliders.length - 1];
+                const lastValue = parseInt(lastSlider.value) + (100 - total);
+                lastSlider.value = Math.max(0, Math.min(100, lastValue));
+                document.getElementById(`${lastSlider.id}Value`).textContent = `${lastSlider.value}%`;
+            }
+        }
+
+        // Generate feed based on current form values
+        function generateFeed() {
+            const userId = parseInt(userSelect.value);
+            const size = parseInt(document.getElementById('feedSize').value);
+            
+            // Get composition values
+            const composition = {
+                personal_connections: parseInt(document.getElementById('personalConnections').value) / 100,
+                interest_based: parseInt(document.getElementById('interestBased').value) / 100,
+                trending: parseInt(document.getElementById('trending').value) / 100,
+                discovery: parseInt(document.getElementById('discovery').value) / 100,
+                community: parseInt(document.getElementById('community').value) / 100
+            };
+            
+            // Show loading state
+            loadingSpinner.classList.remove('d-none');
+            
+            // Simulate API call with timeout
+            setTimeout(() => {
+                try {
+                    const feed = generateMockFeed(userId, composition, size);
+                    renderFeed(feed);
+                    renderCharts(feed, composition);
+                } catch (error) {
+                    console.error('Error:', error);
+                    feedContainer.innerHTML = `
+                        <div class="alert alert-danger" role="alert">
+                            Error generating feed: ${error.message}
+                        </div>
+                    `;
+                } finally {
+                    loadingSpinner.classList.add('d-none');
+                }
+            }, 500);
+        }
+
+        // Enhanced feed generation algorithm
+        function generateMockFeed(userId, composition, size) {
+            const user = MOCK_USERS.find(u => u.id === userId) || MOCK_USERS[0];
+            const now = new Date();
+            
+            return MOCK_CONTENT.map(item => {
+                // 1. Interest-based scoring (40% weight)
+                const commonInterests = item.tags.filter(tag => user.interests.includes(tag)).length;
+                const maxPossibleInterests = Math.max(item.tags.length, user.interests.length);
+                const interestScore = 0.4 * (commonInterests / maxPossibleInterests);
+                
+                // 2. Personal connection scoring (30% weight)
+                let connectionScore = 0;
+                if (item.author.id === userId) {
+                    connectionScore = 0.3; // User's own content
+                } else {
+                    // Simulate connection strength (0 to 0.3)
+                    const connectionStrength = Math.random() * 0.3;
+                    connectionScore = connectionStrength;
+                }
+                
+                // 3. Time-based scoring (decay over time, 15% weight)
+                const itemDate = new Date(item.timestamp);
+                const hoursOld = (now - itemDate) / (1000 * 60 * 60);
+                const timeScore = 0.15 * Math.max(0, 1 - (hoursOld / 168)); // Decay over 1 week
+                
+                // 4. Engagement scoring (10% weight)
+                const engagementScore = 0.1 * (parseFloat(item.metrics.engagementScore));
+                
+                // 5. Content quality (5% weight, simulated)
+                const qualityScore = 0.05 * (parseFloat(item.metrics.qualityScore));
+                
+                // Calculate weighted score based on composition
+                const score = (
+                    interestScore * composition.interest_based +
+                    connectionScore * composition.personal_connections +
+                    timeScore * composition.trending * 5 + // Adjusted for 15% weight
+                    engagementScore * composition.discovery * 2 + // Adjusted for 10% weight
+                    qualityScore * composition.community * 4 // Adjusted for 5% weight
+                );
+                
+                return {
+                    ...item,
+                    score: score,
+                    scores: {
+                        interest: interestScore,
+                        connection: connectionScore,
+                        time: timeScore,
+                        engagement: engagementScore,
+                        quality: qualityScore
+                    },
+                    // Add user-friendly date
+                    displayDate: formatDate(itemDate)
+                };
+            })
+            .sort((a, b) => b.score - a.score)
+            .slice(0, size);
+        }
+
+        // Render the feed items
+        function renderFeed(feed) {
+            if (!feed || feed.length === 0) {
+                feedContainer.innerHTML = '<p class="text-muted text-center my-5">No items found for the selected criteria.</p>';
+                return;
+            }
+            
+            const feedItems = feed.map((item, index) => {
+                const scorePercent = Math.round(item.score * 100);
+                const scoreClass = scorePercent > 70 ? 'bg-success' : 
+                                scorePercent > 40 ? 'bg-primary' : 'bg-secondary';
+                
+                return `
+                    <div class="card feed-item">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <h5 class="card-title">${item.title}</h5>
+                                    <h6 class="card-subtitle mb-2 text-muted">
+                                        ${item.type.charAt(0).toUpperCase() + item.type.slice(1)} 
+                                        <span class="badge bg-light text-dark">#${item.id}</span>
+                                    </h6>
+                                </div>
+                                <span class="badge ${scoreClass} score-badge">${scorePercent}%</span>
+                            </div>
+                            
+                            <div class="mt-2">
+                                ${renderTags(item.tags)}
+                            </div>
+                            
+                            <div class="score-breakdown mt-3">
+                                <div class="d-flex justify-content-between mb-1">
+                                    <small title="Interest match">
+                                        <i class="bi bi-star-fill text-warning"></i> ${(item.scores.interest * 100).toFixed(1)}%
+                                    </small>
+                                    <small title="Connection strength">
+                                        <i class="bi bi-people-fill text-primary"></i> ${(item.scores.connection * 100).toFixed(1)}%
+                                    </small>
+                                    <small title="Recency">
+                                        <i class="bi bi-clock-fill text-info"></i> ${(item.scores.time * 100).toFixed(1)}%
+                                    </small>
+                                    <small title="Engagement">
+                                        <i class="bi bi-graph-up-arrow text-success"></i> ${(item.scores.engagement * 100).toFixed(1)}%
+                                    </small>
+                                </div>
+                                <div class="progress" style="height: 5px;">
+                                    <div class="progress-bar bg-warning" 
+                                         style="width: ${item.scores.interest * 100}%" 
+                                         title="Interest match: ${(item.scores.interest * 100).toFixed(1)}%">
+                                    </div>
+                                    <div class="progress-bar bg-primary" 
+                                         style="width: ${item.scores.connection * 100}%" 
+                                         title="Connection: ${(item.scores.connection * 100).toFixed(1)}%">
+                                    </div>
+                                    <div class="progress-bar bg-info" 
+                                         style="width: ${item.scores.time * 100}%" 
+                                         title="Recency: ${(item.scores.time * 100).toFixed(1)}%">
+                                    </div>
+                                    <div class="progress-bar bg-success" 
+                                         style="width: ${item.scores.engagement * 100}%" 
+                                         title="Engagement: ${(item.scores.engagement * 100).toFixed(1)}%">
+                                    </div>
+                                    <div class="progress-bar bg-secondary" 
+                                         style="width: ${item.scores.quality * 100}%" 
+                                         title="Quality: ${(item.scores.quality * 100).toFixed(1)}%">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-2 text-muted">
+                                <small>Author: User ${item.author.id} • ${new Date(item.timestamp).toLocaleString()}</small>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            feedContainer.innerHTML = feedItems;
+        }
+
+        // Render tags as badges
+        function renderTags(tags) {
+            if (!tags || !tags.length) return '';
+            return tags.map(tag => 
+                `<span class="badge bg-light text-dark me-1">${tag}</span>`
+            ).join('');
+        }
+
+        // Render charts
+        function renderCharts(feed, composition) {
+            renderScoreChart(feed);
+            renderCompositionChart(composition);
+        }
+
+        // Render score distribution chart
+        function renderScoreChart(feed) {
+            const ctx = document.getElementById('scoreChart').getContext('2d');
+            const labels = feed.map((item, index) => `#${index + 1} ${item.title.substring(0, 10)}...`);
+            const scores = feed.map(item => item.score * 100);
+            const backgroundColors = scores.map(score => 
+                score > 70 ? 'rgba(25, 135, 84, 0.7)' : 
+                score > 40 ? 'rgba(13, 110, 253, 0.7)' : 'rgba(108, 117, 125, 0.7)'
+            );
+            
+            if (scoreChart) {
+                scoreChart.destroy();
+            }
+            
+            scoreChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Score (%)',
+                        data: scores,
+                        backgroundColor: backgroundColors,
+                        borderColor: backgroundColors.map(color => color.replace('0.7', '1')),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: 'Score (%)'
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                autoSkip: false,
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const item = feed[context.dataIndex];
+                                    return `${item.title}: ${(item.score * 100).toFixed(1)}%`;
+                                }
+                            }
+                        },
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render composition pie chart
+        function renderCompositionChart(composition) {
+            const ctx = document.getElementById('compositionChart').getContext('2d');
+            
+            // Destroy existing chart if it exists
+            if (window.compositionChart) {
+                window.compositionChart.destroy();
+            }
+            
+            const data = {
+                labels: ['Personal Connections', 'Interest Based', 'Trending', 'Discovery', 'Community'],
+                datasets: [{
+                    data: [
+                        composition.personal_connections * 100,
+                        composition.interest_based * 100,
+                        composition.trending * 100,
+                        composition.discovery * 100,
+                        composition.community * 100
+                    ],
+                    backgroundColor: [
+                        'rgba(13, 110, 253, 0.7)',
+                        'rgba(25, 135, 84, 0.7)',
+                        'rgba(255, 193, 7, 0.7)',
+                        'rgba(13, 202, 240, 0.7)',
+                        'rgba(111, 66, 193, 0.7)'
+                    ]
+                }]
+            };
+            
+            window.compositionChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.label}: ${context.raw.toFixed(1)}%`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Helper function to format dates
+        function formatDate(date) {
+            const now = new Date();
+            const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
+            
+            if (diffInHours < 1) {
+                const minutes = Math.floor((now - date) / (1000 * 60));
+                return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`;
+            } else if (diffInHours < 24) {
+                return `${diffInHours} ${diffInHours === 1 ? 'hour' : 'hours'} ago`;
+            } else if (diffInHours < 168) { // 7 days
+                const days = Math.floor(diffInHours / 24);
+                return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+            } else {
+                return date.toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'short', 
+                    day: 'numeric' 
+                });
+            }
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            // Add user count to the UI
+            const title = document.querySelector('h1');
+            if (title) {
+                title.innerHTML += ` <span class="badge bg-primary">${MOCK_USERS.length} users, ${MOCK_CONTENT.length} items</span>`;
+            }
+            
+            // Initialize the app
+            init();
+            
+            // Generate initial feed
+            generateFeed();
+        });
+    </script>
+</body>
+</html>

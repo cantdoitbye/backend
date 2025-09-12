@@ -264,7 +264,8 @@ class SendVibe(graphene.Mutation):
             
             # Delegate to VibeUtils to handle score calculation and updates
             # This method handles all the complex scoring logic
-            VibeUtils.onVibeCreated(user, vibename, vibescore)
+            # Pass the GraphQL info object to track the sender
+            VibeUtils.onVibeCreated(user, vibename, vibescore, info)
             
             return SendVibe(message="Vibe send successfully")
             

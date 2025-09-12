@@ -1,0 +1,558 @@
+{
+  "feed_algorithm_data_requirements": {
+    "version": "1.0",
+    "description": "Complete data requirements for Feed Algorithm implementation - all data needed to generate personalized feeds",
+    
+    "input_data_sources": {
+      "user_data": {
+        "description": "Basic user information and preferences",
+        "required_fields": {
+          "user_id": "string",
+          "profile_data": {
+            "interests": ["array of strings"],
+            "feed_composition": {
+              "personal_connections": "float (0.0-1.0)",
+              "interest_based": "float (0.0-1.0)",
+              "trending_content": "float (0.0-1.0)",
+              "discovery_content": "float (0.0-1.0)"
+            },
+            "activity_level": "string (new|low|regular|high|super_connected)",
+            "created_at": "datetime",
+            "last_active": "datetime"
+          }
+        },
+        "example": {
+          "user_id": "user_123abc",
+          "profile_data": {
+            "interests": ["photography", "travel", "food", "technology", "nature"],
+            "feed_composition": {
+              "personal_connections": 0.60,
+              "interest_based": 0.25,
+              "trending_content": 0.10,
+              "discovery_content": 0.05
+            },
+            "activity_level": "regular",
+            "created_at": "2024-12-15T10:30:00Z",
+            "last_active": "2025-09-06T14:22:00Z"
+          }
+        }
+      },
+
+      "connections_data": {
+        "description": "User's social connections with relationship classifications",
+        "structure": {
+          "user_id": "string",
+          "connections": {
+            "connected_user_id": {
+              "circle_type": "string (inner|outer|universe)",
+              "connection_weight": "float (0.1-1.0)",
+              "connection_date": "datetime",
+              "interaction_frequency": "float (0.0-1.0)",
+              "last_interaction": "datetime"
+            }
+          }
+        },
+        "example": {
+          "user_id": "user_123abc",
+          "connections": {
+            "user_friend_001": {
+              "circle_type": "inner",
+              "connection_weight": 1.0,
+              "connection_date": "2024-12-01T08:15:00Z",
+              "interaction_frequency": 0.85,
+              "last_interaction": "2025-09-05T16:30:00Z"
+            },
+            "user_colleague_002": {
+              "circle_type": "outer",
+              "connection_weight": 0.7,
+              "connection_date": "2025-01-10T11:45:00Z",
+              "interaction_frequency": 0.45,
+              "last_interaction": "2025-09-04T09:22:00Z"
+            },
+            "user_acquaintance_003": {
+              "circle_type": "universe",
+              "connection_weight": 0.4,
+              "connection_date": "2025-02-20T15:20:00Z",
+              "interaction_frequency": 0.15,
+              "last_interaction": "2025-08-28T12:10:00Z"
+            }
+          }
+        }
+      },
+
+      "content_data": {
+        "description": "All content items that could appear in feed",
+        "structure": {
+          "content_id": "string",
+          "author_id": "string",
+          "content_metadata": {
+            "content_type": "string (image|video|text|product|community_post)",
+            "text_content": "string",
+            "description": "string",
+            "hashtags": ["array of strings"],
+            "mentions": ["array of user_ids"],
+            "location": "string",
+            "created_at": "datetime",
+            "updated_at": "datetime",
+            "media_info": {
+              "has_image": "boolean",
+              "has_video": "boolean",
+              "image_count": "integer",
+              "video_duration": "integer (seconds)"
+            }
+          },
+          "community_info": {
+            "community_id": "string (optional)",
+            "community_type": "string (optional)",
+            "is_community_content": "boolean"
+          }
+        },
+        "examples": [
+          {
+            "content_id": "post_001",
+            "author_id": "user_friend_001",
+            "content_metadata": {
+              "content_type": "image",
+              "text_content": "Beautiful sunset at Malibu Beach tonight! The colors were absolutely incredible. Perfect end to a perfect day. #sunset #photography #malibu #beach #nature #goldenhour",
+              "description": "Shot with Sony A7R IV, 85mm lens at f/1.8",
+              "hashtags": ["sunset", "photography", "malibu", "beach", "nature", "goldenhour"],
+              "mentions": ["user_photographer_jane"],
+              "location": "Malibu Beach, California",
+              "created_at": "2025-09-06T19:45:00Z",
+              "updated_at": "2025-09-06T19:45:00Z",
+              "media_info": {
+                "has_image": true,
+                "has_video": false,
+                "image_count": 3,
+                "video_duration": 0
+              }
+            },
+            "community_info": {
+              "community_id": null,
+              "community_type": null,
+              "is_community_content": false
+            }
+          },
+          {
+            "content_id": "post_002",
+            "author_id": "user_unknown_creator",
+            "content_metadata": {
+              "content_type": "video",
+              "text_content": "Quick photography tips for golden hour shots! Swipe for camera settings. #photography #tips #tutorial #camera #learning",
+              "description": "Easy tips for better golden hour photography",
+              "hashtags": ["photography", "tips", "tutorial", "camera", "learning"],
+              "mentions": [],
+              "location": null,
+              "created_at": "2025-09-06T18:30:00Z",
+              "updated_at": "2025-09-06T18:30:00Z",
+              "media_info": {
+                "has_image": false,
+                "has_video": true,
+                "image_count": 0,
+                "video_duration": 45
+              }
+            },
+            "community_info": {
+              "community_id": "community_photography_tips",
+              "community_type": "educational",
+              "is_community_content": true
+            }
+          },
+          {
+            "content_id": "post_003",
+            "author_id": "user_colleague_002",
+            "content_metadata": {
+              "content_type": "text",
+              "text_content": "Just finished an amazing hiking trail in Yosemite! The views were breathtaking. Nature never fails to amaze me. #hiking #yosemite #nature #adventure #outdoors",
+              "description": null,
+              "hashtags": ["hiking", "yosemite", "nature", "adventure", "outdoors"],
+              "mentions": ["user_hiking_buddy"],
+              "location": "Yosemite National Park, CA",
+              "created_at": "2025-09-06T16:20:00Z",
+              "updated_at": "2025-09-06T16:20:00Z",
+              "media_info": {
+                "has_image": true,
+                "has_video": false,
+                "image_count": 2,
+                "video_duration": 0
+              }
+            },
+            "community_info": {
+              "community_id": null,
+              "community_type": null,
+              "is_community_content": false
+            }
+          }
+        ]
+      }
+    },
+
+    "engagement_metrics": {
+      "description": "Real-time engagement data for all content",
+      "structure": {
+        "content_id": {
+          "likes": "integer",
+          "comments": "integer", 
+          "shares": "integer",
+          "saves": "integer",
+          "views": "integer",
+          "engagement_velocity": {
+            "likes_per_hour": "float",
+            "comments_per_hour": "float",
+            "shares_per_hour": "float",
+            "total_engagement_per_hour": "float"
+          },
+          "last_updated": "datetime"
+        }
+      },
+      "examples": {
+        "post_001": {
+          "likes": 45,
+          "comments": 12,
+          "shares": 8,
+          "saves": 23,
+          "views": 320,
+          "engagement_velocity": {
+            "likes_per_hour": 5.2,
+            "comments_per_hour": 1.8,
+            "shares_per_hour": 0.9,
+            "total_engagement_per_hour": 7.9
+          },
+          "last_updated": "2025-09-06T20:15:00Z"
+        },
+        "post_002": {
+          "likes": 128,
+          "comments": 34,
+          "shares": 19,
+          "saves": 67,
+          "views": 890,
+          "engagement_velocity": {
+            "likes_per_hour": 18.5,
+            "comments_per_hour": 4.2,
+            "shares_per_hour": 2.1,
+            "total_engagement_per_hour": 24.8
+          },
+          "last_updated": "2025-09-06T20:15:00Z"
+        },
+        "post_003": {
+          "likes": 22,
+          "comments": 6,
+          "shares": 3,
+          "saves": 11,
+          "views": 156,
+          "engagement_velocity": {
+            "likes_per_hour": 2.8,
+            "comments_per_hour": 0.7,
+            "shares_per_hour": 0.3,
+            "total_engagement_per_hour": 3.8
+          },
+          "last_updated": "2025-09-06T20:15:00Z"
+        }
+      }
+    },
+
+    "user_interaction_history": {
+      "description": "User's past interactions for interest detection and scoring",
+      "structure": {
+        "user_id": "string",
+        "interactions": [
+          {
+            "content_id": "string",
+            "interaction_type": "string (like|comment|share|save|view)",
+            "timestamp": "datetime",
+            "content_hashtags": ["array of strings"],
+            "content_author": "string"
+          }
+        ],
+        "interaction_summary": {
+          "total_likes": "integer",
+          "total_comments": "integer",
+          "total_shares": "integer",
+          "total_saves": "integer",
+          "preferred_hashtags": ["array with frequency"],
+          "preferred_content_types": ["array with frequency"],
+          "most_interacted_authors": ["array with frequency"]
+        }
+      },
+      "example": {
+        "user_id": "user_123abc",
+        "interactions": [
+          {
+            "content_id": "post_001",
+            "interaction_type": "like",
+            "timestamp": "2025-09-06T19:50:00Z",
+            "content_hashtags": ["sunset", "photography", "nature"],
+            "content_author": "user_friend_001"
+          },
+          {
+            "content_id": "post_002",
+            "interaction_type": "save",
+            "timestamp": "2025-09-06T18:35:00Z",
+            "content_hashtags": ["photography", "tips", "tutorial"],
+            "content_author": "user_unknown_creator"
+          },
+          {
+            "content_id": "post_003",
+            "interaction_type": "comment",
+            "timestamp": "2025-09-06T16:25:00Z",
+            "content_hashtags": ["hiking", "nature", "adventure"],
+            "content_author": "user_colleague_002"
+          }
+        ],
+        "interaction_summary": {
+          "total_likes": 67,
+          "total_comments": 23,
+          "total_shares": 12,
+          "total_saves": 34,
+          "preferred_hashtags": [
+            {"hashtag": "photography", "frequency": 45},
+            {"hashtag": "nature", "frequency": 38},
+            {"hashtag": "travel", "frequency": 29},
+            {"hashtag": "food", "frequency": 22},
+            {"hashtag": "sunset", "frequency": 18}
+          ],
+          "preferred_content_types": [
+            {"type": "image", "frequency": 78},
+            {"type": "video", "frequency": 34},
+            {"type": "text", "frequency": 24}
+          ],
+          "most_interacted_authors": [
+            {"author": "user_friend_001", "frequency": 28},
+            {"author": "user_colleague_002", "frequency": 19},
+            {"author": "user_photographer_jane", "frequency": 15}
+          ]
+        }
+      }
+    },
+
+    "trending_data": {
+      "description": "Global trending information updated in real-time",
+      "structure": {
+        "hashtags": {
+          "hashtag_name": {
+            "usage_count": "integer (last 24 hours)",
+            "engagement_count": "integer (total engagement on hashtag)",
+            "velocity": "float (usage per hour)",
+            "trend_score": "float (calculated trending score)",
+            "trending_since": "datetime",
+            "related_hashtags": ["array of strings"]
+          }
+        },
+        "content_types": {
+          "content_type": {
+            "trending_score": "float",
+            "usage_growth": "float (percentage)"
+          }
+        },
+        "creators": {
+          "user_id": {
+            "follower_growth": "float (percentage)",
+            "engagement_rate": "float",
+            "trending_score": "float"
+          }
+        },
+        "last_updated": "datetime"
+      },
+      "example": {
+        "hashtags": {
+          "photography": {
+            "usage_count": 234,
+            "engagement_count": 3456,
+            "velocity": 18.7,
+            "trend_score": 456.8,
+            "trending_since": "2025-09-06T12:00:00Z",
+            "related_hashtags": ["sunset", "nature", "camera", "art"]
+          },
+          "sunset": {
+            "usage_count": 189,
+            "engagement_count": 2890,
+            "velocity": 15.2,
+            "trend_score": 387.2,
+            "trending_since": "2025-09-06T14:30:00Z",
+            "related_hashtags": ["photography", "nature", "goldenhour", "beach"]
+          },
+          "travel": {
+            "usage_count": 156,
+            "engagement_count": 2234,
+            "velocity": 12.8,
+            "trend_score": 298.6,
+            "trending_since": "2025-09-06T16:15:00Z",
+            "related_hashtags": ["adventure", "explore", "vacation", "wanderlust"]
+          }
+        },
+        "content_types": {
+          "image": {
+            "trending_score": 0.85,
+            "usage_growth": 12.5
+          },
+          "video": {
+            "trending_score": 0.92,
+            "usage_growth": 18.3
+          },
+          "text": {
+            "trending_score": 0.45,
+            "usage_growth": -2.1
+          }
+        },
+        "creators": {
+          "user_photographer_jane": {
+            "follower_growth": 8.5,
+            "engagement_rate": 0.12,
+            "trending_score": 0.78
+          },
+          "user_travel_blogger": {
+            "follower_growth": 15.2,
+            "engagement_rate": 0.18,
+            "trending_score": 0.89
+          }
+        },
+        "last_updated": "2025-09-06T20:15:00Z"
+      }
+    },
+
+    "algorithm_configuration": {
+      "description": "Configuration parameters for the feed algorithm",
+      "weights": {
+        "connection_score": 0.25,
+        "interest_score": 0.20,
+        "engagement_score": 0.30,
+        "trending_score": 0.15,
+        "freshness_score": 0.10
+      },
+      "engagement_weights": {
+        "like": 1.0,
+        "comment": 2.0,
+        "share": 3.0,
+        "save": 2.5,
+        "view": 0.1
+      },
+      "circle_weights": {
+        "inner": 1.0,
+        "outer": 0.7,
+        "universe": 0.4
+      },
+      "composition_defaults": {
+        "personal_connections": 0.60,
+        "interest_based": 0.25,
+        "trending_content": 0.10,
+        "discovery_content": 0.05
+      },
+      "freshness_decay": {
+        "half_life_hours": 24,
+        "max_age_days": 7
+      },
+      "content_limits": {
+        "max_feed_size": 20,
+        "max_posts_per_author": 3,
+        "min_engagement_threshold": 1
+      }
+    },
+
+    "expected_output_format": {
+      "description": "Format of the personalized feed output",
+      "structure": {
+        "user_id": "string",
+        "feed_items": [
+          {
+            "content_id": "string",
+            "rank": "integer",
+            "score_breakdown": {
+              "connection_score": "float (0.0-1.0)",
+              "interest_score": "float (0.0-1.0)",
+              "engagement_score": "float (0.0-1.0)",
+              "trending_score": "float (0.0-1.0)",
+              "freshness_score": "float (0.0-1.0)",
+              "total_score": "float",
+              "category": "string (personal_connections|interest_based|trending_content|discovery_content)"
+            },
+            "reasoning": "string (explanation for why this content was selected)"
+          }
+        ],
+        "metadata": {
+          "generation_timestamp": "datetime",
+          "total_candidates": "integer",
+          "composition_achieved": {
+            "personal_connections": "float",
+            "interest_based": "float", 
+            "trending_content": "float",
+            "discovery_content": "float"
+          },
+          "algorithm_version": "string"
+        }
+      },
+      "example": {
+        "user_id": "user_123abc",
+        "feed_items": [
+          {
+            "content_id": "post_001",
+            "rank": 1,
+            "score_breakdown": {
+              "connection_score": 1.0,
+              "interest_score": 0.85,
+              "engagement_score": 0.65,
+              "trending_score": 0.78,
+              "freshness_score": 0.95,
+              "total_score": 0.846,
+              "category": "personal_connections"
+            },
+            "reasoning": "High-scoring content from inner circle friend with strong interest alignment (photography, sunset) and high freshness"
+          },
+          {
+            "content_id": "post_002",
+            "rank": 2,
+            "score_breakdown": {
+              "connection_score": 0.1,
+              "interest_score": 0.92,
+              "engagement_score": 0.78,
+              "trending_score": 0.85,
+              "freshness_score": 0.88,
+              "total_score": 0.702,
+              "category": "interest_based"
+            },
+            "reasoning": "Strong interest match (photography, tutorial) with high engagement and trending status"
+          }
+        ],
+        "metadata": {
+          "generation_timestamp": "2025-09-06T20:15:00Z",
+          "total_candidates": 150,
+          "composition_achieved": {
+            "personal_connections": 0.60,
+            "interest_based": 0.25,
+            "trending_content": 0.10,
+            "discovery_content": 0.05
+          },
+          "algorithm_version": "1.0"
+        }
+      }
+    },
+
+    "data_validation_rules": {
+      "user_data": {
+        "user_id": "required, non-empty string",
+        "interests": "array of strings, max 50 items",
+        "feed_composition": "object with 4 float values that sum to 1.0",
+        "activity_level": "one of: new, low, regular, high, super_connected"
+      },
+      "connections_data": {
+        "circle_type": "one of: inner, outer, universe",
+        "connection_weight": "float between 0.1 and 1.0",
+        "interaction_frequency": "float between 0.0 and 1.0"
+      },
+      "content_data": {
+        "content_id": "required, unique string",
+        "author_id": "required, non-empty string",
+        "created_at": "required, valid datetime",
+        "hashtags": "array of strings, max 20 items",
+        "content_type": "one of: image, video, text, product, community_post"
+      },
+      "engagement_metrics": {
+        "likes": "non-negative integer",
+        "comments": "non-negative integer",
+        "shares": "non-negative integer",
+        "saves": "non-negative integer",
+        "views": "non-negative integer",
+        "velocity_values": "non-negative floats"
+      }
+    }
+  }
+}

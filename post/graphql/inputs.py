@@ -81,4 +81,9 @@ class GetNestedCommentsInput(graphene.InputObjectType):
     post_uid = custom_graphql_validator.String.add_option("postUid", "GetNestedComments")(required=True)
     max_depth = graphene.Int(default_value=3)  # Maximum nesting depth to fetch
     limit = graphene.Int(default_value=10)     # Comments per level
-    offset = graphene.Int(default_value=0)       
+    offset = graphene.Int(default_value=0)
+
+class SendVibeToCommentInput(graphene.InputObjectType):
+    comment_uid = custom_graphql_validator.String.add_option("commentUid", "SendVibeToComment")(required=True)
+    individual_vibe_id = custom_graphql_validator.String.add_option("individualVibeId", "SendVibeToComment")(required=True)
+    vibe_intensity = custom_graphql_validator.Float.add_option("vibeIntensity", "SendVibeToComment")(required=True)

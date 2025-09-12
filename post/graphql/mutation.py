@@ -18,6 +18,8 @@ Used by: Mobile app, web frontend for all post-related write operations
 import graphene
 from graphene import Mutation
 from graphql import GraphQLError
+from neomodel import db
+from django.utils import timezone
 
 from post.services.notification_service import NotificationService
 from .types import *
@@ -32,6 +34,7 @@ from community.models import CommunityPost
 from post.utils.post_decorator import handle_graphql_post_errors
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 from post.utils import generate_tag
+from vibe_manager.utils import VibeUtils
 import asyncio
 
 
@@ -438,8 +441,23 @@ class CreateComment(Mutation):
                     parent_comment = Comment.nodes.get(uid=input.parent_comment_uid)
                     
                     # Ensure parent comment belongs to the same post
-                    parent_post = parent_comment.post.single()
-                    if not parent_post or parent_post.uid != target_post.uid:
+                    # parent_post = parent_comment.post.single()
+                    # if not parent_post or parent_post.uid != target_post.uid:
+                      # Use Cypher query to validate parent comment belongs to same post
+                    validation_query = """
+                    MATCH (comment:Comment {uid: $comment_uid})
+                    MATCH (post {uid: $post_uid})
+                    WHERE (comment)-[:HAS_POST]->(post) OR (post)-[:HAS_COMMENT]->(comment)
+                    RETURN count(*) as relationship_exists
+                    """
+
+                    result, _ = db.cypher_query(validation_query, {
+                        "comment_uid": input.parent_comment_uid,
+                        "post_uid": input.post_uid
+                    })
+
+                    if not result or result[0][0] == 0:
+                        print(f"🔍 DEBUG: Parent comment validation passed via Cypher")  
                         raise GraphQLError("Parent comment does not belong to the specified post")
                     
                     # Check if parent comment is deleted
@@ -479,7 +497,7 @@ class CreateComment(Mutation):
                 comment.parent_comment.connect(parent_comment)
 
             # EXISTING LOGIC - Increment comment count in Redis for performance
-            # increment_post_comment_count(target_post.uid)
+            increment_post_comment_count(target_post.uid)
             
             # EXISTING LOGIC - Send notification to post creator about new comment
             post_creator = target_post.created_by.single()
@@ -1197,6 +1215,139 @@ class DeletePinedPost(Mutation):
             return DeletePinedPost(success=False, message=message)
 
 
+class SendVibeToComment(Mutation):
+    """
+    Sends a vibe reaction to a comment using existing vibe system.
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    comment_vibe = graphene.Field('post.graphql.types.CommentVibeType')
+    
+    class Arguments:
+        input = SendVibeToCommentInput()
+    
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            # Get authenticated user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Validate vibe intensity (1.0 to 5.0)
+            if not (1.0 <= input.vibe_intensity <= 5.0):
+                return SendVibeToComment(
+                    success=False,
+                    message="Vibe intensity must be between 1.0 and 5.0"
+                )
+            try:
+                clean_intensity = round(float(input.vibe_intensity), 2)
+            except (ValueError, TypeError):
+                return SendVibeToComment(
+                    success=False,
+                    message="Invalid vibe intensity format"
+                )
+            if not (1.0 <= clean_intensity <= 5.0):
+               return SendVibeToComment(
+                   success=False,
+                   message="Vibe intensity must be between 1.0 and 5.0"
+                )
+            
+            # Get the individual vibe from PostgreSQL
+            try:
+                individual_vibe = IndividualVibe.objects.get(id=input.individual_vibe_id)
+            except IndividualVibe.DoesNotExist:
+                return SendVibeToComment(
+                    success=False,
+                    message="Invalid vibe selected"
+                )
+            
+            # Find the comment
+            try:
+                comment = Comment.nodes.get(uid=input.comment_uid)
+            except Comment.DoesNotExist:
+                return SendVibeToComment(
+                    success=False,
+                    message="Comment not found"
+                )
+            
+            # Check if user has already reacted to this comment with the same vibe
+            existing_vibe = None
+            try:
+                # Use Cypher query to check for existing vibe reaction (any vibe type from this user)
+                query = """
+                MATCH (u:Users {uid: $user_uid})-[:REACTED_BY]-(cv:CommentVibe)<-[:HAS_VIBE_REACTION]-(c:Comment {uid: $comment_uid})
+                WHERE cv.is_active = true
+                RETURN cv
+                """
+                results, _ = db.cypher_query(query, {
+                    'user_uid': user_node.uid,
+                    'comment_uid': input.comment_uid
+                })
+                
+                if results:
+                    # Update existing vibe instead of creating new one
+                    existing_vibe_node = CommentVibe.inflate(results[0][0])
+                    existing_vibe_node.individual_vibe_id = input.individual_vibe_id  # Update to new vibe type
+                    existing_vibe_node.vibe_name = individual_vibe.name_of_vibe
+                    existing_vibe_node.vibe_intensity = clean_intensity
+                    existing_vibe_node.reaction_type = "vibe"
+                    existing_vibe_node.timestamp = timezone.now()
+                    existing_vibe_node.is_active = True
+                    existing_vibe_node.save()
+                    
+                    return SendVibeToComment(
+                        success=True,
+                        message="Vibe updated successfully",
+                        comment_vibe=CommentVibeType.from_neomodel(existing_vibe_node)
+                    )
+            except Exception as e:
+                # Continue if query fails - better to allow duplicate than block valid reactions
+                pass
+            
+            # Store vibe reaction in Neo4j
+            comment_vibe = CommentVibe(
+                individual_vibe_id=input.individual_vibe_id,
+                vibe_name=individual_vibe.name_of_vibe,
+                vibe_intensity=clean_intensity,
+                reaction_type="vibe"
+            )
+            comment_vibe.save()
+            
+            # Connect to user and comment using correct relationship names
+            comment_vibe.reacted_by.connect(user_node)
+            
+            # Connect from comment side (CommentVibe uses RelationshipFrom)
+            comment.vibe_reactions.connect(comment_vibe)
+            
+            # Update user's vibe score using existing system
+            # Use the weightage values from IndividualVibe
+            vibe_score_multiplier = clean_intensity / 5.0  # Convert to 0.0-1.0 multiplier
+            
+            # Apply weightages from your vibe system
+            adjusted_score = (
+                individual_vibe.weightage_iaq + 
+                individual_vibe.weightage_iiq + 
+                individual_vibe.weightage_ihq + 
+                individual_vibe.weightage_isq
+            ) / 4.0 * vibe_score_multiplier
+            
+            VibeUtils.onVibeCreated(user_node, individual_vibe.name_of_vibe, adjusted_score)
+            
+            return SendVibeToComment(
+                success=True,
+                message="Vibe sent to comment successfully!",
+                comment_vibe=CommentVibeType.from_neomodel(comment_vibe)
+            )
+            
+        except Exception as e:
+            return SendVibeToComment(
+                success=False,
+                message=f"Error sending vibe: {str(e)}"
+            )
+
+
 class Mutation(graphene.ObjectType):
     """
     Main GraphQL Mutation class exposing all post-related write operations.
@@ -1223,6 +1374,7 @@ class Mutation(graphene.ObjectType):
     create_post_comment=CreateComment.Field()      # Add comments to posts
     update_post_comment=UpdateComment.Field()      # Edit existing comments
     delete_post_comment=DeleteComment.Field()      # Remove comments
+    send_vibe_to_comment=SendVibeToComment.Field()  # Send vibes to comments
 
     # Reaction/Like operations
     create_post_reaction=CreateLike.Field()         # Add reactions/vibes to posts

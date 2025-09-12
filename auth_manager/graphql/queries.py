@@ -1884,7 +1884,61 @@ class Query(graphene.ObjectType):
         """
         return StatisticsType.get_statistics()
 
-
+    back_profile_data_by_user_uid = graphene.Field(
+        BackProfileDataType, 
+        user_uid=graphene.String(required=True),
+        time_filter=graphene.String(description="Time filter: '15_days', '1_month', '3_months', '6_months', or null for all time")
+        # Options: "15_days", "1_month", "3_months", "6_months", or null for all time
+    )
+    def resolve_back_profile_data_by_user_uid(self, info, user_uid, time_filter=None):
+        """
+        Retrieves back profile screen data for a specific user including static metrics.
+        
+        Returns comprehensive back profile data including reviews, vibes, and calculated
+        metrics (IQ, Appeal, Social, Humanity, Vibe Match) for the profile screen.
+        Only connected users can access back profile data.
+        
+        Args:
+            info: GraphQL resolve info context
+            user_uid (str): Target user's UID to retrieve back profile data for (required)
+            time_filter (str): Optional time filter ("15_days", "1_month", "3_months", "6_months")
+        
+        Returns:
+            BackProfileDataType: Complete back profile data object
+        
+        Raises:
+            GraphQLError: If user not found, not connected, or database error
+        
+        Note:
+            - Requires login authentication
+            - Only connected users can access back profile data
+            - Returns only back profile related data
+            - Includes static algorithm metrics for now
+        """
+        payload = info.context.payload
+        current_user_id = payload.get('user_id')
+        current_user = Users.nodes.get(user_id=current_user_id)
+        target_user = Users.nodes.get(uid=user_uid)
+        
+        query = """
+        MATCH (current_user:Users {uid: $current_user_uid})-[c1:HAS_CONNECTION]->(conn:Connection)
+        MATCH (conn)-[c3:HAS_CIRCLE]->(circle:Circle)
+        MATCH (target_user:Users {uid: $target_user_uid})-[c2:HAS_CONNECTION]->(conn)
+        RETURN conn LIMIT 1
+        """
+        params = {
+            "current_user_uid": current_user.uid,
+            "target_user_uid": target_user.uid,
+        }
+        result = db.cypher_query(query, params)
+        
+        # If no connection found, raise error
+        if not result or not result[0]:
+            raise GraphQLError("You must be connected to this user to view their back profile")
+        
+        profile = target_user.profile.single()
+        
+        return BackProfileDataType.from_neomodel(target_user, profile, time_filter)
 
 
 class QueryV2(graphene.ObjectType):

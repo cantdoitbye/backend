@@ -6,6 +6,7 @@ from auth_manager.Utils import generate_presigned_url
 from auth_manager.models import Profile, Users
 from vibe_manager.models import IndividualVibe
 from post.redis import increment_post_comment_count,get_post_comment_count,get_post_like_count
+from connection.utils.score_generator import generate_connection_score
 
 from connection.utils import relation as RELATIONUTILLS
 from post.utils.time_format import time_ago 
@@ -37,6 +38,7 @@ class PostType(ObjectType):
     comment_count = graphene.Int()
     vibes_count=graphene.Int()
     vibe_score = graphene.Float()
+    score = graphene.Float()
     created_at = graphene.DateTime()
     updated_at = graphene.DateTime()
     is_deleted = graphene.Boolean()
@@ -135,6 +137,7 @@ class PostType(ObjectType):
                 comment_count=get_post_comment_count(post.uid),
                 vibes_count=get_post_like_count(post.uid),
                 vibe_score=post.vibe_score,
+                score=generate_connection_score(),
                 created_at=post.created_at,
                 updated_at=post.updated_at,
                 is_deleted=post.is_deleted,
@@ -187,6 +190,7 @@ class CommentType(ObjectType):
     reply_count = graphene.Int()                          # Total number of replies
     depth_level = graphene.Int()                          # Nesting depth (0 = top-level)
     is_reply = graphene.Boolean()                         # True if this is a reply to another comment
+    vibe_reactions = graphene.List(lambda: CommentVibeType)  # Vibe reactions on this comment
 
     @classmethod
     def from_neomodel(cls, comment, info=None, max_reply_depth=2, current_depth=0):
@@ -297,6 +301,30 @@ class CommentType(ObjectType):
         except Exception as e:
             print(f"Error processing nested comment data: {e}")
 
+        # Fetch vibe reactions for this comment
+        vibe_reactions = []
+        try:
+            print(f"DEBUG: Checking vibe reactions for comment {comment.uid}")
+            if hasattr(comment, 'vibe_reactions'):
+                vibe_reaction_nodes = list(comment.vibe_reactions.all())
+                print(f"DEBUG: Found {len(vibe_reaction_nodes)} vibe reaction nodes")
+                if vibe_reaction_nodes:
+                    # Filter out inactive reactions and sort by timestamp
+                    active_vibes = [vr for vr in vibe_reaction_nodes if vr.is_active]
+                    print(f"DEBUG: Found {len(active_vibes)} active vibe reactions")
+                    active_vibes.sort(key=lambda x: x.timestamp, reverse=True)
+                    vibe_reactions = [CommentVibeType.from_neomodel(vr) for vr in active_vibes]
+                    print(f"DEBUG: Created {len(vibe_reactions)} CommentVibeType objects")
+                else:
+                    print(f"DEBUG: No vibe reaction nodes found for comment {comment.uid}")
+                    vibe_reactions = []  # Explicitly return empty list
+            else:
+                print(f"DEBUG: Comment does not have vibe_reactions attribute")
+                vibe_reactions = []
+        except Exception as e:
+            print(f"Error fetching vibe reactions: {e}")
+            vibe_reactions = []
+
         return cls(
             uid=comment.uid,
             post=PostType.from_neomodel(related_post, info) if related_post else None,
@@ -317,7 +345,8 @@ class CommentType(ObjectType):
             replies=replies,
             reply_count=reply_count,  # This is the count of replies to THIS comment
             depth_level=depth_level,
-            is_reply=is_reply
+            is_reply=is_reply,
+            vibe_reactions=vibe_reactions
         )
     
 class NestedCommentsResponse(ObjectType):
@@ -511,6 +540,31 @@ class LikeNonPostNonUserType(ObjectType):
             vibe=like.vibe,
             timestamp=like.timestamp,
             is_deleted=like.is_deleted
+        )
+
+class CommentVibeType(ObjectType):
+    uid = graphene.String()
+    comment = graphene.Field(lambda: CommentType)
+    user = graphene.Field(UserType)
+    individual_vibe_id = graphene.String()
+    vibe_name = graphene.String()
+    vibe_intensity = graphene.Float()
+    reaction_type = graphene.String()
+    timestamp = graphene.DateTime()
+    is_active = graphene.Boolean()
+
+    @classmethod
+    def from_neomodel(cls, comment_vibe):
+        return cls(
+            uid=comment_vibe.uid,
+            comment=None,  # Avoid circular reference - don't include full comment object
+            user=UserType.from_neomodel(comment_vibe.reacted_by.single()) if comment_vibe.reacted_by.single() else None,
+            individual_vibe_id=str(comment_vibe.individual_vibe_id),
+            vibe_name=comment_vibe.vibe_name,
+            vibe_intensity=comment_vibe.vibe_intensity,
+            reaction_type=comment_vibe.reaction_type,
+            timestamp=comment_vibe.timestamp,
+            is_active=comment_vibe.is_active
         )
 
 
@@ -1138,6 +1192,7 @@ class PostRecommendedType(ObjectType):
     comment_count = graphene.Int()
     vibes_count=graphene.Int()
     vibe_score = graphene.Float()
+    score = graphene.Float()
     created_at = graphene.String()
     created_at_datetime = graphene.DateTime()
     is_deleted = graphene.Boolean()
@@ -1161,6 +1216,7 @@ class PostRecommendedType(ObjectType):
             comment_count=get_post_comment_count(uid[0]),
             vibes_count=get_post_like_count(uid[0]),
             vibe_score=post['vibe_score'],
+            score=generate_connection_score(),
             created_at=time_ago (created_at),
             created_at_datetime=created_at,
             is_deleted=post['is_deleted'],

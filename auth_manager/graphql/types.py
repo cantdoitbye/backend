@@ -7,6 +7,7 @@ from graphene_django import DjangoObjectType
 from django.conf import settings
 from community.models import CommunityReactionManager
 from post.models import PostReactionManager
+from connection.utils.score_generator import generate_connection_score
 
 
 from django.core.files.storage import default_storage
@@ -421,6 +422,7 @@ class AchievementNonProfileType(ObjectType):
      to_date = graphene.DateTime()
      file_id =graphene.List(graphene.String)
      file_url=graphene.List(FileDetailType)
+     score = graphene.Float()
 
      @classmethod
      def from_neomodel(cls, achievement):
@@ -435,7 +437,7 @@ class AchievementNonProfileType(ObjectType):
                 to_date = achievement.to_date,
                 file_id=achievement.file_id,
                 file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in achievement.file_id] if achievement.file_id else None),
-                
+                score=generate_connection_score()
             )
         else:
             created_on_unix=achievement.get('created_on')
@@ -459,8 +461,8 @@ class AchievementNonProfileType(ObjectType):
                 file_url = (
                     [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) 
                     for file_id in achievement.get('file_id', [])] if achievement.get('file_id') else None
-                )
-
+                ),
+                score=generate_connection_score()
             )
 
 
@@ -473,6 +475,7 @@ class EducationNonProfileType(ObjectType):
      created_on =  graphene.DateTime()
      file_id =graphene.List(graphene.String)
      file_url=graphene.List(FileDetailType)
+     score = graphene.Float()
      
      
      @classmethod
@@ -487,7 +490,7 @@ class EducationNonProfileType(ObjectType):
                 created_on =  education.created_on,
                 file_id=education.file_id,
                 file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in education.file_id] if education.file_id else None),
-                
+                score=generate_connection_score()
             )
         else:
             created_on_unix=education.get('created_on')
@@ -510,8 +513,8 @@ class EducationNonProfileType(ObjectType):
                 file_url = (
                     [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) 
                     for file_id in education.get('file_id', [])] if education.get('file_id') else None
-                )
-
+                ),
+                score=generate_connection_score()
             )
 
 class SkillNonProfileType(ObjectType):
@@ -522,6 +525,7 @@ class SkillNonProfileType(ObjectType):
      created_on =  graphene.DateTime()
      file_id =graphene.List(graphene.String)
      file_url=graphene.List(FileDetailType)
+     score = graphene.Float()
      
      
      @classmethod
@@ -535,7 +539,7 @@ class SkillNonProfileType(ObjectType):
                 created_on =  skill.created_on,
                 file_id=skill.file_id,
                 file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in skill.file_id] if skill.file_id else None),
-                
+                score=generate_connection_score()
             )
         else:
             created_on_unix=skill.get('created_on')
@@ -558,7 +562,7 @@ class SkillNonProfileType(ObjectType):
                     [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) 
                     for file_id in skill.get('file_id', [])] if skill.get('file_id') else None
                 ),
-
+                score=generate_connection_score()
             )
      
 
@@ -642,6 +646,7 @@ class ExperienceNonProfileType(ObjectType):
      to_date = graphene.DateTime()
      file_id =graphene.List(graphene.String)
      file_url=graphene.List(FileDetailType)
+     score = graphene.Float()
      
      @classmethod
      def from_neomodel(cls, experience):
@@ -658,8 +663,8 @@ class ExperienceNonProfileType(ObjectType):
                 file_url = (
                     [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) 
                     for file_id in experience.file_id] if experience.file_id else None
-                )
-                
+                ),
+                score=generate_connection_score()
             )
         else:
             created_on_unix=experience.get('created_on')
@@ -683,8 +688,8 @@ class ExperienceNonProfileType(ObjectType):
                 file_url = (
                     [FileDetailType(**generate_presigned_url.generate_file_info(file_id)) 
                     for file_id in experience.get('file_id', [])] if experience.get('file_id') else None
-                )
-
+                ),
+                score=generate_connection_score()
             )
 
 
@@ -1057,6 +1062,7 @@ class ProfileInfoType(ObjectType):
     user = graphene.Field(UserType)
     onboarding_status = graphene.List(lambda:OnboardingStatusNonProfileType)
     score = graphene.Field(lambda:ScoreNonProfileType)
+    random_score = graphene.Float()
     interest = graphene.List(lambda:InterestNonProfileType)
     achievement=graphene.List(lambda:AchievementNonProfileType)
     experience=graphene.List(lambda:ExperienceNonProfileType)
@@ -1114,6 +1120,7 @@ class ProfileInfoType(ObjectType):
             state=profile.get('state'),
             onboarding_status=[OnboardingStatusNonProfileType.from_neomodel(onboardingStatus)],
             score=ScoreNonProfileType.from_neomodel(score) if score else None,
+            random_score=generate_connection_score(),
             interest=[InterestNonProfileType.from_neomodel(interest) for interest in interest_node] if interest_node else [],
             achievement=[AchievementNonProfileType.from_neomodel(achievement) for achievement in achievement_node] if achievement_node else [],
             experience=[ExperienceNonProfileType.from_neomodel(experience) for experience in experience_node] if experience_node else [],
@@ -1312,29 +1319,40 @@ class UserInfoTypeV2(ObjectType):
                 profile=ProfileDataTypeV2.from_neomodel(profile_data),  
             )
 
-
 class BackProfileReviewType(ObjectType):
     uid = graphene.String()
-    byuser = graphene.Field(UserInfoType)  # Assuming UserType is already defined
-    touser = graphene.Field(UserInfoType)  # Assuming UserType is already defined
+    byuser = graphene.Field(UserInfoType)  
+    touser = graphene.Field(UserInfoType)
     reaction = graphene.String()
     vibe = graphene.Float()
     title = graphene.String()
     content = graphene.String()
-    file_id = graphene.String()
+    images = graphene.List(FileDetailType)
+    rating = graphene.Int()
     is_deleted = graphene.Boolean()
-    connection=graphene.Field(ConnectionNoUserType)
+    timestamp = graphene.String()
+    connection = graphene.Field(ConnectionNoUserType)
 
     @classmethod
     def from_neomodel(cls, users_review):
-        
         byuser_node = users_review.byuser.single()
         touser_node = users_review.touser.single()
-
+        
         if not byuser_node or not touser_node:
             return None
 
-        # Cypher query to find a common connection node between byuser and touser
+        images = []
+        if hasattr(users_review, 'image_ids') and users_review.image_ids:
+            for image_id in users_review.image_ids:
+                if image_id:
+                    file_info = generate_presigned_url.generate_file_info(image_id)
+                    if file_info:
+                        images.append(FileDetailType(**file_info))
+        elif hasattr(users_review, 'file_id') and users_review.file_id:
+            file_info = generate_presigned_url.generate_file_info(users_review.file_id)
+            if file_info:
+                images.append(FileDetailType(**file_info))
+
         query = """
         MATCH (byuser:Users {uid: $byuser_uid})-[c1:HAS_CONNECTION]->(conn:Connection)
         MATCH (conn)-[c3:HAS_CIRCLE]->(circle:Circle)
@@ -1347,39 +1365,222 @@ class BackProfileReviewType(ObjectType):
         }
         result = db.cypher_query(query, params)
         
-        if result and result[0]: 
-            
+        connection_instance = None
+        if result and result[0]:
             connection_node = result[0][0][0]
-            circle_node=result[0][0][1]
-            
-            connection_instance = ConnectionNoUserType.from_neomodel(connection_node,circle_node)
-            
-            return cls(
-                uid=users_review.uid,
-                byuser=UserInfoType.from_neomodel(byuser_node),
-                touser=UserInfoType.from_neomodel(touser_node),
-                reaction=users_review.reaction,
-                vibe=users_review.vibe,
-                title=users_review.title,
-                content=users_review.content,
-                file_id=users_review.file_id,
-                is_deleted=users_review.is_deleted,
-                connection=connection_instance
-            )
-        else:
-            return cls(
-                uid=users_review.uid,
-                byuser=UserInfoType.from_neomodel(byuser_node),
-                touser=UserInfoType.from_neomodel(touser_node),
-                reaction=users_review.reaction,
-                vibe=users_review.vibe,
-                title=users_review.title,
-                content=users_review.content,
-                file_id=users_review.file_id,
-                is_deleted=users_review.is_deleted,
-                
-            )  # Return None if no common connection is found
+            circle_node = result[0][0][1]
+            connection_instance = ConnectionNoUserType.from_neomodel(connection_node, circle_node)
 
+        rating = getattr(users_review, 'rating', 4)
+        timestamp = None
+        if hasattr(users_review, 'timestamp') and users_review.timestamp:
+            timestamp = users_review.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+        return cls(
+            uid=users_review.uid,
+            byuser=UserInfoType.from_neomodel(byuser_node),
+            touser=UserInfoType.from_neomodel(touser_node),
+            reaction=users_review.reaction,
+            vibe=users_review.vibe,
+            title=users_review.title,
+            content=users_review.content,
+            images=images,
+            rating=rating,
+            is_deleted=users_review.is_deleted,
+            timestamp=timestamp,
+            connection=connection_instance
+        )
+    
+class PeerReviewStatsType(ObjectType):
+    """
+    Statistics for peer reviews shown in the chart.
+    """
+    one_star_percentage = graphene.Float()
+    two_star_percentage = graphene.Float()
+    three_star_percentage = graphene.Float()
+    four_star_percentage = graphene.Float()
+    five_star_percentage = graphene.Float()
+
+    @classmethod
+    def from_data(cls, reviews):
+        if not reviews:
+            return cls(
+                one_star_percentage=0.0,
+                two_star_percentage=0.0,
+                three_star_percentage=0.0,
+                four_star_percentage=0.0,
+                five_star_percentage=0.0,
+            )
+        
+        # Count ratings
+        rating_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        for review in reviews:
+            rating = getattr(review, 'rating', 4)
+            if 1 <= rating <= 5:
+                rating_counts[rating] += 1
+        
+        total = len(reviews)
+        
+        return cls(
+            one_star_percentage=round((rating_counts[1] / total) * 100, 1),
+            two_star_percentage=round((rating_counts[2] / total) * 100, 1),
+            three_star_percentage=round((rating_counts[3] / total) * 100, 1),
+            four_star_percentage=round((rating_counts[4] / total) * 100, 1),
+            five_star_percentage=round((rating_counts[5] / total) * 100, 1),
+        )
+      
+class BackProfileVibeDataType(ObjectType):
+    """
+    Vibe data specifically calculated from back profile reviews.
+    Only shows vibes that have been used in reviews.
+    """
+    vibe_name = graphene.String()
+    vibes_count = graphene.Int()
+    average_vibe_score = graphene.Float()
+    vibe_cumulative_score = graphene.Float()
+
+class BackProfileDataType(ObjectType):
+    """
+    Complete back profile data type for the profile screen.
+    """
+    user_info = graphene.Field(UserInfoType)
+    
+    iq_score = graphene.Float()
+    appeal_score = graphene.Float()
+    social_score = graphene.Float()
+    humanity_score = graphene.Float()
+    vibe_match_percentage = graphene.Int()
+    
+    overall_rating = graphene.Float()
+    total_reviews = graphene.Int()
+    
+    vibes_data = graphene.List(BackProfileVibeDataType)
+    
+    recent_reviews = graphene.List(BackProfileReviewType)
+    
+    peer_review_stats = graphene.Field(PeerReviewStatsType)
+
+    @classmethod
+    def from_neomodel(cls, user_node, profile, time_filter=None):
+        all_reviews = list(user_node.user_back_profile_review.all())
+        
+        if time_filter:
+            filtered_reviews = cls._filter_reviews_by_time(all_reviews, time_filter)
+        else:
+            filtered_reviews = all_reviews
+        
+        if filtered_reviews:
+            total_rating = sum([getattr(review, 'rating', 4) for review in filtered_reviews])
+            overall_rating = total_rating / len(filtered_reviews)
+        else:
+            overall_rating = 0.0
+        
+        vibes_data = cls._calculate_vibes_from_reviews(filtered_reviews)
+        
+        recent_reviews = [BackProfileReviewType.from_neomodel(review) for review in filtered_reviews[:5]]
+        
+        return cls(
+            user_info=UserInfoType.from_neomodel(user_node),
+            iq_score=3.5,
+            appeal_score=4.0,
+            social_score=4.2,
+            humanity_score=3.8,
+            vibe_match_percentage=70,
+            overall_rating=round(overall_rating, 1),
+            total_reviews=len(filtered_reviews),
+            vibes_data=vibes_data,
+            recent_reviews=recent_reviews,
+            peer_review_stats=PeerReviewStatsType.from_data(filtered_reviews)  # Stats from filtered reviews
+        )
+    
+    @classmethod
+    def _filter_reviews_by_time(cls, reviews, time_filter):
+        """
+        Filter reviews based on time period.
+        """
+        from datetime import datetime, timedelta
+        import pytz
+        
+        now = datetime.now(pytz.UTC)
+        
+        time_deltas = {
+            "15_days": timedelta(days=15),
+            "1_month": timedelta(days=30),
+            "3_months": timedelta(days=90),
+            "6_months": timedelta(days=180),
+        }
+        
+        if time_filter not in time_deltas:
+            return reviews  # Return all if invalid filter
+        
+        cutoff_date = now - time_deltas[time_filter]
+        
+        # Filter reviews
+        filtered_reviews = []
+        for review in reviews:
+            if hasattr(review, 'timestamp') and review.timestamp:
+                try:
+                    review_date = review.timestamp
+                    
+                    if hasattr(review_date, 'to_native'):
+                        review_date = review_date.to_native()
+                    
+                    if review_date.tzinfo is None:
+                        review_date = pytz.UTC.localize(review_date)
+                    
+                    if cutoff_date.tzinfo is None:
+                        cutoff_date = pytz.UTC.localize(cutoff_date)
+                    
+                    if review_date >= cutoff_date:
+                        filtered_reviews.append(review)
+                        
+                except Exception as e:
+                    filtered_reviews.append(review)
+            else:
+                filtered_reviews.append(review)
+        
+        return filtered_reviews
+    
+    @classmethod
+    def _calculate_vibes_from_reviews(cls, reviews):
+        """
+        Calculate vibe statistics from back profile reviews only.
+        """
+        vibe_stats = {}
+        
+        # Process each review to collect vibe data
+        for review in reviews:
+            reaction = review.reaction
+            vibe_score = getattr(review, 'vibe', 0)
+            
+            if reaction:
+                if reaction not in vibe_stats:
+                    vibe_stats[reaction] = {
+                        'count': 0,
+                        'total_score': 0,
+                        'name': reaction
+                    }
+                
+                vibe_stats[reaction]['count'] += 1
+                vibe_stats[reaction]['total_score'] += vibe_score
+        
+        vibes_data = []
+        for vibe_name, stats in vibe_stats.items():
+            average_score = stats['total_score'] / stats['count'] if stats['count'] > 0 else 0
+            vibes_data.append(
+                BackProfileVibeDataType(
+                    vibe_name=vibe_name,
+                    vibes_count=str(stats['count']),
+                    vibe_cumulative_score=str(stats['total_score']),  # Convert to string
+                    average_vibe_score=round(average_score, 1)
+                )
+            )
+        
+        # Sort by count (most popular vibes first)
+        vibes_data.sort(key=lambda x: int(x.vibes_count), reverse=True)
+        
+        return vibes_data
+    
 class ProfileDataReactionType(ObjectType):
     uid = graphene.String()
     user = graphene.Field(UserInfoType)

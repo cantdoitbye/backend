@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard - Ooumph Feed Algorithm</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .websocket-connected {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen">
+        <!-- Navigation -->
+        <nav class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16">
+                    <div class="flex items-center">
+                        <h1 class="text-xl font-semibold text-gray-900">Analytics Dashboard</h1>
+                        <span id="connection-status" class="ml-4 px-2 py-1 text-xs rounded-full bg-gray-200 text-gray-600">
+                            Connecting...
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <select id="timeRange" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                            <option value="1h">Last Hour</option>
+                            <option value="6h">Last 6 Hours</option>
+                            <option value="24h" selected>Last 24 Hours</option>
+                            <option value="7d">Last 7 Days</option>
+                        </select>
+                        <button id="refreshData" class="bg-blue-500 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-600">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+            <!-- System Health Overview -->
+            <div class="mb-8">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">System Health</h2>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="metric-card text-white p-6 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm opacity-80">Response Time</p>
+                                <p id="avg-response-time" class="text-2xl font-bold">--</p>
+                            </div>
+                            <div class="text-3xl opacity-60">⚡</div>
+                        </div>
+                    </div>
+                    <div class="metric-card text-white p-6 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm opacity-80">Cache Hit Rate</p>
+                                <p id="cache-hit-rate" class="text-2xl font-bold">--</p>
+                            </div>
+                            <div class="text-3xl opacity-60">📊</div>
+                        </div>
+                    </div>
+                    <div class="metric-card text-white p-6 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm opacity-80">Active Users</p>
+                                <p id="active-users" class="text-2xl font-bold">--</p>
+                            </div>
+                            <div class="text-3xl opacity-60">👥</div>
+                        </div>
+                    </div>
+                    <div class="metric-card text-white p-6 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm opacity-80">Error Rate</p>
+                                <p id="error-rate" class="text-2xl font-bold">--</p>
+                            </div>
+                            <div class="text-3xl opacity-60">⚠️</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <!-- Response Time Chart -->
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Response Time Trends</h3>
+                    <canvas id="responseTimeChart" width="400" height="200"></canvas>
+                </div>
+
+                <!-- Feed Generation Chart -->
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Feed Generation Metrics</h3>
+                    <canvas id="feedMetricsChart" width="400" height="200"></canvas>
+                </div>
+
+                <!-- User Engagement Chart -->
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">User Engagement</h3>
+                    <canvas id="engagementChart" width="400" height="200"></canvas>
+                </div>
+
+                <!-- Cache Performance Chart -->
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Cache Performance</h3>
+                    <canvas id="cacheChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Active Experiments -->
+            <div class="bg-white rounded-lg shadow">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Active A/B Test Experiments</h2>
+                </div>
+                <div class="p-6">
+                    <div id="experiments-list" class="space-y-4">
+                        <!-- Experiments will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Real-time Analytics JavaScript -->
+    <script>
+        class AnalyticsDashboard {
+            constructor() {
+                this.ws = null;
+                this.charts = {};
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                
+                this.initializeWebSocket();
+                this.initializeCharts();
+                this.setupEventListeners();
+                this.loadInitialData();
+            }
+
+            initializeWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws/analytics/dashboard/`;
+                
+                this.ws = new WebSocket(wsUrl);
+                
+                this.ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    this.updateConnectionStatus('connected');
+                    this.reconnectAttempts = 0;
+                    this.requestDashboardData();
+                };
+                
+                this.ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    this.handleWebSocketMessage(data);
+                };
+                
+                this.ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    this.updateConnectionStatus('disconnected');
+                    this.attemptReconnect();
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    this.updateConnectionStatus('error');
+                };
+            }
+
+            updateConnectionStatus(status) {
+                const statusElement = document.getElementById('connection-status');
+                const statusMap = {
+                    'connecting': { text: 'Connecting...', class: 'bg-yellow-200 text-yellow-800' },
+                    'connected': { text: 'Connected', class: 'bg-green-200 text-green-800 websocket-connected' },
+                    'disconnected': { text: 'Disconnected', class: 'bg-red-200 text-red-800' },
+                    'error': { text: 'Error', class: 'bg-red-200 text-red-800' }
+                };
+                
+                const config = statusMap[status];
+                statusElement.textContent = config.text;
+                statusElement.className = `ml-4 px-2 py-1 text-xs rounded-full ${config.class}`;
+            }
+
+            attemptReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                    
+                    setTimeout(() => {
+                        this.initializeWebSocket();
+                    }, Math.pow(2, this.reconnectAttempts) * 1000); // Exponential backoff
+                }
+            }
+
+            requestDashboardData() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'request_dashboard_data'
+                    }));
+                }
+            }
+
+            handleWebSocketMessage(data) {
+                switch (data.type) {
+                    case 'dashboard_data':
+                        this.updateDashboardData(data.data);
+                        break;
+                    case 'metric_update':
+                        this.updateMetric(data);
+                        break;
+                    case 'experiment_update':
+                        this.updateExperiment(data);
+                        break;
+                    case 'system_alert':
+                        this.showAlert(data);
+                        break;
+                }
+            }
+
+            updateDashboardData(data) {
+                // Update metric cards
+                this.updateMetricCards(data.system_health);
+                
+                // Update charts
+                this.updateCharts(data.metrics);
+                
+                // Update experiments
+                this.updateExperimentsList(data.active_experiments);
+            }
+
+            updateMetricCards(systemHealth) {
+                if (systemHealth) {
+                    document.getElementById('avg-response-time').textContent = 
+                        `${systemHealth.response_time || '--'}ms`;
+                    document.getElementById('cache-hit-rate').textContent = 
+                        `${Math.round((systemHealth.services?.redis?.hit_rate || 0) * 100)}%`;
+                    document.getElementById('error-rate').textContent = 
+                        `${systemHealth.error_rate_percent || '--'}%`;
+                    document.getElementById('active-users').textContent = 
+                        systemHealth.active_users || '--';
+                }
+            }
+
+            initializeCharts() {
+                // Response Time Chart
+                const responseTimeCtx = document.getElementById('responseTimeChart').getContext('2d');
+                this.charts.responseTime = new Chart(responseTimeCtx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Response Time (ms)',
+                            data: [],
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+
+                // Add other charts...
+                this.initializeOtherCharts();
+            }
+
+            initializeOtherCharts() {
+                // Placeholder for other chart initializations
+                // Feed Metrics, Engagement, Cache charts would be initialized here
+            }
+
+            updateCharts(metrics) {
+                // Update chart data with new metrics
+                // This would process the metrics data and update the charts
+            }
+
+            updateExperimentsList(experiments) {
+                const container = document.getElementById('experiments-list');
+                
+                if (!experiments || experiments.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500">No active experiments</p>';
+                    return;
+                }
+
+                container.innerHTML = experiments.map(exp => `
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h4 class="font-medium text-gray-900">${exp.name}</h4>
+                                <p class="text-sm text-gray-600">Status: ${exp.status}</p>
+                                <p class="text-sm text-gray-600">Traffic: ${exp.traffic_allocation}%</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-medium">${exp.participants_count} participants</p>
+                                <p class="text-xs text-gray-500">${exp.days_running} days running</p>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            setupEventListeners() {
+                document.getElementById('refreshData').addEventListener('click', () => {
+                    this.requestDashboardData();
+                });
+
+                document.getElementById('timeRange').addEventListener('change', (e) => {
+                    this.loadDataForTimeRange(e.target.value);
+                });
+            }
+
+            loadInitialData() {
+                // Load initial data via API if WebSocket is not connected
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.loadDataViaAPI();
+                }
+            }
+
+            loadDataViaAPI() {
+                fetch('/api/analytics/dashboard/metrics/')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            this.updateDashboardData(data.data);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Failed to load data via API:', error);
+                    });
+            }
+
+            showAlert(alertData) {
+                // Show system alert notification
+                const alertElement = document.createElement('div');
+                alertElement.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 ${
+                    alertData.level === 'error' ? 'bg-red-500' : 'bg-yellow-500'
+                } text-white`;
+                alertElement.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span>${alertData.message}</span>
+                        <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-white hover:text-gray-200">×</button>
+                    </div>
+                `;
+                document.body.appendChild(alertElement);
+                
+                // Auto-remove after 5 seconds
+                setTimeout(() => {
+                    if (alertElement.parentElement) {
+                        alertElement.remove();
+                    }
+                }, 5000);
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new AnalyticsDashboard();
+        });
+    </script>
+</body>
+</html>

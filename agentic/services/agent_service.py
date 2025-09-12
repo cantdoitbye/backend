@@ -7,7 +7,7 @@ from datetime import datetime
 import logging
 
 from ..models import Agent, AgentCommunityAssignment
-from ..matrix_utils import create_agent_matrix_profile, MatrixRegistrationError, MatrixLoginError, MatrixProfileUpdateError
+from ..matrix_utils import create_agent_matrix_profile, MatrixRegistrationError, MatrixLoginError, MatrixProfileUpdateError, join_agent_to_community_matrix_room
 from auth_manager.models import Users
 from community.models import Community
 from neomodel import DoesNotExist
@@ -228,6 +228,24 @@ class AgentService:
             
             # Connect assignment to community's leader_agent relationship
             community.leader_agent.connect(assignment)
+            
+            # Automatically join agent to Matrix room and grant admin rights (power level 100)
+            try:
+                if agent.matrix_user_id and community.room_id:
+                    logger.info(f"Joining agent {agent_uid} to Matrix room and granting admin rights in community {community_uid}")
+                    success = join_agent_to_community_matrix_room(
+                        agent=agent,
+                        community=community
+                    )
+                    if success:
+                        logger.info(f"Successfully joined agent {agent_uid} to Matrix room with admin rights")
+                    else:
+                        logger.warning(f"Failed to join agent {agent_uid} to Matrix room or grant admin rights, but assignment was successful")
+                else:
+                    logger.info(f"Skipping Matrix room join - agent has no Matrix profile or community has no Matrix room")
+            except Exception as matrix_error:
+                # Don't fail the assignment if Matrix operations fail
+                logger.warning(f"Failed to join agent to Matrix room or set power level for agent {agent_uid}: {matrix_error}")
             
             logger.info(f"Successfully assigned agent {agent_uid} to community {community_uid}")
             return assignment

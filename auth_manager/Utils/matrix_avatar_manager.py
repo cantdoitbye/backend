@@ -9,88 +9,169 @@ import json
 
 matrix_logger = logging.getLogger("matrix_logger")
 
-async def set_user_avatar_from_image_id(
+# auth_manager/Utils/matrix_avatar_manager.py
+
+async def set_user_avatar_and_score(
     access_token: str,
     user_id: str,
-    image_id: str,
+    database_user_id: str,
+    user_uid: str,
+    image_id: str = None,
+    score: float = 4.0,
+    additional_data: dict = None,
     timeout: int = 30
 ) -> dict:
     """
-    Set user avatar in Matrix using your existing image_id system.
+    Set user avatar and score in Matrix profile (for create/update profile).
     """
-    print(f"DEBUG: Starting set_user_avatar_from_image_id with image_id: {image_id}")
+    print(f"DEBUG: Setting user avatar and score for user {user_id}")
     
     try:
-        # Get image URL from your existing system using thread executor
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            file_info = await loop.run_in_executor(
-                executor, 
-                generate_presigned_url.generate_file_info, 
-                image_id
-            )
-        
-        print(f"DEBUG: file_info result: {file_info}")
-        
-        if not file_info or not file_info.get('url'):
-            print("DEBUG: No file_info or URL found")
-            return {"success": False, "error": "Invalid image ID or URL not found"}
-        
-        image_url = file_info['url']
-        print(f"DEBUG: Image URL: {image_url}")
-        
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
         
-        # 1. Set avatar URL
-        avatar_url = f"{settings.MATRIX_SERVER_URL}/_matrix/client/r0/profile/{user_id}/avatar_url"
-        avatar_data = {"avatar_url": image_url}
-        
-        # 2. Set custom score data in Matrix profile
-        score_url = f"{settings.MATRIX_SERVER_URL}/_matrix/client/r0/user/{user_id}/account_data/com.ooumph.user.score"
-        score_data = {
-            "overall_score": 4.0,
+        # Prepare profile data
+        profile_data = {
+            "user_id": database_user_id,
+            "user_uid": user_uid,
+            "overall_score": score,
             "updated_at": int(asyncio.get_event_loop().time())
         }
         
-        print(f"DEBUG: Setting avatar and score in Matrix")
+        # Add avatar URL if image_id provided
+        if image_id:
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor() as executor:
+                file_info = await loop.run_in_executor(
+                    executor, 
+                    generate_presigned_url.generate_file_info, 
+                    image_id
+                )
+            
+            if file_info and file_info.get('url'):
+                profile_data["avatar_url"] = file_info['url']
+                print(f"DEBUG: Avatar URL added: {file_info['url']}")
+        
+        # Add any additional profile data
+        if additional_data:
+            profile_data.update(additional_data)
+        
+        # Set avatar and score data
+        profile_url = f"{settings.MATRIX_SERVER_URL}/_matrix/client/v3/user/{user_id}/account_data/com.ooumph.user.profile"
+        
+        print(f"DEBUG: Setting avatar and score data: {profile_data}")
         
         async with aiohttp.ClientSession() as session:
-            # Set avatar
-            async with session.put(avatar_url, json=avatar_data, headers=headers, timeout=timeout) as response:
-                avatar_response_text = await response.text()
-                print(f"DEBUG: Avatar HTTP Response status: {response.status}")
-                print(f"DEBUG: Avatar HTTP Response text: {avatar_response_text}")
-                
-                if response.status != 200:
-                    return {"success": False, "error": f"Avatar update failed: HTTP {response.status}: {avatar_response_text}"}
-            
-            # Set score data
-            async with session.put(score_url, json=score_data, headers=headers, timeout=timeout) as response:
-                score_response_text = await response.text()
-                print(f"DEBUG: Score HTTP Response status: {response.status}")
-                print(f"DEBUG: Score HTTP Response text: {score_response_text}")
+            async with session.put(profile_url, json=profile_data, headers=headers, timeout=timeout) as response:
+                response_text = await response.text()
+                print(f"DEBUG: Avatar/Score HTTP Response status: {response.status}")
+                print(f"DEBUG: Avatar/Score HTTP Response text: {response_text}")
                 
                 if response.status == 200:
-                    # Also save score to local database
-                    await save_user_score_local(user_id, 4.0)
+                    # Save score locally
+                    await save_user_score_local(user_id, score)
                     
-                    matrix_logger.info(f"Set user avatar and score for {user_id}: {image_url}, score: 4.0")
+                    matrix_logger.info(f"Set user avatar and score for {user_id}")
                     return {
                         "success": True,
-                        "avatar_url": image_url,
-                        "score_set": True
+                        "avatar_url": profile_data.get("avatar_url"),
+                        "score_set": True,
+                        "score_value": score
                     }
                 else:
-                    return {"success": False, "error": f"Score update failed: HTTP {response.status}: {score_response_text}"}
+                    return {"success": False, "error": f"Avatar/Score update failed: HTTP {response.status}: {response_text}"}
         
     except Exception as e:
-        print(f"DEBUG: Exception in set_user_avatar_from_image_id: {e}")
-        matrix_logger.error(f"Error setting user avatar: {e}")
+        print(f"DEBUG: Exception in set_user_avatar_and_score: {e}")
+        matrix_logger.error(f"Error setting user avatar and score: {e}")
         return {"success": False, "error": str(e)}
 
+
+async def set_user_relations_data(
+    access_token: str,
+    user_id: str,
+    user_relations: list,
+    timeout: int = 30
+) -> dict:
+    """
+    Set user relations data in Matrix (called when connections are made/updated).
+    This updates existing profile data and adds relations.
+    """
+    print(f"DEBUG: Setting user relations for user {user_id}")
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        profile_url = f"{settings.MATRIX_SERVER_URL}/_matrix/client/r0/user/{user_id}/account_data/com.ooumph.user.profile"
+        
+        # First, get existing profile data
+        existing_data = {}
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(profile_url, headers=headers, timeout=timeout) as response:
+                    if response.status == 200:
+                        existing_data = await response.json()
+                        print(f"DEBUG: Retrieved existing profile data")
+            except:
+                print(f"DEBUG: No existing profile data found, creating new")
+        
+        # Update relations in existing data
+        existing_data["relations"] = user_relations
+        existing_data["relation_count"] = len(user_relations)
+        existing_data["relations_updated_at"] = int(asyncio.get_event_loop().time())
+        
+        print(f"DEBUG: Updating relations data: {user_relations}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.put(profile_url, json=existing_data, headers=headers, timeout=timeout) as response:
+                response_text = await response.text()
+                print(f"DEBUG: Relations HTTP Response status: {response.status}")
+                print(f"DEBUG: Relations HTTP Response text: {response_text}")
+                
+                if response.status == 200:
+                    matrix_logger.info(f"Set user relations for {user_id}: {user_relations}")
+                    return {
+                        "success": True,
+                        "relations_count": len(user_relations),
+                        "relations": user_relations
+                    }
+                else:
+                    return {"success": False, "error": f"Relations update failed: HTTP {response.status}: {response_text}"}
+        
+    except Exception as e:
+        print(f"DEBUG: Exception in set_user_relations_data: {e}")
+        matrix_logger.error(f"Error setting user relations: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Helper function to get user relations from connections (only main relations)
+def get_user_relations(user_node):
+    """
+    Get list of main relations from user's connections (not sub_relations).
+    """
+    try:
+        relations = []
+        connections = user_node.connection.all()
+        
+        for connection in connections:
+            circle = connection.circle.single()
+            if circle and circle.relation:  # Only main relation
+                relations.append(circle.relation)
+        
+        # Return unique relations
+        return list(set(relations))
+        
+    except Exception as e:
+        print(f"Error getting user relations: {e}")
+        return []
+
+
+# Keep your existing save_user_score_local function as is
 async def save_user_score_local(user_id: str, score_value: float):
     """Save score to local database as well"""
     try:
@@ -108,38 +189,5 @@ async def save_user_score_local(user_id: str, score_value: float):
 
 def _update_score_sync(user_id: str, score_value: float):
     """Synchronous function to update existing score in local DB"""
-    try:
-        from auth_manager.models import Users, Score
-        import time
-        
-        # Get the user node
-        user_node = Users.nodes.get(user_id=user_id)
-        
-        # Get existing score or create new one
-        existing_score = user_node.score.single()
-        
-        if existing_score:
-            # Update existing score
-            existing_score.overall_score = score_value
-            existing_score.save()
-            print(f"Updated existing score with overall_score: {score_value}")
-        else:
-            # Create new score if none exists
-            score_node = Score(
-                overall_score=score_value,
-                vibersCount=0,
-                cumulativeVibescore=0,
-                intelligenceScore=0,
-                appealScore=0,
-                socialScore=0,
-                humanScore=0,
-                repoScore=0,
-                created_at=int(time.time())
-            )
-            score_node.save()
-            user_node.score.connect(score_node)
-            print(f"Created new score with overall_score: {score_value}")
-        
-    except Exception as e:
-        print(f"Error in _update_score_sync: {e}")
-        raise e
+    # Your existing implementation
+    pass

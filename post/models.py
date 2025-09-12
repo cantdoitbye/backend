@@ -126,6 +126,43 @@ class Tag(DjangoNode, StructuredNode):
         return self.name
     
 
+class CommentVibe(DjangoNode, StructuredNode):
+    """
+    Model for storing vibe reactions sent to comments.
+    Integrates with the existing vibe system in PostgreSQL.
+    
+    Used in: Comment vibe reactions, engagement analytics
+    Expects: comment_uid, individual_vibe_id, vibe_intensity
+    Returns: CommentVibe object with bidirectional relationships
+    """
+    uid = UniqueIdProperty()
+    
+    # Relationships
+    comment = RelationshipFrom('Comment', 'HAS_VIBE_REACTION')
+    reacted_by = RelationshipTo('Users', 'REACTED_BY')
+    
+    # Vibe data from PostgreSQL IndividualVibe model
+    individual_vibe_id = IntegerProperty()  # References IndividualVibe.id
+    vibe_name = StringProperty(required=True)  # From name_of_vibe field
+    vibe_intensity = FloatProperty(required=True)  # 1.0 to 5.0 user selection
+    
+    # Metadata
+    reaction_type = StringProperty(default="vibe")
+    timestamp = DateTimeProperty(default_now=True)
+    is_active = BooleanProperty(default=True)
+    
+    def save(self, *args, **kwargs):
+        """Update timestamp on save"""
+        self.timestamp = datetime.now()
+        super().save(*args, **kwargs)
+    
+    class Meta:
+        app_label = 'post'
+    
+    def __str__(self):
+        return f"{self.vibe_name} - {self.vibe_intensity}"
+
+
 class Comment(DjangoNode, StructuredNode):
     """
     Comment model for user responses and discussions on posts.
@@ -145,8 +182,9 @@ class Comment(DjangoNode, StructuredNode):
     comment_file_id = ArrayProperty(base_property=StringProperty())  # Array of file IDs for media
 
     # Relationships
-    post = RelationshipTo('StructuredNode','HAS_POST')
+    post = RelationshipTo('Post','HAS_POST')
     user = RelationshipTo('Users','HAS_USER')         # User who wrote the comment
+    vibe_reactions = RelationshipTo('CommentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions on this comment
     #Self-referencing relationships for nested replies
     parent_comment = RelationshipTo('Comment', 'REPLIED_TO')  # Parent comment if this is a reply
     replies = RelationshipFrom('Comment', 'REPLIED_TO') 

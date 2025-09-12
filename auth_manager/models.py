@@ -651,7 +651,9 @@ class BackProfileUsersReview(DjangoNode,StructuredNode):
     vibe = FloatProperty(default=2.0)  # Numerical vibe rating score
     title = StringProperty()  # Review title/summary
     content =StringProperty()  # Detailed review content
-    file_id = StringProperty()  # Attached file identifier
+    # file_id = StringProperty()  # Attached file identifier
+    image_ids = ArrayProperty(base_property=StringProperty())  # Multiple attached image identifiers
+    rating = IntegerProperty(default=4)  # Star rating (1-5 stars)
     is_deleted = BooleanProperty(default=False)  # Soft deletion flag
     timestamp=DateTimeProperty(default_now=True)  # Review creation timestamp
     

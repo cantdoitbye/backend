@@ -186,29 +186,35 @@ class Query(graphene.ObjectType):
     postcomments_by_post_uid = graphene.List(
         CommentType, 
         post_uid=graphene.String(required=True),
-        include_replies=graphene.Boolean(default_value=True),  # NEW: Option to include/exclude replies
-        max_depth=graphene.Int(default_value=2)  # NEW: Control nesting depth
+        include_replies=graphene.Boolean(default_value=True), 
+        max_depth=graphene.Int(default_value=2),
+        limit=graphene.Int(default_value=10),
+        offset=graphene.Int(default_value=0)
     )
 
     @handle_graphql_post_errors
     @login_required
-    def resolve_postcomments_by_post_uid(self, info, post_uid, include_replies=True, max_depth=2):
+    def resolve_postcomments_by_post_uid(self, info, post_uid, include_replies=True, max_depth=2, limit=10, offset=0):
         """
-        UPDATED: Your existing resolver with nested comment support.
-        Preserves all existing functionality while adding nested features.
+        UPDATED: Your existing resolver with nested comment support and pagination.
         """
         try:
             print(f"DEBUG: Querying post_uid: {post_uid}")
-            print(f"DEBUG: include_replies: {include_replies}")
-            params = {"post_uid": post_uid} 
+            print(f"DEBUG: include_replies: {include_replies}, limit: {limit}, offset: {offset}")
+            
+            # Add pagination parameters
+            params = {
+                "post_uid": post_uid,
+                "limit": limit,
+                "offset": offset
+            }
+            
             if include_replies:
                 print(f"DEBUG: Running nested query with params: {params}")
-                # Use enhanced query that includes nested structure
                 results, _ = db.cypher_query(
                     post_queries.post_comments_with_metrics_nested_query, params)
                 print(f"DEBUG: Query results length: {len(results) if results else 0}")
             else:
-                # Use optimized query for top-level comments only
                 results, _ = db.cypher_query(
                     post_queries.top_level_comments_with_metrics_query, params)
 
@@ -216,12 +222,12 @@ class Query(graphene.ObjectType):
                 return []
 
             enhanced_comments = []
-            comment_cache = {}  # Cache to build nested structure efficiently
+            comment_cache = {} 
 
             for result in results:
                 comment_data = result[0]
                 parent_comment_data = result[1] if len(result) > 1 and result[1] else None
-                post_data = result[2] if len(result) > 2 and result[2] else None  # Fixed: Get post data
+                post_data = result[2] if len(result) > 2 and result[2] else None
                 vibes_count = result[3] if len(result) > 3 else 0
                 views_count = result[4] if len(result) > 4 else 0
                 comments_count = result[5] if len(result) > 5 else 0
@@ -240,52 +246,83 @@ class Query(graphene.ObjectType):
                 if post_data:
                    try:
                        post_uid_from_data = post_data.get('uid')
-                       # Try Post first, then CommunityPost
                        try:
                            post_node = Post.nodes.get(uid=post_uid_from_data)
                            post_object = PostType.from_neomodel(post_node, info)
                        except Post.DoesNotExist:
-                       # Try CommunityPost
                            from community.models import CommunityPost
                            post_node = CommunityPost.nodes.get(uid=post_uid_from_data)
                            post_object = None
-            
                    except Exception as e:
                       print(f"Error getting post object: {e}")
                       post_object = None
+
                 # Create parent comment if this is a reply
                 parent_comment = None
                 if parent_comment_data and include_replies:
                     parent_uid = parent_comment_data.get('uid')
                     if parent_uid not in comment_cache:
                         parent_node = Comment.nodes.get(uid=parent_uid)
+                        
+                        # Fetch vibe reactions for parent comment
+                        parent_vibe_reactions = []
+                        try:
+                            if hasattr(parent_node, 'vibe_reactions'):
+                                vibe_reaction_nodes = list(parent_node.vibe_reactions.all())
+                                active_vibes = [vr for vr in vibe_reaction_nodes if vr.is_active]
+                                active_vibes.sort(key=lambda x: x.timestamp, reverse=True)
+                                parent_vibe_reactions = [CommentVibeType.from_neomodel(vr) for vr in active_vibes]
+                        except Exception as e:
+                            print(f"Error fetching parent vibe reactions: {e}")
+                            parent_vibe_reactions = []
+                        
                         parent_comment = CommentType(
                             uid=parent_node.uid,
-                            post=post_object,  # Use the same post object
+                            post=post_object,
                             user=UserType.from_neomodel(parent_node.user.single()) if parent_node.user.single() else None,
                             content=parent_node.content,
                             timestamp=parent_node.timestamp,
                             is_deleted=parent_node.is_deleted,
-                            score=2.0,  # Simplified for parent
+                            score=2.0,
                             views=0,
                             comments=0,
                             shares=0,
                             vibes=0,
-                            # Nested fields
+                            comment_file_id=getattr(parent_node, 'comment_file_id', []) or [],
+                            comment_file_url=[],
                             parent_comment=None,
                             replies=[],
                             reply_count=0,
                             depth_level=0,
-                            is_reply=False
+                            is_reply=False,
+                            vibe_reactions=parent_vibe_reactions
                         )
                         comment_cache[parent_uid] = parent_comment
                     else:
                         parent_comment = comment_cache[parent_uid]
 
-                # Create CommentType with metrics from Cypher (PRESERVE YOUR EXISTING STRUCTURE)
+                # Fetch vibe reactions for this comment
+                comment_vibe_reactions = []
+                try:
+                    print(f"DEBUG: Fetching vibe reactions for comment {comment_node.uid}")
+                    if hasattr(comment_node, 'vibe_reactions'):
+                        vibe_reaction_nodes = list(comment_node.vibe_reactions.all())
+                        print(f"DEBUG: Found {len(vibe_reaction_nodes)} vibe reaction nodes")
+                        active_vibes = [vr for vr in vibe_reaction_nodes if vr.is_active]
+                        print(f"DEBUG: Found {len(active_vibes)} active vibe reactions")
+                        active_vibes.sort(key=lambda x: x.timestamp, reverse=True)
+                        comment_vibe_reactions = [CommentVibeType.from_neomodel(vr) for vr in active_vibes]
+                        print(f"DEBUG: Created {len(comment_vibe_reactions)} CommentVibeType objects")
+                    else:
+                        print(f"DEBUG: Comment {comment_node.uid} does not have vibe_reactions attribute")
+                except Exception as e:
+                    print(f"Error fetching comment vibe reactions: {e}")
+                    comment_vibe_reactions = []
+
+                # Create CommentType with metrics from Cypher
                 enhanced_comment = CommentType(
                     uid=comment_node.uid,
-                    post=post_object,  # Fixed: Use the post object from Cypher query
+                    post=post_object,
                     user=UserType.from_neomodel(comment_node.user.single()) if comment_node.user.single() else None,
                     content=comment_node.content,
                     timestamp=comment_node.timestamp,
@@ -295,13 +332,14 @@ class Query(graphene.ObjectType):
                     comments=int(comments_count) if comments_count is not None else 0,
                     shares=int(shares_count) if shares_count is not None else 0,
                     vibes=int(vibes_count) if vibes_count is not None else 0,
-                    
-                    # NEW: Add nested comment fields
+                    comment_file_id=getattr(comment_node, 'comment_file_id', []) or [],
+                    comment_file_url=[],
                     parent_comment=parent_comment,
-                    replies=[],  # Will be populated in a second pass
+                    replies=[],
                     reply_count=int(reply_count) if reply_count is not None else 0,
                     depth_level=1 if is_reply else 0,
-                    is_reply=bool(is_reply)
+                    is_reply=bool(is_reply),
+                    vibe_reactions=comment_vibe_reactions
                 )
 
                 enhanced_comments.append(enhanced_comment)
@@ -309,13 +347,11 @@ class Query(graphene.ObjectType):
 
             # Second pass: Build nested structure if including replies
             if include_replies and max_depth > 1:
-                # Organize comments into nested structure
                 top_level_comments = []
                 for comment in enhanced_comments:
                     if not comment.is_reply:
                         top_level_comments.append(comment)
                     else:
-                        # Find parent and add this as a reply
                         parent_uid = comment.parent_comment.uid if comment.parent_comment else None
                         if parent_uid and parent_uid in comment_cache:
                             parent = comment_cache[parent_uid]
@@ -325,27 +361,38 @@ class Query(graphene.ObjectType):
 
                 return top_level_comments
             else:
-                # Return all comments (flat structure) or just top-level
                 return [c for c in enhanced_comments if not c.is_reply] if not include_replies else enhanced_comments
 
         except Exception as e:
             print(f"Error in resolve_postcomments_by_post_uid: {e}")
-            return []       
+            return []    
+           
     comment_replies = graphene.List(
         CommentType,
         comment_uid=graphene.String(required=True),
-        max_depth=graphene.Int(default_value=2)
-    )    
+        max_depth=graphene.Int(default_value=2),
+        # NEW: Pagination parameters
+        limit=graphene.Int(default_value=10),
+        offset=graphene.Int(default_value=0)
+    )  
 
 
     @handle_graphql_post_errors
     @login_required
-    def resolve_comment_replies(self, info, comment_uid, max_depth=2):
+    def resolve_comment_replies(self, info, comment_uid, max_depth=2, limit=10, offset=0):
         """
-        NEW: Get replies for a specific comment with metrics.
+        NEW: Get replies for a specific comment with metrics and pagination.
         """
         try:
-            params = {"parent_comment_uid": comment_uid}
+            # Add pagination parameters
+            params = {
+                "parent_comment_uid": comment_uid,
+                "limit": limit,
+                "offset": offset
+            }
+            
+            print(f"DEBUG: Getting replies for comment: {comment_uid} with limit: {limit}, offset: {offset}")
+            
             results, _ = db.cypher_query(
                 post_queries.comment_replies_with_metrics_query, params)
 
@@ -355,13 +402,18 @@ class Query(graphene.ObjectType):
             replies = []
             for result in results:
                 reply_data = result[0]
-                vibes_count = result[1] if len(result) > 1 else 0
-                views_count = result[2] if len(result) > 2 else 0
-                comments_count = result[3] if len(result) > 3 else 0
-                shares_count = result[4] if len(result) > 4 else 0
-                likes_count = result[5] if len(result) > 5 else 0
-                calculated_score = result[6] if len(result) > 6 else 2.0
-                reply_count = result[7] if len(result) > 7 else 0
+                related_post_data = result[1] if len(result) > 1 else None
+            
+                # SAFE parsing with proper type checking
+                vibes_count = result[2] if len(result) > 2 and isinstance(result[2], (int, float)) else 0
+                views_count = result[3] if len(result) > 3 and isinstance(result[3], (int, float)) else 0
+                comments_count = result[4] if len(result) > 4 and isinstance(result[4], (int, float)) else 0
+                shares_count = result[5] if len(result) > 5 and isinstance(result[5], (int, float)) else 0
+                likes_count = result[6] if len(result) > 6 and isinstance(result[6], (int, float)) else 0
+                calculated_score = result[7] if len(result) > 7 and isinstance(result[7], (int, float)) else 2.0
+                reply_count = result[8] if len(result) > 8 and isinstance(result[8], (int, float)) else 0
+
+                print(f"DEBUG: Processing reply with vibes_count type: {type(vibes_count)}, value: {vibes_count}")
 
                 # Create reply object from neomodel
                 reply_uid = reply_data.get('uid')
@@ -371,47 +423,76 @@ class Query(graphene.ObjectType):
                 parent_comment = None
                 try:
                     parent_node = Comment.nodes.get(uid=comment_uid)
+                    
+                    # Fetch vibe reactions for parent comment
+                    parent_vibe_reactions = []
+                    try:
+                        if hasattr(parent_node, 'vibe_reactions'):
+                            vibe_reaction_nodes = list(parent_node.vibe_reactions.all())
+                            active_vibes = [vr for vr in vibe_reaction_nodes if vr.is_active]
+                            active_vibes.sort(key=lambda x: x.timestamp, reverse=True)
+                            parent_vibe_reactions = [CommentVibeType.from_neomodel(vr) for vr in active_vibes]
+                    except Exception as e:
+                        print(f"Error fetching parent vibe reactions in replies: {e}")
+                        parent_vibe_reactions = []
+                    
                     parent_comment = CommentType(
-                        uid=parent_node.uid,
-                        post=None,  # Simplified for performance
-                        user=UserType.from_neomodel(parent_node.user.single()) if parent_node.user.single() else None,
-                        content=parent_node.content,
-                        timestamp=parent_node.timestamp,
-                        is_deleted=parent_node.is_deleted,
-                        score=2.0,
-                        views=0,
-                        comments=0,
-                        shares=0,
-                        vibes=0,
-                        parent_comment=None,
-                        replies=[],
-                        reply_count=0,
-                        depth_level=0,
-                        is_reply=False
+                       uid=parent_node.uid,
+                       post=None,
+                       user=UserType.from_neomodel(parent_node.user.single()) if parent_node.user.single() else None,
+                       content=parent_node.content,
+                       timestamp=parent_node.timestamp,
+                       is_deleted=parent_node.is_deleted,
+                       score=2.0,
+                       views=0,
+                       comments=0,
+                       shares=0,
+                       vibes=0,
+                       comment_file_id=getattr(parent_node, 'comment_file_id', []) or [],
+                       comment_file_url=[],
+                       parent_comment=None,
+                       replies=[],
+                       reply_count=0,
+                       depth_level=0,
+                       is_reply=False,
+                       vibe_reactions=parent_vibe_reactions
                     )
                 except:
                     pass
 
+                # Fetch vibe reactions for this reply
+                reply_vibe_reactions = []
+                try:
+                    if hasattr(reply_node, 'vibe_reactions'):
+                        vibe_reaction_nodes = list(reply_node.vibe_reactions.all())
+                        active_vibes = [vr for vr in vibe_reaction_nodes if vr.is_active]
+                        active_vibes.sort(key=lambda x: x.timestamp, reverse=True)
+                        reply_vibe_reactions = [CommentVibeType.from_neomodel(vr) for vr in active_vibes]
+                except Exception as e:
+                    print(f"Error fetching reply vibe reactions: {e}")
+                    reply_vibe_reactions = []
+
                 # Create reply with metrics
                 reply = CommentType(
-                    uid=reply_node.uid,
-                    post=PostType.from_neomodel(reply_node.post.single(), info) if reply_node.post.single() else None,
-                    user=UserType.from_neomodel(reply_node.user.single()) if reply_node.user.single() else None,
-                    content=reply_node.content,
-                    timestamp=reply_node.timestamp,
-                    is_deleted=reply_node.is_deleted,
-                    score=float(calculated_score) if calculated_score is not None else 2.0,
-                    views=int(views_count) if views_count is not None else 0,
-                    comments=int(comments_count) if comments_count is not None else 0,
-                    shares=int(shares_count) if shares_count is not None else 0,
-                    vibes=int(vibes_count) if vibes_count is not None else 0,
-                    
-                    # Nested fields
-                    parent_comment=parent_comment,
-                    replies=[],  # Can be expanded recursively if needed
-                    reply_count=int(reply_count) if reply_count is not None else 0,
-                    depth_level=1,
-                    is_reply=True
+                   uid=reply_node.uid,
+                   post=None,
+                   user=UserType.from_neomodel(reply_node.user.single()) if reply_node.user.single() else None,
+                   content=reply_node.content,
+                   timestamp=reply_node.timestamp,
+                   is_deleted=reply_node.is_deleted,
+                   score=float(calculated_score) if calculated_score is not None else 2.0,
+                   views=int(views_count) if views_count is not None else 0,
+                   comments=int(comments_count) if comments_count is not None else 0,
+                   shares=int(shares_count) if shares_count is not None else 0,
+                   vibes=int(vibes_count) if vibes_count is not None else 0,
+                   comment_file_id=getattr(reply_node, 'comment_file_id', []) or [],
+                   comment_file_url=[],
+                   parent_comment=parent_comment,
+                   replies=[],
+                   reply_count=int(reply_count) if reply_count is not None else 0,
+                   depth_level=1,
+                   is_reply=True,
+                   vibe_reactions=reply_vibe_reactions
                 )
 
                 replies.append(reply)

@@ -3,6 +3,7 @@ from graphene import ObjectType
 from datetime import datetime
 
 from auth_manager.graphql.types import UserType
+from connection.utils.score_generator import generate_connection_score
 from post.redis import get_post_comment_count, get_post_like_count
 from ..models import *
 from auth_manager.Utils import generate_presigned_url
@@ -366,6 +367,7 @@ class CommunityPostType(ObjectType):
     is_accepted = graphene.Boolean()
     created_date = graphene.DateTime()
     updated_date = graphene.DateTime()
+    score = graphene.Float()
 
     @classmethod
     def from_neomodel(cls, post):
@@ -375,7 +377,8 @@ class CommunityPostType(ObjectType):
             post_id=post.post_id,
             is_accepted=post.is_accepted,
             created_date=post.created_date,
-            updated_date=post.updated_date
+            updated_date=post.updated_date,
+            score=generate_connection_score()
         )
 
 class CommunityProductType(ObjectType):
@@ -721,6 +724,7 @@ class CommunityGoalType(ObjectType):
     vibes_count = graphene.Int()
     my_vibe_details = graphene.List(ReactionFeedType)
     vibe_feed_list = graphene.List(VibeFeedListType)
+    score = graphene.Float()
 
     @classmethod
     def from_neomodel(cls, goal,user_node=None):
@@ -747,7 +751,8 @@ class CommunityGoalType(ObjectType):
             is_deleted=goal.is_deleted,
             vibes_count=data['vibes_count'],
             my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in data['my_vibe_details']],
-            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']]
+            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']],
+            score=generate_connection_score()
             
             )
     
@@ -765,6 +770,7 @@ class CommunityActivityType(ObjectType):
     vibes_count = graphene.Int()
     my_vibe_details = graphene.List(ReactionFeedType)
     vibe_feed_list = graphene.List(VibeFeedListType)
+    score = graphene.Float()
 
     @classmethod
     def from_neomodel(cls, activity,user_node=None):
@@ -791,7 +797,8 @@ class CommunityActivityType(ObjectType):
             is_deleted=activity.is_deleted,
             vibes_count=data['vibes_count'],
             my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in data['my_vibe_details']],
-            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']]
+            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']],
+            score=generate_connection_score()
             
             )
   
@@ -810,6 +817,7 @@ class CommunityAffiliationType(ObjectType):
     vibes_count = graphene.Int()
     my_vibe_details = graphene.List(ReactionFeedType)
     vibe_feed_list = graphene.List(VibeFeedListType)
+    score = graphene.Float()
 
     @classmethod
     def from_neomodel(cls, affiliation,user_node=None):
@@ -835,7 +843,8 @@ class CommunityAffiliationType(ObjectType):
             is_deleted=affiliation.is_deleted,
             vibes_count=data['vibes_count'],
             my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in data['my_vibe_details']],
-            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']]
+            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in data['vibe_feed_list']],
+            score=generate_connection_score()
            
             )
 
@@ -853,6 +862,7 @@ class CommunityAchievementType(ObjectType):
     vibes_count = graphene.Int()
     my_vibe_details = graphene.List(ReactionFeedType)
     vibe_feed_list = graphene.List(VibeFeedListType)
+    score = graphene.Float()
 
     @classmethod
     def from_neomodel(cls, achievement,user_node=None):
@@ -879,7 +889,8 @@ class CommunityAchievementType(ObjectType):
             is_deleted=achievement.is_deleted,
             vibes_count=enhanced_data['vibes_count'],
             my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in enhanced_data['my_vibe_details']],
-            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in enhanced_data['vibe_feed_list']]
+            vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in enhanced_data['vibe_feed_list']],
+            score=generate_connection_score()
             
             )
 
@@ -1992,6 +2003,7 @@ class CommunityFeedType(ObjectType):
     type = graphene.String()
     is_parent_community = graphene.Boolean()
     created_date = graphene.DateTime()
+    score = graphene.Float()
     
     
     @classmethod
@@ -2009,7 +2021,8 @@ class CommunityFeedType(ObjectType):
                     category=community.category,
                     type=community.sub_community_type,
                     is_parent_community=False,
-                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date
+                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date,
+                    score=generate_connection_score()
                 )
             except:
                 return cls(
@@ -2023,7 +2036,8 @@ class CommunityFeedType(ObjectType):
                     category=community['category'],
                     type=community['community_type'],
                     is_parent_community=community['community_type'] != None,
-                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date')
+                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date'),
+                    score=generate_connection_score()
                 )
         else:
             try: 
@@ -2038,7 +2052,8 @@ class CommunityFeedType(ObjectType):
                     category=community.category,
                     type=community.community_type,
                     is_parent_community=community.community_type != None,
-                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date
+                    created_date=datetime.fromtimestamp(community.created_date) if isinstance(community.created_date, (int, float)) else community.created_date,
+                    score=generate_connection_score()
                 )
                 
             except:
@@ -2053,7 +2068,8 @@ class CommunityFeedType(ObjectType):
                     category=community['category'],
                     type=community['community_type'] if community['community_type'] else community['sub_community_type'],
                     is_parent_community=community['community_type'] != None,
-                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date')
+                    created_date=datetime.fromtimestamp(community.get('created_date')) if isinstance(community.get('created_date'), (int, float)) else community.get('created_date'),
+                    score=generate_connection_score()
                 )
                 
 
@@ -2072,6 +2088,7 @@ class CommunityPostType(ObjectType):
     updated_at = graphene.DateTime()
     is_deleted = graphene.Boolean()
     creator = graphene.Field(UserType)
+    score = graphene.Float()
     
     
 
@@ -2093,6 +2110,7 @@ class CommunityPostType(ObjectType):
                 updated_at=post.updated_at,
                 is_deleted=post.is_deleted,
                 creator=UserType.from_neomodel(post.creator.single()) if post.creator.single() else None,
+                score=generate_connection_score(),
             
                 
 

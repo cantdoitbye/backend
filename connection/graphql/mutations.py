@@ -38,6 +38,8 @@ from neomodel import db
 from connection.utils.connection_decorator import handle_graphql_connection_errors
 import asyncio
 from connection.services.notification_service import NotificationService
+from auth_manager.Utils.matrix_avatar_manager import set_user_relations_data, get_user_relations
+from msg.models import MatrixProfile
 
 class CreateConnection(Mutation):
     """Legacy Connection Creation Mutation (Deprecated)
@@ -259,6 +261,35 @@ class UpdateConnection(Mutation):
                     connection_stat_receiver.save()
                     connection_stat_sender.universal_circle_count += 1
                     connection_stat_sender.save()
+
+                try:        
+                    sender = connection.created_by.single()
+                    receiver = connection.receiver.single()
+        
+                    for user_node in [sender, receiver]:
+                        try:
+                            matrix_profile = MatrixProfile.objects.get(user=user_node.user_id)
+                            if matrix_profile and matrix_profile.access_token:
+                    
+                                # Get updated relations for this user
+                                user_relations = get_user_relations(user_node)
+                    
+                                # Update relations in Matrix
+                                relations_result = asyncio.run(set_user_relations_data(
+                                   access_token=matrix_profile.access_token,
+                                   user_id=matrix_profile.matrix_user_id,
+                                   user_relations=user_relations
+                                ))
+                    
+                                if relations_result.get('success'):
+                                   print(f"Relations updated for user {user_node.user_id}")
+                                else:
+                                   print(f"Failed to update relations for user {user_node.user_id}: {relations_result.get('error')}")
+                        except Exception as e:
+                              print(f"Error updating Matrix relations for user {user_node.user_id}: {e}")
+                
+                except Exception as e:
+                       print(f"Error updating user relations: {e}")    
 
                 # Send notification to sender about accepted connection
                 sender_profile = sender.profile.single()

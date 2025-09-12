@@ -20,8 +20,8 @@ from community.utils.community_decorator import handle_graphql_community_errors
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 from community import matrix_logger
 from community.services.notification_service import NotificationService
-from community.utils.matrix_avatar_manager import set_room_avatar_and_score_from_image_id
-
+from community.utils.matrix_avatar_manager import set_room_avatar_score_and_filter
+from community.utils.matrix_filter_manager import set_community_filter_data
 
 
 
@@ -118,7 +118,9 @@ class CreateCommunity(Mutation):
                     access_token = matrix_profile.access_token
                     room_name = input.get('name', '')
                     topic = str(input.get('description', ''))
-                    
+                    community_metadata = {
+                      'community_type': input.get('community_type').value if input.get('community_type') else '',
+                    }
                     print("Creating Matrix room...")
                     room_id = asyncio.run(create_room(
                         access_token=access_token,
@@ -126,7 +128,16 @@ class CreateCommunity(Mutation):
                         room_name=room_name,
                         topic=topic,
                         visibility="private",    # Use "private" for invite-only rooms.
-                        preset="private_chat"    # Change to "private_chat" if needed.
+                        preset="private_chat",    # Change to "private_chat" if needed.
+                        # initial_state=[
+                        #    {
+                        #       "type": "org.example.community_metadata",  # custom event type
+                        #       "state_key": "",
+                        #       "content": {
+                        #               "community_type": input.get('community_type').value if input.get('community_type') else ''
+                        #       }
+                        #     }
+                        # ]
                     ))
             except MatrixProfile.DoesNotExist:
                 print("No Matrix profile found for user")
@@ -135,28 +146,28 @@ class CreateCommunity(Mutation):
                 print(f"Matrix room creation error: {e}")
                 matrix_logger.error(f"Failed to create Matrix room: {e}")
             
-            if room_id and input.get('group_icon_id'):
-                 try:
-                    print("Setting community room avatar and score...")
-                    avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
-                        access_token=access_token,
-                        user_id=matrix_user_id,
-                        room_id=room_id,
-                        image_id=input.get('group_icon_id')
-                    ))
+            # if room_id and input.get('group_icon_id'):
+            #      try:
+            #         print("Setting community room avatar and score...")
+            #         avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
+            #             access_token=access_token,
+            #             user_id=matrix_user_id,
+            #             room_id=room_id,
+            #             image_id=input.get('group_icon_id')
+            #         ))
                     
-                    if avatar_result["success"]:
-                        matrix_logger.info(f"Set avatar and score for community room {room_id}")
-                        print(f"Community avatar and score set successfully: {avatar_result}")
-                    else:
-                        matrix_logger.warning(f"Failed to set community avatar: {avatar_result.get('error')}")
-                        print(f"Failed to set community avatar: {avatar_result.get('error')}")
+            #         if avatar_result["success"]:
+            #             matrix_logger.info(f"Set avatar and score for community room {room_id}")
+            #             print(f"Community avatar and score set successfully: {avatar_result}")
+            #         else:
+            #             matrix_logger.warning(f"Failed to set community avatar: {avatar_result.get('error')}")
+            #             print(f"Failed to set community avatar: {avatar_result.get('error')}")
                     
-                 except Exception as e:
-                    matrix_logger.warning(f"Error setting community avatar: {e}")
-                    print(f"Error setting community avatar: {e}")
-            else:
-                print(f"DEBUG: Avatar not set. room_id={room_id}, group_icon_id={input.get('group_icon_id')}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
+            #      except Exception as e:
+            #         matrix_logger.warning(f"Error setting community avatar: {e}")
+            #         print(f"Error setting community avatar: {e}")
+            # else:
+            #     print(f"DEBUG: Avatar not set. room_id={room_id}, group_icon_id={input.get('group_icon_id')}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
 
             community = Community(
                 name=input.get('name', ''),
@@ -196,7 +207,6 @@ class CreateCommunity(Mutation):
             created_by.community.connect(community)
 
             print("Creating creator membership...")
-            # Note:- Review and Optimisations required here(we can store can_message,can_edit_group_info,can_add_new_member,is_notification_muted in postgresql)
             #Member who created the community is itself a memeber
             membership = Membership(
                 is_admin=True,
@@ -207,6 +217,39 @@ class CreateCommunity(Mutation):
             membership.user.connect(created_by)
             membership.community.connect(community)
             community.members.connect(membership)
+
+                        
+            if community and access_token:
+                 try:
+
+                    community_data = {
+                         'community_type': community.community_type,
+                         'community_circle': community.community_circle,
+                         'category': community.category,
+                         'created_date': community.created_date,
+                    }
+                    print("Setting community room filter data...")
+                    filter_result = asyncio.run(set_room_avatar_score_and_filter(
+                        access_token=access_token,
+                        user_id=user_id,
+                        room_id=room_id,
+                        image_id=community.group_icon_id,
+                        community_data=community_data
+                    ))
+                    
+                    if filter_result["success"]:
+                        matrix_logger.info(f"Set avatar and score for community room {room_id}")
+                        print(f"Community filter data set successfully: {filter_result}")
+                    else:
+                        matrix_logger.warning(f"Failed to set community filter: {filter_result.get('error')}")
+                        print(f"Failed to set community filter data: {filter_result.get('error')}")
+                    
+                 except Exception as e:
+                    matrix_logger.warning(f"Error setting community filter data: {e}")
+                    print(f"Error setting community filter data: {e}")
+            else:
+                print(f"DEBUG: filter data not set. room_id={room_id}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
+
 
             print("Adding other members...")
             members_to_notify = []
@@ -472,16 +515,31 @@ class UpdateCommunity(Mutation):
                 setattr(community, key, value)
             community.save()
 
-            if input.group_icon_id and community.room_id:
+            if community and community.room_id:
                 try:
                     print(f"Updating Matrix room avatar for community {community.uid}")
                     matrix_profile = MatrixProfile.objects.get(user=user_id)
                     if matrix_profile.access_token and matrix_profile.matrix_user_id:
-                        avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
-                            access_token=matrix_profile.access_token,
-                            user_id=matrix_profile.matrix_user_id,
-                            room_id=community.room_id,
-                            image_id=input.group_icon_id
+                        # avatar_result = asyncio.run(set_room_avatar_and_score_from_image_id(
+                        #     access_token=matrix_profile.access_token,
+                        #     user_id=matrix_profile.matrix_user_id,
+                        #     room_id=community.room_id,
+                        #     image_id=input.group_icon_id
+                        # ))
+
+                        community_data = {
+                         'community_type': community.community_type,
+                         'community_circle': community.community_circle,
+                         'category': community.category,
+                         'created_date': community.created_date,
+                        }
+                        print("Setting community room filter data...")
+                        avatar_result = asyncio.run(set_room_avatar_score_and_filter(
+                        access_token=matrix_profile.access_token,
+                        user_id=matrix_profile.matrix_user_id,
+                        room_id=community.room_id,
+                        image_id=community.group_icon_id,
+                        community_data=community_data
                         ))
                         
                         if avatar_result["success"]:
