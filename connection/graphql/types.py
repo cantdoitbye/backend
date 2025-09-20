@@ -515,7 +515,7 @@ class UserCategoryType(ObjectType):
                     """
                     results2,_ = db.cypher_query(query, params)
                 else:
-                    results2,_ = db.cypher_query(user_related_queries.recommended_recent_users_query)
+                    results2,_ = db.cypher_query(user_related_queries.recommended_recent_users_query, params)
                 for user in results2:
                     user_node = user[0]
                     profile_node=user[1]

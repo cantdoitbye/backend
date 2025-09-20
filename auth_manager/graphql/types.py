@@ -16,10 +16,11 @@ from neomodel import db
 from connection.models import Connection
 from auth_manager.Utils import generate_presigned_url
 from connection.utils import relation as RELATIONUTILLS
-from vibe_manager.models import IndividualVibe
+# from vibe_manager.models import IndividualVibe  # Commented to avoid circular import
 from datetime import datetime
 from community.models import Community
 from post.models import Post
+from django.apps import apps
 
 
 class FileDetailType(graphene.ObjectType):
@@ -544,13 +545,17 @@ class SkillNonProfileType(ObjectType):
         else:
             created_on_unix=skill.get('created_on')
             created_on=datetime.fromtimestamp(created_on_unix)
+            # from_date_unix=skill.get('from_date')
+            # from_date=datetime.fromtimestamp(from_date_unix)
+            # to_date_unix=skill.get('to_date')
+            # if to_date_unix:
+            #     to_date=datetime.fromtimestamp(to_date_unix)
+            # else:
+            #     to_date=None
             from_date_unix=skill.get('from_date')
-            from_date=datetime.fromtimestamp(from_date_unix)
+            from_date = datetime.fromtimestamp(from_date_unix) if from_date_unix is not None else None
             to_date_unix=skill.get('to_date')
-            if to_date_unix:
-                to_date=datetime.fromtimestamp(to_date_unix)
-            else:
-                to_date=None
+            to_date = datetime.fromtimestamp(to_date_unix) if to_date_unix is not None else None
             return cls(
                 uid = skill.get('uid'),
                 what = skill.get('what'),
@@ -924,6 +929,7 @@ class ProfileDetailsVibeType(ObjectType):
             vibes_count = sum(reaction.get('vibes_count', 0) for reaction in all_reactions)
 
         else:
+            IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
             sorted_reactions = IndividualVibe.objects.all()[:10]
             vibes_count = 0
 
@@ -1090,11 +1096,10 @@ class ProfileInfoType(ObjectType):
 
         profile_uid = profile.get('uid')
         user_uid = user.get('uid')
+        # vibes_count = cls._get_profile_vibes_count(profile_uid)
         vibes_count = cls._get_profile_vibes_count(profile_uid)
- 
-      
-    
-
+        vibes_count = vibes_count if vibes_count is not None else 0
+            
        
         return cls(
             uid = profile.get('uid'),
@@ -1126,10 +1131,11 @@ class ProfileInfoType(ObjectType):
             experience=[ExperienceNonProfileType.from_neomodel(experience) for experience in experience_node] if experience_node else [],
             skill=[SkillNonProfileType.from_neomodel(skill) for skill in skill_node] if skill_node else [],
             education=[EducationNonProfileType.from_neomodel(education) for education in education_node] if education_node else [],
-            vibes_count=vibes_count,
-            post_count=post_count,
-            community_count=community_count,
-            connection_count=connection_count, 
+            vibes_count=vibes_count if vibes_count is not None else 0,
+            post_count=post_count if post_count is not None else 0,
+            community_count=community_count if community_count is not None else 0,  
+            connection_count=connection_count if connection_count is not None else 0, 
+            total_vibes_received=0
         )
     
     @staticmethod
@@ -1153,6 +1159,7 @@ class BackProfileListType(ObjectType):
         profile_reaction_manager = BackProfileReactionManager.objects.filter(profile_uid=profile_uid).first()
 
         if not profile_reaction_manager or not profile_reaction_manager.profile_vibe:
+            IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
             vibe_list=IndividualVibe.objects.all()[:10]
             return [ cls(
                 vibe_id=vibe.id,  # Use the attribute directly
@@ -1839,6 +1846,7 @@ class ProfileDataVibeListType(ObjectType):
         vibes_field = vibes_field_mapping.get(category, "uid")
 
         if not reaction_manager or not getattr(reaction_manager, vibes_field, None):
+            IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
             vibe_list = IndividualVibe.objects.all()[:10]
             return [
                 cls(
@@ -2187,3 +2195,13 @@ class StatisticsType(ObjectType):
                 total_communities=0,
                 total_posts=0
             )
+
+class UserMentionType(graphene.ObjectType):
+    """Type for user mention search results."""
+    id = graphene.Int()
+    username = graphene.String()
+    display_name = graphene.String()
+    first_name = graphene.String()
+    last_name = graphene.String()
+    avatar_url = graphene.String()
+    is_connection = graphene.Boolean()

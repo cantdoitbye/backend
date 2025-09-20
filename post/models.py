@@ -13,7 +13,7 @@ All models use Neo4j graph database via neomodel and include relationships
 between users, posts, and various interaction types.
 """
 
-from neomodel import StructuredNode, StringProperty, IntegerProperty, DateTimeProperty, BooleanProperty, UniqueIdProperty, RelationshipTo, RelationshipFrom,FloatProperty,ArrayProperty
+from neomodel import StructuredNode, StringProperty, IntegerProperty, DateTimeProperty, BooleanProperty, UniqueIdProperty, RelationshipTo, RelationshipFrom,FloatProperty,ArrayProperty,ZeroOrOne
 from django_neomodel import DjangoNode
 from datetime import datetime
 from auth_manager.models import Users 
@@ -183,6 +183,8 @@ class Comment(DjangoNode, StructuredNode):
 
     # Relationships
     post = RelationshipTo('Post','HAS_POST')
+    community_post = RelationshipTo('community.models.CommunityPost', 'HAS_COMMUNITY_POST')
+
     user = RelationshipTo('Users','HAS_USER')         # User who wrote the comment
     vibe_reactions = RelationshipTo('CommentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions on this comment
     #Self-referencing relationships for nested replies

@@ -875,6 +875,7 @@ class SpecialCharacterString2_200(graphene.Scalar):
         r"\u25A0-\u25FF"  # Geometric Shapes
         r"\u2600-\u26FF"  # Miscellaneous Symbols
         r"\u2700-\u27BF"  # Dingbats
+        r"\uFE00-\uFE0F"
         r"\U0001F000-\U0001F02F"  # Mahjong Tiles
         r"\U0001F030-\U0001F09F"  # Domino Tiles
         r"\U0001F0A0-\U0001F0FF"  # Playing Cards
@@ -989,6 +990,7 @@ class SpecialCharacterString2_100(graphene.Scalar):
         r"\u25A0-\u25FF"  # Geometric Shapes
         r"\u2600-\u26FF"  # Miscellaneous Symbols
         r"\u2700-\u27BF"  # Dingbats
+        r"\uFE00-\uFE0F"
         r"\U0001F000-\U0001F02F"  # Mahjong Tiles
         r"\U0001F030-\U0001F09F"  # Domino Tiles
         r"\U0001F0A0-\U0001F0FF"  # Playing Cards

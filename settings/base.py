@@ -1,15 +1,9 @@
 import os
-import sys
 import logging
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 from urllib.parse import urlparse
-
-# Add the Algo directory to the Python path
-ALGO_DIR = os.path.join(os.path.dirname(BASE_DIR), 'Algo')
-if ALGO_DIR not in sys.path:
-    sys.path.append(ALGO_DIR)
 
 load_dotenv()
 
@@ -62,7 +56,10 @@ INSTALLED_APPS = [
     'monitoring',
     'docs',
     'agentic',
-    'activity_tracker',
+    'user_activity',
+    'analytics',
+
+
 ]
 
 
@@ -76,7 +73,6 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'activity_tracker.middleware.ActivityTrackingMiddleware',
 ]
 
 ROOT_URLCONF = 'socialooumph.urls'
@@ -172,20 +168,6 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-
-# Activity Tracker Settings
-ACTIVITY_TRACKING = {
-    'AUTO_TRACK': True,
-    'ENGAGEMENT_WEIGHTS': {
-        'vibe': 1.0,
-        'comment': 1.5,
-        'share': 2.0,
-        'save': 1.8,
-        'media_expand': 0.8,
-    },
-    'SCORE_DECAY_RATE': 0.95,  # Daily decay rate for engagement scores
-    'RETENTION_DAYS': 365,     # Days to keep activity records
-}
 
 GRAPHQL_JWT = {
     'JWT_PAYLOAD_HANDLER': 'custom_backends.utils.custom_jwt_payload',

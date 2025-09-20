@@ -10,6 +10,8 @@ from django.db.models import Count, Avg
 from msg.models import MatrixProfile
 from auth_manager.Utils.auth_manager_decorator import handle_graphql_auth_manager_errors
 from .inputs import ProfiledataTypeEnum
+from auth_manager.services.mention_service import UserMentionService
+
 
 
 
@@ -370,10 +372,9 @@ class Query(graphene.ObjectType):
         education_node=results[0][6] if results[0][6] else None
         skill_node=results[0][7] if results[0][7] else None
         experience_node=results[0][8] if results[0][8] else None
-        post_count = results[0][9] if len(results[0]) > 9 else 0
-        community_count = results[0][10] if len(results[0]) > 10 else 0
-        connection_count = results[0][11] if len(results[0]) > 11 else 0
-
+        post_count = results[0][9] if len(results[0]) > 9 and results[0][9] is not None else 0
+        community_count = results[0][10] if len(results[0]) > 10 and results[0][10] is not None else 0
+        connection_count = results[0][11] if len(results[0]) > 11 and results[0][11] is not None else 0
 
         return ProfileInfoType.from_neomodel(profile_node,user_node,onboardingStatus_node,score_node,interest_node,achievement_node,education_node,skill_node,experience_node,post_count, community_count, connection_count)
         
@@ -1939,7 +1940,24 @@ class Query(graphene.ObjectType):
         profile = target_user.profile.single()
         
         return BackProfileDataType.from_neomodel(target_user, profile, time_filter)
-
+    search_users_for_mention = graphene.List(
+        UserMentionType,
+        query=graphene.String(required=True),
+        limit=graphene.Int(default_value=10)
+    )
+    
+    @login_required
+    def resolve_search_users_for_mention(self, info, query, limit=10):
+        """
+        Search users for @ mentions.
+        Returns connected users first, then community users.
+        """
+        user_id = info.context.user.id
+        mention_service = UserMentionService()
+        
+        users = mention_service.search_users_for_mention(user_id, query, min(limit, 20))
+        
+        return [UserMentionType(**user) for user in users]
 
 class QueryV2(graphene.ObjectType):
     """

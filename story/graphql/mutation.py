@@ -21,6 +21,8 @@ from story.utils.custom_decorator import validate_different_users, handle_graphq
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 import asyncio
 from story.services.notification_service import NotificationService
+from user_activity.services.activity_service import ActivityService
+from vibe_manager.services.vibe_activity_service import VibeActivityService
 
 # Story creation mutation - creates new story with media and privacy settings
 # Used by: Story creation flow, content publishing
@@ -76,6 +78,24 @@ class CreateStory(Mutation):
             # Establish relationships in graph database
             story.created_by.connect(created_by)
             created_by.story.connect(story)
+
+            # Track story creation activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=created_by,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='create',
+                    metadata={
+                        'story_title': story.title,
+                        'privacy': story.privacy,
+                        'has_image': bool(story.story_image_id)
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail story creation
+                import logging
+                logging.error(f"Failed to track story creation activity: {str(e)}")
 
             # Set up Redis cache for 24-hour story expiration
             create_story_cache_key(story.uid)
@@ -176,6 +196,23 @@ class UpdateStory(Mutation):
             # Save changes (triggers automatic timestamp update)
             story.save()
             
+            # Track story update activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=updated_by,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='update',
+                    metadata={
+                        'story_title': story.title,
+                        'updated_fields': list(input.keys())
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail story update
+                import logging
+                logging.error(f"Failed to track story update activity: {str(e)}")
+            
             return UpdateStory(success=True, message=StoryMessages.STORY_UPDATED)
             
         except Exception as error:
@@ -275,6 +312,24 @@ class CreateStoryComment(Mutation):
             comment.story.connect(story)
             comment.user.connect(user)
             story.storycomment.connect(comment)
+            
+            # Track story comment activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=user,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='comment',
+                    metadata={
+                        'comment_id': comment.uid,
+                        'comment_content': comment.content[:100],  # First 100 chars
+                        'story_title': story.title
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail comment creation
+                import logging
+                logging.error(f"Failed to track story comment activity: {str(e)}")
             
             return CreateStoryComment(success=True, message=StoryMessages.STORY_COMMENT_CREATED)
             
@@ -444,6 +499,55 @@ class CreateStoryReaction(Mutation):
             reaction.story.connect(story)
             reaction.user.connect(user)
             story.storyreaction.connect(reaction)
+            
+            # Track story reaction activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=user,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='reaction',
+                    metadata={
+                        'reaction_id': reaction.uid,
+                        'reaction_type': input.reaction,
+                        'vibe_score': input.vibe,
+                        'story_title': story.title
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail reaction creation
+                import logging
+                logging.error(f"Failed to track story reaction activity: {str(e)}")
+            
+            # Track vibe activity for sender and receiver
+            try:
+                # Get story owner for receiver tracking
+                story_owner = story.created_by.single()
+                
+                # Track vibe sending activity for the user who reacted
+                VibeActivityService.track_vibe_sending(
+                    sender=user,
+                    receiver_id=story_owner.user_id if story_owner else None,
+                    vibe_data={
+                        'vibe_id': reaction.uid,
+                        'vibe_name': input.reaction,
+                        'vibe_type': 'individual',
+                        'category': 'story_reaction'
+                    },
+                    vibe_score=input.vibe,
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                    metadata={
+                        'story_id': story.uid,
+                        'reaction_id': reaction.uid,
+                        'story_title': story.title
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the reaction creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track vibe activity: {str(e)}")
             
             return CreateStoryReaction(success=True, message=StoryMessages.STORY_REACTION_CREATED)
             
@@ -735,6 +839,23 @@ class ViewStory(Mutation):
             view.user.connect(user)
             story.storyview.connect(view)
 
+            # Track story view activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=user,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='view',
+                    metadata={
+                        'story_title': story.title,
+                        'view_id': view.uid
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail view tracking
+                import logging
+                logging.error(f"Failed to track story view activity: {str(e)}")
+
             # Update Redis cache for fast view tracking
             add_story_view(story_uid, user_id)  # Add to view count and viewer list
             store_user_data_in_cache(user)      # Cache user data for quick access
@@ -790,6 +911,24 @@ class ShareStory(Mutation):
             share.story.connect(story)
             share.user.connect(user)
             story.storyshare.connect(share)
+            
+            # Track story share activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=user,
+                    content_type='story',
+                    content_id=story.uid,
+                    interaction_type='share',
+                    metadata={
+                        'share_id': share.uid,
+                        'share_type': share_type,
+                        'story_title': story.title
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail share creation
+                import logging
+                logging.error(f"Failed to track story share activity: {str(e)}")
             
             return ShareStory(
                 story_share=StoryShareType.from_neomodel(share), 

@@ -7,6 +7,8 @@ from community.utils import helperfunction
 from community.models import Community, SubCommunity
 from connection.graphql.raw_queries import user_related_queries
 from connection.utils.connection_decorator import handle_graphql_connection_errors
+from user_activity.services.activity_service import ActivityService
+from django.contrib.auth.models import User
 import json
 
 
@@ -882,6 +884,7 @@ class Query(graphene.ObjectType):
             - Generates predefined relationship insights
             - Creates feed entries for "Mutual Connection" and "Common Interest"
             - Uses authenticated user's UID as the primary reference
+            - Tracks profile visit as social interaction
             
         Use Cases:
             - Social feed generation
@@ -897,6 +900,26 @@ class Query(graphene.ObjectType):
         # Prevent self-referential feeds
         if (user_node_uid == user_uid):
             return []
+        
+        # Track profile visit as social interaction
+        try:
+            # Get Django User instances from Users neomodel instances
+            django_user = User.objects.get(id=user_node.user_id)
+            target_user_node = Users.nodes.get(uid=user_uid)
+            django_target_user = User.objects.get(id=target_user_node.user_id)
+            
+            # Create ActivityService instance
+            activity_service = ActivityService()
+            activity_service.track_social_interaction(
+                user=django_user,
+                target_user=django_target_user,
+                interaction_type='profile_visit',
+                context_type='feed_view',
+                context_id=user_uid
+            )
+        except Exception as e:
+            # Log error but don't fail the query
+            print(f"Error tracking profile visit: {e}")
             
         # Generate relationship insight details
         details = ["Mutual Connection", "Common Interest"]

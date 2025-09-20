@@ -252,5 +252,6 @@ class CreateCommunityPostInput(graphene.InputObjectType):
     privacy = custom_graphql_validator.String.add_option("privacy", "CreateCommunityPost")(desc="The privacy setting of the post.")
     post_file_id=graphene.List(graphene.String)
     tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
-
+    reaction = custom_graphql_validator.String.add_option("reaction", "CreateCommunityPost")()
+    vibe = custom_graphql_validator.Float.add_option("vibe", "CreateCommunityPost")()
     

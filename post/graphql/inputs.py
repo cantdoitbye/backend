@@ -3,11 +3,13 @@ from auth_manager.validators import custom_graphql_validator
 
 class CreatePostInput(graphene.InputObjectType):
     post_title = custom_graphql_validator.SpecialCharacterString2_200.add_option("postTitle", "CreatePost")()
-    post_text = custom_graphql_validator.NonSpecialCharacterString2_200.add_option("postText", "CreatePost")()
+    post_text = custom_graphql_validator.SpecialCharacterString2_200.add_option("postText", "CreatePost")()
     post_type = custom_graphql_validator.String.add_option("postType", "CreatePost")()
     privacy = custom_graphql_validator.String.add_option("privacy", "CreatePost")()
     post_file_id=custom_graphql_validator.ListString.add_option("postFileId", "CreatePost")()
     tags = graphene.List(graphene.String, description="List of tags/keywords for post categorization")
+    reaction = custom_graphql_validator.String.add_option("reaction", "CreatePost")()
+    vibe = custom_graphql_validator.Float.add_option("vibe", "CreatePost")()
     
 class UpdatePostInput(graphene.InputObjectType):
     uid = graphene.String(required=True)

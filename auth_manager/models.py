@@ -8,9 +8,10 @@ from django.utils import timezone
 from datetime import timedelta
 from .enums.otp_purpose_enum import OtpPurposeEnum
 from django.db import models
-from vibe_manager.models import IndividualVibe
+# from vibe_manager.models import IndividualVibe  # Removed to prevent circular import
 import uuid
 import hashlib
+from django.apps import apps
 
 
 class Users(DjangoNode, StructuredNode):
@@ -559,6 +560,7 @@ class ProfileReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {

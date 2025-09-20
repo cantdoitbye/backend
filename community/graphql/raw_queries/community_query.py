@@ -288,3 +288,46 @@ Combined_Sub_Community_Member_Count_Query = """
         COUNT(CASE WHEN m.is_admin=false AND (m.can_add_member=true OR m.can_remove_member=true) THEN m END) AS outer_member_count,
         COUNT(CASE WHEN m.is_admin=false THEN m END) AS universe_member_count
 """
+
+
+# New query to get all communities for a user without any conditions
+get_all_user_communities = """
+    call(){
+        // Get all Communities where user is a member
+        MATCH (u:Users{uid:$user_uid})<-[:MEMBER]-(m:Membership)<-[:MEMBER_OF]-(c:Community)
+        WITH c AS entity
+        RETURN entity
+        
+        UNION ALL
+        
+        // Get all SubCommunities where user is a member  
+        MATCH (u:Users{uid:$user_uid})<-[:MEMBER]-(m:SubCommunityMembership)<-[:MEMBER_OF]-(sc:SubCommunity)
+        WITH sc AS entity
+        RETURN entity
+    }
+    
+    RETURN entity
+    ORDER by entity.created_date DESC
+    LIMIT 50
+"""
+
+# New query with community_type filter
+get_all_user_communities_with_filter = """
+    call(){
+        // Get all Communities where user is a member with type filter
+        MATCH (u:Users{uid:$user_uid})<-[:MEMBER]-(m:Membership)<-[:MEMBER_OF]-(c:Community{community_type:$community_type})
+        WITH c AS entity
+        RETURN entity
+        
+        UNION ALL
+        
+        // Get all SubCommunities where user is a member with type filter
+        MATCH (u:Users{uid:$user_uid})<-[:MEMBER]-(m:SubCommunityMembership)<-[:MEMBER_OF]-(sc:SubCommunity{sub_community_group_type:$community_type})
+        WITH sc AS entity
+        RETURN entity
+    }
+    
+    RETURN entity
+    ORDER by entity.created_date DESC
+    LIMIT 50
+"""

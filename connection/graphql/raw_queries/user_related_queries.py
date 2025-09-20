@@ -27,6 +27,7 @@ recommended_verified_users_query = """
 recommended_recent_users_query = """
     MATCH (u:Users)
     MATCH (u)-[:HAS_PROFILE]->(p:Profile)-[:HAS_ONBOARDING_STATUS]->(o:OnboardingStatus {email_verified: true})
+    WHERE u.uid <> $uid
     RETURN u,p
     ORDER BY u.created_at DESC
     LIMIT 20;

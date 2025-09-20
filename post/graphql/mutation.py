@@ -36,6 +36,10 @@ from auth_manager.Utils.generate_presigned_url import get_valid_image
 from post.utils import generate_tag
 from vibe_manager.utils import VibeUtils
 import asyncio
+from post.redis import increment_post_like_count
+from user_activity.services.activity_service import ActivityService
+from vibe_manager.services.vibe_activity_service import VibeActivityService
+
 
 
 class CreatePost(Mutation):
@@ -105,6 +109,64 @@ class CreatePost(Mutation):
             # Establish bidirectional relationships between post and creator
             post.created_by.connect(created_by)
             created_by.post.connect(post)
+            
+            # Track post creation activity
+            try:
+                activity_service = ActivityService()
+                activity_service.track_content_interaction(
+                    user=user,
+                    content_type='post',
+                    content_id=str(post.uid),
+                    interaction_type='create',
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                    metadata={
+                        'post_type': post_type,
+                        'privacy': privacy,
+                        'has_media': bool(post_file_id),
+                        'has_tags': bool(tags)
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the post creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track post creation activity: {e}")
+
+            if input.reaction and input.vibe:
+                try:
+                    # Create PostReactionManager for user post if it doesn't exist
+                    try:
+                        post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
+                    except PostReactionManager.DoesNotExist:
+                        post_reaction_manager = PostReactionManager(post_uid=post.uid)
+                        post_reaction_manager.initialize_reactions()
+                        post_reaction_manager.save()
+
+                    # Add this reaction to the aggregated analytics
+                    post_reaction_manager.add_reaction(
+                        vibes_name=input.reaction,
+                        score=input.vibe
+                    )
+                    post_reaction_manager.save()
+
+                    # Create the individual like record
+                    like = Like(
+                        reaction=input.reaction,
+                        vibe=input.vibe
+                    )
+                    like.save()
+                    
+                    # Establish relationships
+                    like.user.connect(created_by)
+                    post.like.connect(like)
+
+                    # Update engagement metrics in Redis
+                    increment_post_like_count(post.uid)
+                    
+                except Exception as vibe_error:
+                    # Log the error but don't fail the post creation
+                    print(f"Error adding vibe to user post: {str(vibe_error)}")
 
             # Get all connections of the post creator for notification delivery
             connections = created_by.connection.all()
@@ -192,6 +254,25 @@ class UpdatePost(Mutation):
             post.save()  # Triggers automatic timestamp update via model's save method
             post.updated_by.connect(updated_by)  # Track who made the update
             
+            # Track content modification activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=updated_by,
+                    content_id=post.uid,
+                    content_type='post',
+                    interaction_type='update',
+                    metadata={
+                        'updated_fields': list(input.keys()),
+                        'post_title': getattr(post, 'title', None),
+                        'post_type': getattr(post, 'post_type', None)
+                    }
+                )
+            except Exception as e:
+                # Log activity tracking error but don't fail the post update
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track post update activity: {str(e)}")
+            
             return UpdatePost(post=PostType.from_neomodel(post,info), success=True, message="Post updated successfully.")
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -243,6 +324,27 @@ class DeletePost(Mutation):
             # Soft delete (preserve data and relationships)
             post.is_deleted = True
             post.save()
+            
+            # Track content deletion activity
+            try:
+                user_node = Users.nodes.get(user_id=user_id)
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_id=post.uid,
+                    content_type='post',
+                    interaction_type='delete',
+                    metadata={
+                        'post_title': getattr(post, 'title', None),
+                        'post_type': getattr(post, 'post_type', None),
+                        'deletion_type': 'soft_delete'
+                    }
+                )
+            except Exception as e:
+                # Log activity tracking error but don't fail the post deletion
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track post deletion activity: {str(e)}")
+            
             return DeletePost(success=True, message=PostMessages.POST_DELETED)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -485,13 +587,17 @@ class CreateComment(Mutation):
             target_post.comment.connect(comment)
             # comment.post.connect(target_post) 
             print(f"🔍 DEBUG: About to call comment.post.connect(target_post)")
-            try:
+            if isinstance(target_post, Post):
                comment.post.connect(target_post)
-               print(f"🔍 DEBUG: Comment-Post connection established successfully")
-            except Exception as e:
-               print(f"🔍 DEBUG: ERROR in comment.post.connect(target_post): {e}")
-               print(f"🔍 DEBUG: Error type: {type(e)}")
-               raise e
+            elif isinstance(target_post, CommunityPost):
+               comment.community_post.connect(target_post)
+            # try:
+            #    comment.post.connect(target_post)
+            #    print(f"🔍 DEBUG: Comment-Post connection established successfully")
+            # except Exception as e:
+            #    print(f"🔍 DEBUG: ERROR in comment.post.connect(target_post): {e}")
+            #    print(f"🔍 DEBUG: Error type: {type(e)}")
+            #    raise e
             
             if parent_comment:
                 comment.parent_comment.connect(parent_comment)
@@ -542,6 +648,27 @@ class CreateComment(Mutation):
             #             finally:
             #                 loop.close()
 
+            # Track comment creation activity
+            try:
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_id=target_post.uid,
+                    content_type='post',
+                    interaction_type='comment',
+                    metadata={
+                        'comment_id': comment.uid,
+                        'comment_content_length': len(input.content),
+                        'is_reply': parent_comment is not None,
+                        'parent_comment_id': parent_comment.uid if parent_comment else None,
+                        'post_type': getattr(target_post, 'post_type', None)
+                    }
+                )
+            except Exception as e:
+                # Log activity tracking error but don't fail the comment creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track comment creation activity: {str(e)}")
+            
             return CreateComment(comment=CommentType.from_neomodel(comment, info), success=True, message=PostMessages.POST_COMMENT_CREATED)
             
         except Exception as error:
@@ -709,6 +836,55 @@ class CreateLike(Mutation):
             # Update engagement metrics in Redis
             increment_post_like_count(post.uid)
 
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_type='post',
+                    content_id=post.uid,
+                    interaction_type='like',
+                    metadata={
+                        'reaction': input.reaction,
+                        'vibe_score': input.vibe,
+                        'like_id': like.uid
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the like creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track like activity: {str(e)}")
+
+            # Track vibe activity for sender and receiver
+            try:
+                # Get post owner for receiver tracking
+                post_owner = post.created_by.single()
+                
+                # Track vibe sending activity for the user who reacted
+                VibeActivityService.track_vibe_sending(
+                    sender=user_node,
+                    receiver_id=post_owner.user_id if post_owner else None,
+                    vibe_data={
+                        'vibe_id': like.uid,
+                        'vibe_name': input.reaction,
+                        'vibe_type': 'individual',
+                        'category': 'post_reaction'
+                    },
+                    vibe_score=input.vibe,
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                    metadata={
+                        'post_id': post.uid,
+                        'like_id': like.uid,
+                        'post_type': getattr(post, 'post_type', 'unknown')
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the like creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track vibe activity: {str(e)}")
+
             return CreateLike(like=LikeType.from_neomodel(like), success=True, message=PostMessages.POST_REACTION_CREATED)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -758,6 +934,39 @@ class UpdateLike(Mutation):
 
             like.save()
 
+            # Track vibe activity for updated reaction
+            try:
+                # Get the post associated with this like
+                post = like.post.single()
+                if post:
+                    post_owner = post.created_by.single()
+                    
+                    # Track vibe update activity
+                    VibeActivityService.track_vibe_sending(
+                        sender=user_node,
+                        receiver_id=post_owner.user_id if post_owner else None,
+                        vibe_data={
+                            'vibe_id': like.uid,
+                            'vibe_name': like.reaction,
+                            'vibe_type': 'individual',
+                            'category': 'post_reaction_update'
+                        },
+                        vibe_score=like.vibe,
+                        ip_address=info.context.META.get('REMOTE_ADDR'),
+                        user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                        metadata={
+                            'post_id': post.uid,
+                            'like_id': like.uid,
+                            'post_type': getattr(post, 'post_type', 'unknown'),
+                            'action': 'update'
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the like update
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track vibe update activity: {str(e)}")
+
             return UpdateLike(like=LikeType.from_neomodel(like), success=True, message=PostMessages.POST_REACTION_UPDATED)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -795,6 +1004,40 @@ class DeleteLike(Mutation):
             user_node = Users.nodes.get(user_id=user_id)  # Track user (variable not used currently)
 
             like = Like.nodes.get(uid=input.uid)
+            
+            # Track vibe activity for deleted reaction (before deletion)
+            try:
+                # Get the post associated with this like before deletion
+                post = like.post.single()
+                if post:
+                    post_owner = post.created_by.single()
+                    
+                    # Track vibe deletion activity
+                    VibeActivityService.track_vibe_sending(
+                        sender=user_node,
+                        receiver_id=post_owner.user_id if post_owner else None,
+                        vibe_data={
+                            'vibe_id': like.uid,
+                            'vibe_name': like.reaction,
+                            'vibe_type': 'individual',
+                            'category': 'post_reaction_delete'
+                        },
+                        vibe_score=like.vibe,
+                        ip_address=info.context.META.get('REMOTE_ADDR'),
+                        user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                        metadata={
+                            'post_id': post.uid,
+                            'like_id': like.uid,
+                            'post_type': getattr(post, 'post_type', 'unknown'),
+                            'action': 'delete'
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the like deletion
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track vibe deletion activity: {str(e)}")
+            
             like.delete()  # Hard delete
             
             return DeleteLike(success=True, message=PostMessages.POST_REACTION_DELETED)
@@ -847,6 +1090,24 @@ class CreatePostShare(Mutation):
             post_share.user.connect(user_node)
             post.postshare.connect(post_share)
 
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_type='post',
+                    content_id=post.uid,
+                    interaction_type='share',
+                    metadata={
+                        'share_type': input.share_type,
+                        'share_id': post_share.uid
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the share creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track share activity: {str(e)}")
+
             return CreatePostShare(post_share=PostShareType.from_neomodel(post_share), success=True, message=PostMessages.POST_SHARE)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -895,6 +1156,23 @@ class CreatePostView(Mutation):
             post_view.post.connect(post)
             post_view.user.connect(user_node)
             post.view.connect(post_view)
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_type='post',
+                    content_id=post.uid,
+                    interaction_type='view',
+                    metadata={
+                        'view_id': post_view.uid
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the view creation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track view activity: {str(e)}")
             
             return CreatePostView(post_view=PostViewType.from_neomodel(post_view), success=True, message=PostMessages.POST_VIEW)
         except Exception as error:

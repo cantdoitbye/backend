@@ -1263,7 +1263,8 @@ class Query(graphene.ObjectType):
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
         log_in_uid=user_node.uid
-        details=["Mutual Community","Interest Community"]           
+        # details=["Mutual Community","Interest Community"]
+        details=["All Communities"]           
         return [SecondaryCommunityCategoryType.from_neomodel(detail,log_in_uid,user_uid,community_type) for detail in details]
         
         

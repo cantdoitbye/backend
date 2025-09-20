@@ -158,6 +158,82 @@ class Query(graphene.ObjectType):
             if post_node.is_deleted:
                 return []
             return VibeAnalyticType.from_neomodel(post_uid)
+        
+    post_vibes_analytics = graphene.Field(
+        PostVibesAnalyticsType,
+        post_uid=graphene.String(required=True),
+        vibe_filter=graphene.String(),  # Filter by specific vibe name
+        limit=graphene.Int(default_value=20),
+        offset=graphene.Int(default_value=0)
+    )
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_post_vibes_analytics(self, info, post_uid, vibe_filter=None, limit=20, offset=0):
+        try:
+            # Try to find regular post first, fallback to community post
+            try:
+                post_node = Post.nodes.get(uid=post_uid)
+            except Post.DoesNotExist:
+                post_node = CommunityPost.nodes.get(uid=post_uid)
+            
+            if post_node.is_deleted:
+                return None
+
+            # Get aggregated vibe analytics
+            post_reaction_manager = PostReactionManager.objects.filter(post_uid=post_uid).first()
+            
+            # Get all likes for this post
+            all_likes = list(post_node.like.all())
+            active_likes = [like for like in all_likes if not like.is_deleted]
+            
+            total_vibers = len(active_likes)
+            overall_average_vibe = sum(like.vibe for like in active_likes) / total_vibers if total_vibers > 0 else 0
+            
+            # Get top vibes data
+            if post_reaction_manager:
+                all_reactions = post_reaction_manager.post_vibe
+                # Sort by count first, then by average score
+                sorted_reactions = sorted(
+                    all_reactions, 
+                    key=lambda x: (x.get('vibes_count', 0), x.get('cumulative_vibe_score', 0)), 
+                    reverse=True
+                )
+                top_vibes = [VibeDetailType.from_neomodel(vibe) for vibe in sorted_reactions[:10]]
+            else:
+                # Fallback to default vibes if no manager exists
+                default_vibes = IndividualVibe.objects.all()[:10]
+                top_vibes = [VibeDetailType.from_neomodel(vibe) for vibe in default_vibes]
+            
+            # Filter users by vibe if specified
+            if vibe_filter:
+                filtered_likes = [like for like in active_likes if like.reaction == vibe_filter]
+            else:
+                filtered_likes = active_likes
+            
+            # Sort users by timestamp (most recent first)
+            sorted_likes = sorted(filtered_likes, key=lambda x: x.timestamp, reverse=True)
+            
+            # Apply pagination
+            paginated_likes = sorted_likes[offset:offset + limit]
+            total_users_count = len(filtered_likes)
+            has_more_users = (offset + limit) < total_users_count
+            
+            vibed_users = [VibeUserType.from_neomodel(like) for like in paginated_likes]
+            
+            return PostVibesAnalyticsType(
+                post_uid=post_uid,
+                total_vibers=total_vibers,
+                overall_average_vibe=round(overall_average_vibe, 2),
+                top_vibes=top_vibes,
+                vibed_users=vibed_users,
+                has_more_users=has_more_users,
+                total_users_count=total_users_count
+            )
+            
+        except Exception as error:
+            logger.error(f"Error in resolve_post_vibes_analytics: {str(error)}")
+            raise Exception(f"Failed to fetch post vibes analytics: {str(error)}")    
 
     # My Tags
     my_postreactions = graphene.List(LikeType)

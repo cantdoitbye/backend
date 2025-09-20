@@ -1,7 +1,7 @@
 import graphene
 from graphene import ObjectType
 from neomodel import db
-from auth_manager.graphql.types import UserType
+from auth_manager.graphql.types import UserType,ProfileNoUserType
 from auth_manager.Utils import generate_presigned_url
 from auth_manager.models import Profile, Users
 from vibe_manager.models import IndividualVibe
@@ -381,6 +381,68 @@ class LikeType(ObjectType):
             timestamp=like.timestamp,
             is_deleted=like.is_deleted
         )
+
+class VibeUserType(graphene.ObjectType):
+    """Type for users who gave a specific vibe"""
+    uid = graphene.String()
+    username = graphene.String()
+    # profile_image = graphene.String()
+    reaction = graphene.String()
+    vibe_score = graphene.Float()
+    profile = graphene.Field(lambda:ProfileNoUserType)
+
+    timestamp = graphene.DateTime()
+
+
+    @classmethod
+    def from_neomodel(cls, like):
+        user = like.user.single()
+        return cls(
+            uid=user.uid,
+            username=user.username,
+            profile=ProfileNoUserType.from_neomodel(user.profile.single()) if user.profile.single() else None,
+            reaction=like.reaction,
+            vibe_score=like.vibe,
+            timestamp=like.timestamp
+        )
+
+class VibeDetailType(graphene.ObjectType):
+    """Type for individual vibe category details"""
+    vibe_id = graphene.Int()
+    vibe_name = graphene.String()
+    vibe_count = graphene.Int()
+    average_vibe_score = graphene.Float()
+    emoji = graphene.String()  # If you have emoji field in IndividualVibe model
+
+    @classmethod
+    def from_neomodel(cls, vibe_data):
+        # If vibe_data comes from PostReactionManager
+        if isinstance(vibe_data, dict):
+            return cls(
+                vibe_id=vibe_data.get('vibes_id'),
+                vibe_name=vibe_data.get('vibes_name'),
+                vibe_count=vibe_data.get('vibes_count', 0),
+                average_vibe_score=vibe_data.get('cumulative_vibe_score', 0),
+                emoji=None  # Add if available
+            )
+        # If vibe_data comes from IndividualVibe model
+        else:
+            return cls(
+                vibe_id=vibe_data.id,
+                vibe_name=vibe_data.name_of_vibe,
+                vibe_count=0,
+                average_vibe_score=0,
+                emoji=getattr(vibe_data, 'emoji', None)
+            )
+class PostVibesAnalyticsType(graphene.ObjectType):
+    """Main type for post vibes analytics"""
+    post_uid = graphene.String()
+    total_vibers = graphene.Int()
+    overall_average_vibe = graphene.Float()
+    top_vibes = graphene.List(VibeDetailType)
+    vibed_users = graphene.List(VibeUserType)
+    has_more_users = graphene.Boolean()
+    total_users_count = graphene.Int()
 
 class PostShareType(ObjectType):
     uid = graphene.String()

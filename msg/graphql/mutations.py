@@ -205,6 +205,24 @@ class CreateConversationMessage(Mutation):
             msg.sender.connect(sender)
             conversation.conv_message.connect(msg)
 
+            # Track activity for analytics
+            try:
+                from user_activity.services.activity_service import ActivityService
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_id,
+                    content_type='conversation_message',
+                    interaction_type='create',
+                    metadata={
+                        'conversation_id': conversation.uid,
+                        'message_id': msg.uid,
+                        'content_length': len(input.content) if input.content else 0,
+                        'has_file': bool(input.file_id)
+                    }
+                )
+            except Exception as e:
+                # Don't fail the mutation if activity tracking fails
+                pass
+
             # Notify all conversation members except the sender
             # members_to_notify = []
             # for member in conversation.members.all():
@@ -744,15 +762,36 @@ class SendMatrixMessage(graphene.Mutation):
                     message="No Matrix credentials available for this community"
                 )
             
-            # Send message to Matrix using agent's credentials
+            # Send message to Matrix using credentials
             try:
                 event_id = asyncio.run(send_matrix_message(
-                    access_token=agent.access_token,
-                    user_id=agent.matrix_user_id,
+                    access_token=credentials['access_token'],
+                    user_id=credentials['user_id'],
                     room_id=community.room_id,
                     message=message,
                     message_type=message_type
                 ))
+                
+                # Track activity for analytics
+                try:
+                    from user_activity.services.activity_service import ActivityService
+                    payload = info.context.payload
+                    user_id = payload.get('user_id')
+                    ActivityService.track_content_interaction_by_id(
+                        user_id=user_id,
+                        content_type='matrix_message',
+                        interaction_type='send',
+                        metadata={
+                            'community_id': community_uid,
+                            'room_id': community.room_id,
+                            'message_type': message_type,
+                            'message_length': len(message),
+                            'event_id': event_id
+                        }
+                    )
+                except Exception as e:
+                    # Don't fail the mutation if activity tracking fails
+                    pass
                 
                 return SendMatrixMessageResponse(
                     event_id=event_id,

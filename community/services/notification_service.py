@@ -286,8 +286,53 @@ class NotificationService:
                                 print(f"Error response: {response_text}")
                     except Exception as e:
                         print(f"Error sending community achievement notification: {str(e)}")
+    
+    async def notifyCommunityActivity(
+        self,
+        creator_name: str,
+        members: List[dict],
+        community_name: str,
+        activity_name: str,
+        activity_id: str,
+        community_id: str
+    ):
+        """
+        Send notifications to community members when a new activity is created
+        """
+        print("Starting community activity notification...")
 
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
 
+        async with aiohttp.ClientSession() as session:
+            for member in members:
+                if member.get('device_id'):
+                    notification_data = {
+                        "title": f"New activity in {community_name}",
+                        "body": f"{creator_name} added activity: {activity_name}",
+                        "token": member['device_id'],
+                        "priority": "high",
+                        "click_action": f"/community/{community_id}",
+                        "data": {
+                            "community_id": community_id,
+                            "activity_id": activity_id,
+                            "type": "community_activity"
+                        }
+                    }
+
+                    try:
+                        async with session.post(
+                            f"{self.notification_service_url}/notifications",
+                            json=notification_data,
+                            headers=headers
+                        ) as response:
+                            response_text = await response.text()
+                            if response.status != 200:
+                                print(f"Error response: {response_text}")
+                    except Exception as e:
+                        print(f"Error sending community activity notification: {str(e)}")
     async def notifyCommunityGoal(self, creator_name: str, members: List[dict], community_name: str, goal_name: str, goal_id: str, community_id: str):
         """
         Send notifications to community members when a new goal is created

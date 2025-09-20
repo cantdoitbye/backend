@@ -22,8 +22,10 @@ from community import matrix_logger
 from community.services.notification_service import NotificationService
 from community.utils.matrix_avatar_manager import set_room_avatar_score_and_filter
 from community.utils.matrix_filter_manager import set_community_filter_data
-
-
+from post.models import Like, PostReactionManager
+from post.redis import increment_post_like_count
+from user_activity.services.activity_service import ActivityService
+from vibe_manager.services.vibe_activity_service import VibeActivityService
 
 
 
@@ -411,6 +413,26 @@ class CreateCommunity(Mutation):
                             continue
             
             print("Community creation completed successfully!")
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_id,
+                    content_type="community",
+                    content_id=community.uid,
+                    interaction_type="create",
+                    metadata={
+                        "community_id": community.uid,
+                        "community_name": community.name,
+                        "community_type": community.community_type,
+                        "member_count": len(member_uid) if member_uid else 1,
+                        "has_matrix_room": bool(room_id),
+                        "agent_assigned": agent_assignment_success
+                    }
+                )
+            except Exception as activity_error:
+                print(f"Failed to track community creation activity: {activity_error}")
+                # Don't fail community creation if activity tracking fails
             
             # Create enhanced success message
             success_message = str(CommMessages.COMMUNITY_CREATED)
@@ -973,6 +995,24 @@ class AddMember(Mutation):
                 room_id=community.room_id,
                 member_ids=user_uids
             )
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user.uid,
+                    content_type="community",
+                    content_id=community.uid,
+                    interaction_type="member_added",
+                    metadata={
+                        "community_name": community.name,
+                        "added_members": user_uids,
+                        "member_count": len(user_uids),
+                        "total_members": community.number_of_members
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to track member addition activity: {e}")
+            
             return AddMember(all_membership=MembershipType.from_neomodel(membership), success=True,message=CommMessages.COMMUNITY_MEMBER_ADDED)
         except Exception as error:
             message=getattr(error,'message',str(error))
@@ -1053,9 +1093,32 @@ class RemoveMember(Mutation):
                     return RemoveMember(success=False, message="You are not authorised to remove member")
 
 
+            # Collect member info before deletion for tracking
+            removed_members = []
             for uid in membership_uid:
                 membership = Membership.nodes.get(uid=uid)
+                removed_members.append({
+                    "membership_uid": uid,
+                    "user_uid": membership.user.single().uid if membership.user.single() else None
+                })
                 membership.delete()
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user.uid,
+                    content_type="community",
+                    content_id=community.uid,
+                    interaction_type="member_removed",
+                    metadata={
+                        "community_name": community.name,
+                        "removed_members": removed_members,
+                        "member_count": len(membership_uid),
+                        "remaining_members": community.number_of_members - len(membership_uid)
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to track member removal activity: {e}")
                 
             return RemoveMember(success=True,message=CommMessages.COMMUNITY_MEMBER_DELETED)
         except Exception as error:
@@ -2699,7 +2762,7 @@ class CreateSubCommunity(Mutation):
         - Creator automatically becomes admin of the sub-community
         - Supports both child and sibling community types
     """
-    
+    community = graphene.Field(SubCommunityType)  # Added community field
     success = graphene.Boolean()
     message=graphene.String()
 
@@ -2768,10 +2831,10 @@ class CreateSubCommunity(Mutation):
         member_uid=input.get('member_uid') or []
         member_uid.append('bf577b8e39f24a02805879461baf9561')
         if not member_uid:
-            return CreateSubCommunity(success=False,message=f"You have not selected any user")
+            return CreateSubCommunity(community=None, success=False,message=f"You have not selected any user")
         unavailable_user=userlist.get_unavailable_list_user(member_uid)
         if unavailable_user:
-            return CreateSubCommunity(success=False,message=f"These uid's do not correspond to any user {unavailable_user}")
+            return CreateSubCommunity(community=None, success=False,message=f"These uid's do not correspond to any user {unavailable_user}")
         
         
         try:
@@ -2780,11 +2843,11 @@ class CreateSubCommunity(Mutation):
             membership_exists = helperfunction.get_membership_for_user_in_community(created_by, community)
 
             if not membership_exists:
-                return CreateSubCommunity(success=False, message="You are not a member of this community and this communnity is private")
+                return CreateSubCommunity(community=None, success=False, message="You are not a member of this community and this communnity is private")
 
             if membership_exists:
                 if membership_exists.is_admin==False:
-                    return CreateSubCommunity(success=False, message="You are not authorised to add new member")
+                    return CreateSubCommunity(community=None, success=False, message="You are not authorised to add new member")
 
             sub_community.save()
             sub_community.created_by.connect(created_by)
@@ -2861,7 +2924,7 @@ class CreateSubCommunity(Mutation):
                     room_id=room_id,
                     member_ids=member_uid
                 )
-            return CreateSubCommunity( success=True,message=CommMessages.COMMUNITY_CREATED)
+            return CreateSubCommunity(community=SubCommunityType.from_neomodel(sub_community), success=True,message=CommMessages.COMMUNITY_CREATED)
         
         except Community.DoesNotExist:
             try:
@@ -2869,16 +2932,16 @@ class CreateSubCommunity(Mutation):
                 community = SubCommunity.nodes.get(uid=input.parent_community_uid)
 
                 if community.sub_community_type == 'child community':
-                    return CreateSubCommunity(success=False,message=CommMessages.SUB_COMMUNITY_NOT_ALLOWED)
+                    return CreateSubCommunity(community=None,success=False,message=CommMessages.SUB_COMMUNITY_NOT_ALLOWED)
                 
                 membership_exists = helperfunction.get_membership_for_user_in_sub_community(created_by, community)
 
                 if not membership_exists:
-                    return CreateSubCommunity(success=False, message="You are not a member of this community and this communnity is private")
+                    return CreateSubCommunity(community=None,success=False, message="You are not a member of this community and this communnity is private")
 
                 if membership_exists:
                     if membership_exists.is_admin==False:
-                        return CreateSubCommunity(success=False, message="You are not authorised to add new member")
+                        return CreateSubCommunity(community=None,success=False, message="You are not authorised to add new member")
 
                 sub_community.save()
                 sub_community.created_by.connect(created_by)
@@ -2949,11 +3012,11 @@ class CreateSubCommunity(Mutation):
                         room_id=room_id,
                         member_ids=member_uid
                     )
-                    return CreateSubCommunity( success=True,message=CommMessages.COMMUNITY_CREATED)
+                    return CreateSubCommunity(community=SubCommunityType.from_neomodel(sub_community), success=True,message=CommMessages.COMMUNITY_CREATED)
                 
             except Exception as error:
                 message=getattr(error , 'message' , str(error) )
-                return CreateSubCommunity( success=False,message=message)
+                return CreateSubCommunity(community=None, success=False,message=message)
 
 
 class UpdateSubCommunity(Mutation):
@@ -3389,6 +3452,24 @@ class JoinGeneratedCommunity(Mutation):
                     membership.community.connect(community)
                     community.members.connect(membership)
         
+            # Track activity for analytics
+            try:
+                for uid in user_uids:
+                    ActivityService.track_content_interaction_by_id(
+                        user_id=uid,
+                        content_type="community",
+                        content_id=community.uid,
+                        interaction_type="join",
+                        metadata={
+                            "community_name": community.name,
+                            "community_type": "generated",
+                            "member_count": member_count,
+                            "role_assigned": "admin" if member_count <= 5 else "member"
+                        }
+                    )
+            except Exception as e:
+                print(f"Failed to track join activity: {e}")
+        
             return JoinGeneratedCommunity(all_membership=MembershipType.from_neomodel(membership), success=True,message=CommMessages.COMMUNITY_MEMBER_ADDED)
         except Exception as error:
             message=getattr(error,'message',str(error))
@@ -3592,6 +3673,75 @@ class CreateCommunityPost(Mutation):
             )
             post.save()
             post.creator.connect(creator)
+            
+            if input.reaction and input.vibe:
+                try:
+                    # Create PostReactionManager for community post if it doesn't exist
+                    try:
+                        post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
+                    except PostReactionManager.DoesNotExist:
+                        post_reaction_manager = PostReactionManager(post_uid=post.uid)
+                        post_reaction_manager.initialize_reactions()
+                        post_reaction_manager.save()
+
+                    # Add this reaction to the aggregated analytics
+                    post_reaction_manager.add_reaction(
+                        vibes_name=input.reaction,
+                        score=input.vibe
+                    )
+                    post_reaction_manager.save()
+
+                    # Create the individual like record
+                    like = Like(
+                        reaction=input.reaction,
+                        vibe=input.vibe
+                    )
+                    like.save()
+                    
+                    # Establish relationships
+                    like.user.connect(creator)
+                    post.like.connect(like)
+
+                    # Track vibe activity for community post reaction
+                    try:
+                        # Get request context for IP and user agent
+                        request = info.context
+                        ip_address = getattr(request, 'META', {}).get('REMOTE_ADDR', 'unknown')
+                        user_agent = getattr(request, 'META', {}).get('HTTP_USER_AGENT', 'unknown')
+                        
+                        # Prepare vibe data
+                        vibe_data = {
+                            'vibe_name': input.reaction,
+                            'vibe_score': input.vibe,
+                            'vibe_type': 'community',
+                            'category': 'community_post_reaction'
+                        }
+                        
+                        # Track vibe sending activity
+                        VibeActivityService.track_vibe_sending(
+                            sender=creator,
+                            receiver_id=community_obj.uid,  # Community as receiver
+                            vibe_data=vibe_data,
+                            vibe_score=input.vibe,
+                            context={
+                                'post_id': post.uid,
+                                'community_id': community_obj.uid,
+                                'community_name': community_obj.name,
+                                'ip_address': ip_address,
+                                'user_agent': user_agent
+                            }
+                        )
+                        print(f"Vibe activity tracked for community post reaction: {input.reaction} with score {input.vibe}")
+                    except Exception as vibe_tracking_error:
+                        # Log the error but don't fail the main functionality
+                        print(f"Error tracking vibe activity for community post reaction: {str(vibe_tracking_error)}")
+
+                    # Update engagement metrics in Redis
+                    increment_post_like_count(post.uid)
+                    
+                except Exception as vibe_error:
+                    # Log the error but don't fail the post creation
+                    print(f"Error adding vibe to community post: {str(vibe_error)}")
             if flag:
                 community.community_post.connect(post)
                 post.created_by.connect(community)

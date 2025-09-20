@@ -40,6 +40,7 @@ import asyncio
 from connection.services.notification_service import NotificationService
 from auth_manager.Utils.matrix_avatar_manager import set_user_relations_data, get_user_relations
 from msg.models import MatrixProfile
+from user_activity.services.activity_service import ActivityService
 
 class CreateConnection(Mutation):
     """Legacy Connection Creation Mutation (Deprecated)
@@ -144,6 +145,23 @@ class CreateConnection(Mutation):
                     ))
                 finally:
                     loop.close()
+
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=created_by_node.user_id,
+                    content_type="connection",
+                    content_id=connection.uid,
+                    interaction_type="send_request",
+                    metadata={
+                        "receiver_uid": receiver.uid,
+                        "circle_type": input.circle.value,
+                        "relation": input.relation,
+                        "sub_relation": input.sub_relation
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to track connection request activity: {e}")
 
             return CreateConnection(connection=ConnectionType.from_neomodel(connection), success=True, message=ConnectionMessages.CONNECTION_CREATED)
         except Exception as error:
@@ -327,7 +345,21 @@ class UpdateConnection(Mutation):
 
             connection.save()
 
-            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_node.user_id,
+                    content_type="connection",
+                    content_id=connection.uid,
+                    interaction_type=input.connection_status.lower(),
+                    metadata={
+                        "sender_uid": sender.uid,
+                        "receiver_uid": receiver_node.uid,
+                        "connection_version": "v1"
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to track connection update activity: {e}")
 
             return UpdateConnection(connection=ConnectionType.from_neomodel(connection), success=True, message=ConnectionMessages.CONNECTION_UPDATED)
         except Exception as error:
@@ -383,6 +415,29 @@ class DeleteConnection(Mutation):
             user_id = payload.get('user_id')
 
             connection = Connection.nodes.get(uid=input.uid)
+            
+            # Track connection deletion activity before deleting
+            try:
+                from user_activity.services.activity_service import ActivityService
+                activity_service = ActivityService()
+                activity_service.track_content_interaction(
+                    user=user,
+                    content_type='connection',
+                    content_id=str(connection.uid),
+                    interaction_type='delete',
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                    metadata={
+                        'connection_status': connection.connection_status,
+                        'user_id': user_id
+                    }
+                )
+            except Exception as e:
+                # Log error but don't fail the deletion
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to track connection deletion activity: {e}")
+            
             connection.delete()
             return DeleteConnection(success=True, message= ConnectionMessages.CONNECTION_DELETED)
         except Exception as error:
@@ -483,6 +538,30 @@ class UpdateConnectionRelationOrCircle(Mutation):
                 circle.circle_type = input.circle_type.value
                 circle.sub_relation = input.sub_relation
                 circle.save()
+                
+                # Track connection relationship update activity
+                try:
+                    from user_activity.services.activity_service import ActivityService
+                    activity_service = ActivityService()
+                    activity_service.track_content_interaction(
+                        user=user,
+                        content_type='connection',
+                        content_id=str(connection.uid),
+                        interaction_type='update_relationship',
+                        ip_address=info.context.META.get('REMOTE_ADDR'),
+                        user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                        metadata={
+                            'circle_type': input.circle_type.value,
+                            'sub_relation': input.sub_relation,
+                            'connection_status': connection.connection_status
+                        }
+                    )
+                except Exception as e:
+                    # Log error but don't fail the update
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Failed to track connection relationship update activity: {e}")
+                
                 return UpdateConnectionRelationOrCircle(success=True, message= "You have Updated the connection successfully.")
             else:
                 return UpdateConnectionRelationOrCircle(success=False, message= "You are not Authorized to Update this connection")
@@ -617,6 +696,23 @@ class CreateConnectionV2(Mutation):
             except:
                 pass
 
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=created_by_node.uid,
+                    content_type="connection",
+                    content_id=connection.uid,
+                    interaction_type="send_request",
+                    metadata={
+                        "receiver_uid": receiver.uid,
+                        "sub_relation": input.sub_relation,
+                        "directionality": directionality,
+                        "connection_version": "v2"
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to track connection request activity: {e}")
+
 # connection=ConnectionType.from_neomodel(connection)
             return CreateConnectionV2(connection=None, success=True, message=ConnectionMessages.CONNECTION_CREATED)
         except Exception as error:
@@ -714,7 +810,46 @@ class UpdateConnectionV2(Mutation):
 
             connection.save()
 
-            
+            # Track activity for analytics
+            try:
+                if input.connection_status == 'Accepted':
+                    # Track acceptance for the receiver (current user)
+                    ActivityService.track_content_interaction_by_id(
+                        user_id=user_node.uid,
+                        content_type="connection",
+                        content_id=connection.uid,
+                        interaction_type="accept_request",
+                        metadata={
+                            "sender_uid": sender.uid,
+                            "connection_version": "v2"
+                        }
+                    )
+                elif input.connection_status == 'Rejected':
+                    # Track rejection for the receiver (current user)
+                    ActivityService.track_content_interaction_by_id(
+                        user_id=user_node.uid,
+                        content_type="connection",
+                        content_id=connection.uid,
+                        interaction_type="reject_request",
+                        metadata={
+                            "sender_uid": sender.uid,
+                            "connection_version": "v2"
+                        }
+                    )
+                elif input.connection_status == 'Cancelled':
+                    # Track cancellation for the sender (current user)
+                    ActivityService.track_content_interaction_by_id(
+                        user_id=user_node.uid,
+                        content_type="connection",
+                        content_id=connection.uid,
+                        interaction_type="cancel_request",
+                        metadata={
+                            "receiver_uid": receiver_node.uid,
+                            "connection_version": "v2"
+                        }
+                    )
+            except Exception as e:
+                print(f"Failed to track connection update activity: {e}")
 
             return UpdateConnectionV2(success=True, message=ConnectionMessages.CONNECTION_UPDATED)
         except Exception as error:
@@ -817,6 +952,31 @@ class UpdateConnectionRelationOrCircleV2(Mutation):
                         return UpdateConnectionRelationOrCircleV2(success=False, message= "You have reached the maximum modification count for this relation")
                 else:
                         circle.update_user_relation(user_node.uid, input.sub_relation, input.circle_type.value)
+                
+                # Track connection relationship update activity
+                try:
+                    from user_activity.services.activity_service import ActivityService
+                    activity_service = ActivityService()
+                    activity_service.track_content_interaction(
+                        user=user,
+                        content_type='connection',
+                        content_id=str(connection.uid),
+                        interaction_type='update_relationship_v2',
+                        ip_address=info.context.META.get('REMOTE_ADDR'),
+                        user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                        metadata={
+                            'circle_type': input.circle_type.value if input.circle_type else None,
+                            'sub_relation': input.sub_relation,
+                            'connection_status': connection.connection_status,
+                            'connected_user_uid': connected_user_uid
+                        }
+                    )
+                except Exception as e:
+                    # Log error but don't fail the update
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Failed to track connection relationship update V2 activity: {e}")
+                
                 return UpdateConnectionRelationOrCircleV2(success=True, message= "You have Updated the connection successfully.")
             
             

@@ -160,6 +160,22 @@ class UpdateInterestInput(graphene.InputObjectType):
 class VerifyOtpInput(graphene.InputObjectType):
     otp = custom_graphql_validator.String.add_option("otp", "VerifyOtp")(required=True)
 
+# Password Reset Flow Input Types
+class FindUserInput(graphene.InputObjectType):
+    email_or_username = custom_graphql_validator.String.add_option("emailOrUsername", "FindUser")(required=True)
+
+class SendOTPInput(graphene.InputObjectType):
+    user_uid = custom_graphql_validator.String.add_option("userUid", "SendOTP")(required=True)
+
+class VerifyOTPInput(graphene.InputObjectType):
+    email = custom_graphql_validator.String.add_option("email", "VerifyOTP")(required=True)
+    otp = custom_graphql_validator.String.add_option("otp", "VerifyOTP")(required=True)
+
+class UpdatePasswordInput(graphene.InputObjectType):
+    email = custom_graphql_validator.String.add_option("email", "UpdatePassword")(required=True)
+    new_password = custom_graphql_validator.String.add_option("newPassword", "UpdatePassword")(required=True)
+    otp_verified = custom_graphql_validator.Boolean.add_option("otpVerified", "UpdatePassword")(required=True)
+
 class DeleteUserAccountInput(graphene.InputObjectType):
     username = custom_graphql_validator.String.add_option("username", "DeleteUserAccount")(required=True)
     deleteType = DeleteTypeEnum(required=True)

@@ -5,8 +5,10 @@ from graphene import Mutation
 from graphql import GraphQLError
 from .types import *
 from auth_manager.models import Users, Score
+from django.contrib.auth.models import User
 from vibe_manager.models import *
 from ..utils import *
+from ..services.vibe_activity_service import VibeActivityService
 from graphql_jwt.decorators import login_required, superuser_required
 
 # GraphQL Input type for creating new vibes
@@ -157,6 +159,29 @@ class CreateVibe(graphene.Mutation):
             vibe.created_by.connect(created_by)  # Vibe -> User relationship
             created_by.vibe.connect(vibe)  # User -> Vibe relationship
             
+            # Track vibe creation activity
+            vibe_data = {
+                'vibe_id': vibe.uid,
+                'vibe_name': vibe.name,
+                'vibe_type': 'main',
+                'category': vibe.category,
+                'iq': vibe.iq,
+                'aq': vibe.aq,
+                'sq': vibe.sq,
+                'hq': vibe.hq,
+                'description': vibe.description,
+                'subCategory': vibe.subCategory,
+                'popularity': vibe.popularity
+            }
+            
+            VibeActivityService.track_vibe_creation(
+                user=created_by,
+                vibe_data=vibe_data,
+                success=True,
+                ip_address=info.context.META.get('REMOTE_ADDR'),
+                user_agent=info.context.META.get('HTTP_USER_AGENT')
+            )
+            
             return CreateVibe(
                 vibe=VibeType.from_neomodel(vibe), 
                 success=True, 
@@ -164,6 +189,38 @@ class CreateVibe(graphene.Mutation):
             )
             
         except Exception as error:
+            # Track failed vibe creation activity
+            try:
+                payload = info.context.payload
+                user_id = payload.get('user_id')
+                created_by = Users.nodes.get(user_id=user_id)
+                
+                vibe_data = {
+                    'vibe_id': 'failed_creation',
+                    'vibe_name': input.name,
+                    'vibe_type': 'main',
+                    'category': input.category,
+                    'iq': input.iq,
+                    'aq': input.aq,
+                    'sq': input.sq,
+                    'hq': input.hq,
+                    'description': input.description,
+                    'subCategory': input.subCategory,
+                    'popularity': input.popularity
+                }
+                
+                VibeActivityService.track_vibe_creation(
+                    user=created_by,
+                    vibe_data=vibe_data,
+                    success=False,
+                    error_message=str(error),
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT')
+                )
+            except:
+                # Silently handle tracking errors to avoid masking original error
+                pass
+            
             # Handle any errors during vibe creation
             return CreateVibe(
                 vibe=None, 
@@ -264,12 +321,54 @@ class SendVibe(graphene.Mutation):
             
             # Delegate to VibeUtils to handle score calculation and updates
             # This method handles all the complex scoring logic
-            # Pass the GraphQL info object to track the sender
-            VibeUtils.onVibeCreated(user, vibename, vibescore, info)
+            VibeUtils.onVibeCreated(user, vibename, vibescore)
+            
+            # Track vibe sending activity
+            vibe_data = {
+                'vibe_name': vibename,
+                'vibe_score': vibescore,
+                'vibe_type': 'main'
+            }
+            
+            VibeActivityService.track_vibe_sending(
+                sender=user,
+                receiver_id=None,  # Self-vibe sending
+                vibe_data=vibe_data,
+                vibe_score=vibescore,
+                ip_address=info.context.META.get('REMOTE_ADDR'),
+                user_agent=info.context.META.get('HTTP_USER_AGENT'),
+                success=True
+            )
             
             return SendVibe(message="Vibe send successfully")
             
         except Exception as e:
+            # Track failed vibe sending activity
+            try:
+                payload = info.context.payload
+                user_id = payload.get('user_id')
+                sender = Users.nodes.get(user_id=user_id)
+                
+                vibe_data = {
+                    'vibe_name': vibename,
+                    'vibe_score': vibescore,
+                    'vibe_type': 'main'
+                }
+                
+                VibeActivityService.track_vibe_sending(
+                    sender=sender,
+                    receiver_id=None,  # Self-vibe sending
+                    vibe_data=vibe_data,
+                    vibe_score=vibescore,
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT'),
+                    success=False,
+                    error_message=str(e)
+                )
+            except:
+                # Silently handle tracking errors to avoid masking original error
+                pass
+            
             # Handle any errors during vibe sending
             return SendVibe(message=str(e))
 

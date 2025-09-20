@@ -41,7 +41,7 @@ class Vibe(DjangoNode, StructuredNode):
     
     # Relationship to the user who created this vibe
     # Used for attribution and possibly creator-specific features
-    created_by = RelationshipTo('Users','VIBE_CREATED_BY')
+    created_by = RelationshipTo('auth_manager.models.Users','VIBE_CREATED_BY')
     
     # Tracks how popular this vibe is across the platform
     # Incremented when vibe is sent/used by users

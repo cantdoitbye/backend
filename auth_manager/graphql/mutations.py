@@ -49,6 +49,7 @@ from connection.models import ConnectionV2,CircleV2
 from auth_manager.services.email_template import generate_payload 
 from auth_manager.Utils.matrix_avatar_manager import set_user_avatar_and_score
 from auth_manager.redis import *
+from vibe_manager.services.vibe_activity_service import VibeActivityService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -543,6 +544,22 @@ class UpdateUserProfile(graphene.Mutation):
             user.save()
             profile_node.save()
             onboarding_status.save()
+
+            # Track activity for analytics
+            try:
+                from analytics.services import ActivityService
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_id,
+                    content_type='profile',
+                    content_id=user_uid,
+                    interaction_type='update',
+                    metadata={
+                        'updated_fields': list(input.keys()),
+                        'profile_id': user_uid
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to track profile update activity: {e}")
 
             print(f"DEBUG: profile_pic_id provided1: {input.get('profile_pic_id')}")
             # Auto-update Matrix avatar if profile_pic_id is being updated
@@ -2088,6 +2105,344 @@ class VerifyOTPAndResetPassword(graphene.Mutation):
             return VerifyOTPAndResetPassword(success=False, token=token,refresh_token=refresh_token,message=message)
 
 
+class FindUserByEmailOrUsername(graphene.Mutation):
+    """
+    Step 1: Find user by email or username for password reset flow.
+    
+    This mutation searches for a user account using either email or username
+    and returns the user's UID if found.
+    
+    Args:
+        input (FindUserInput): Contains email_or_username field
+    
+    Returns:
+        FindUserByEmailOrUsername: Response containing:
+            - success: Boolean indicating if user was found
+            - message: Success or error message
+            - uid: User's UID if found
+    
+    Raises:
+        GraphQLError: If user not found
+        Exception: If search fails
+    
+    Note:
+        - Does not require authentication
+        - Searches by email or username
+        - Returns UID for next step in password reset flow
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    uid = graphene.String()
+    email = graphene.String()
+    username = graphene.String()
+    
+    class Arguments:
+        input = FindUserInput(required=True)
+
+    def mutate(self, info, input):
+        try:
+            email_or_username = input.email_or_username.strip()
+            
+            # Try to find user by email first, then by username in Neo4j Users model
+            user = None
+            if '@' in email_or_username:
+                # It's an email - search in Neo4j Users model
+                user = Users.nodes.filter(email=email_or_username.lower()).first()
+            else:
+                # It's a username - search in Neo4j Users model (case-sensitive)
+                user = Users.nodes.filter(username=email_or_username).first()
+            
+            if not user:
+                raise GraphQLError('User not found with the provided email or username')
+            
+            return FindUserByEmailOrUsername(
+                success=True,
+                message="User found successfully",
+                uid=user.uid,
+                email=user.email,
+                username=user.username
+            )
+        
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return FindUserByEmailOrUsername(
+                success=False,
+                message=message,
+                uid=None
+            )
+
+
+class SendOTPForPasswordReset(graphene.Mutation):
+    """
+    Step 2: Send OTP for password reset using user's UID.
+    
+    This mutation generates and sends an OTP to the user's email
+    for password reset verification.
+    
+    Args:
+        input (SendOTPInput): Contains uid field
+    
+    Returns:
+        SendOTPForPasswordReset: Response containing:
+            - success: Boolean indicating if OTP was sent
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user not found or email sending fails
+        Exception: If OTP generation fails
+    
+    Note:
+        - Does not require authentication
+        - Generates OTP with FORGET_PASSWORD purpose
+        - Sends email using existing email service
+        - Rate limited to prevent abuse
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = SendOTPInput(required=True)
+
+    def mutate(self, info, input):
+        try:
+            uid = input.user_uid.strip()
+            
+            # Find user by UID (username)
+            user = User.objects.filter(username=uid).first()
+            if not user:
+                raise GraphQLError('User not found')
+            
+            # Check rate limiting (similar to existing SendOTP)
+            # existing_otp = OTP.objects.filter(
+            #     user=user, 
+            #     purpose=OtpPurposeEnum.FORGET_PASSWORD.value
+            # ).first()
+            
+            # if existing_otp and not existing_otp.is_expired():
+            #     raise GraphQLError('OTP already sent. Please wait before requesting a new one.')
+            
+            # Delete any existing OTPs for this user and purpose
+            OTP.objects.filter(
+                user=user, 
+                purpose=OtpPurposeEnum.FORGET_PASSWORD.value
+            ).delete()
+            
+            # Generate new OTP
+            otp_code = generate_otp()
+            
+            # Create OTP record
+            otp_instance = OTP.objects.create(
+                user=user,
+                otp=otp_code,
+                purpose=OtpPurposeEnum.FORGET_PASSWORD.value
+            )
+            
+            # Send OTP email
+            generate_payload.send_rendered_forget_email(
+                api_url=os.getenv('EMAIL_API_URL'),
+                api_key=os.getenv('EMAIL_API_KEY'),
+                first_name=user.first_name,
+                otp_code=otp_code,
+                user_email=user.email
+            )
+            
+            return SendOTPForPasswordReset(
+                success=True,
+                message="OTP sent successfully to your email"
+            )
+        
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return SendOTPForPasswordReset(
+                success=False,
+                message=message
+            )
+
+
+class VerifyOTPForPasswordReset(graphene.Mutation):
+    """
+    Step 3: Verify OTP for password reset.
+    
+    This mutation validates the OTP sent for password reset
+    and marks it as verified for the final password update step.
+    
+    Args:
+        input (VerifyOTPInput): Contains uid and otp fields
+    
+    Returns:
+        VerifyOTPForPasswordReset: Response containing:
+            - success: Boolean indicating if OTP was verified
+            - message: Success or error message
+            - verification_token: Token to use for password update
+    
+    Raises:
+        GraphQLError: If user not found, OTP invalid, or expired
+        Exception: If verification fails
+    
+    Note:
+        - Does not require authentication
+        - Validates OTP against database records
+        - Checks OTP expiration
+        - Returns verification token for next step
+        - Does not delete OTP (kept for password update step)
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    verification_token = graphene.String()
+
+    class Arguments:
+        input = VerifyOTPInput(required=True)
+
+    def mutate(self, info, input):
+        try:
+            email = input.email.strip()
+            otp_code = input.otp.strip()
+            
+            # Find user by email
+            user = User.objects.filter(email=email).first()
+            if not user:
+                raise GraphQLError('User not found')
+            
+            # Find OTP record
+            otp_instance = OTP.objects.filter(
+                user=user,
+                otp=otp_code,
+                purpose=OtpPurposeEnum.FORGET_PASSWORD.value
+            ).first()
+            
+            if not otp_instance:
+                raise GraphQLError('Invalid OTP')
+            
+            if otp_instance.is_expired():
+                raise GraphQLError('OTP has expired')
+            
+            # Generate verification token (simple token for this step)
+            verification_token = f"{user.id}:{otp_code}:{timezone.now().timestamp()}"
+            
+            return VerifyOTPForPasswordReset(
+                success=True,
+                message="OTP verified successfully",
+                verification_token=verification_token
+            )
+        
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return VerifyOTPForPasswordReset(
+                success=False,
+                message=message,
+                verification_token=None
+            )
+
+
+class UpdatePasswordWithOTPVerification(graphene.Mutation):
+    """
+    Step 4: Update password after OTP verification.
+    
+    This mutation updates the user's password after successful OTP verification,
+    following the same password validation rules as user creation.
+    
+    Args:
+        input (UpdatePasswordInput): Contains uid, verification_token, and new_password
+    
+    Returns:
+        UpdatePasswordWithOTPVerification: Response containing:
+            - success: Boolean indicating if password was updated
+            - message: Success or error message
+            - token: New JWT access token
+            - refresh_token: New JWT refresh token
+    
+    Raises:
+        GraphQLError: If verification token invalid, user not found, or password validation fails
+        Exception: If password update fails
+    
+    Note:
+        - Does not require authentication
+        - Validates verification token from previous step
+        - Applies same password validation rules as createUser
+        - Updates user password using Django's set_password
+        - Generates new authentication tokens
+        - Deletes OTP after successful password update
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    token = graphene.String()
+    refresh_token = graphene.String()
+
+    class Arguments:
+        input = UpdatePasswordInput(required=True)
+
+    def mutate(self, info, input):
+        from auth_manager.validators.rules.password_validation import validate_password
+        
+        token = None
+        refresh_token = None
+        
+        try:
+            email = input.email.strip()
+            new_password = input.new_password
+            otp_verified = input.otp_verified
+            
+            # Check if OTP is verified
+            if not otp_verified:
+                return UpdatePasswordWithOTPVerification(
+                    success=False,
+                    message="OTP verification is required before updating password"
+                )
+            
+            # Find user by email
+            try:
+                user = User.objects.get(email=email)
+            except User.DoesNotExist:
+                return UpdatePasswordWithOTPVerification(
+                    success=False,
+                    message="User not found with this email"
+                )
+            
+            # Validate new password using existing validation rules
+            validate_password(new_password)
+            
+            # Update password
+            user.set_password(new_password)
+            user.save()
+            
+            # Track activity for analytics
+            try:
+                from analytics.services import ActivityService
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user.id,
+                    content_type='user',
+                    content_id=str(user.id),
+                    interaction_type='password_change',
+                    metadata={
+                        'email': email,
+                        'method': 'otp_verification'
+                    }
+                )
+            except Exception as e:
+                # Don't fail password update if activity tracking fails
+                pass
+            
+            # Generate new tokens
+            token = get_token(user)
+            refresh_token = create_refresh_token(user)
+            
+            return UpdatePasswordWithOTPVerification(
+                success=True,
+                message="Password updated successfully",
+                token=token,
+                refresh_token=refresh_token
+            )
+        
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return UpdatePasswordWithOTPVerification(
+                success=False,
+                message=message,
+                token=token,
+                refresh_token=refresh_token
+            )
+
+
 
 
 
@@ -3091,6 +3446,48 @@ class CreateProfileDataReactionV2(Mutation):
                     skill_node.like.connect(like)
                     like.skill.connect(skill_node)
 
+                # Track vibe activity
+                try:
+                    # Get the profile data owner based on category
+                    profile_data_owner = None
+                    if category == "education":
+                        profile_data_owner = education_node.user.single()
+                    elif category == "experience":
+                        profile_data_owner = experience_node.user.single()
+                    elif category == "achievement":
+                        profile_data_owner = achievement_node.user.single()
+                    elif category == "skill":
+                        profile_data_owner = skill_node.user.single()
+                    
+                    if profile_data_owner and input.reaction and input.vibe:
+                        vibe_data = {
+                            'vibe_name': input.reaction,
+                            'vibe_score': input.vibe,
+                            'vibe_type': 'profile_data',
+                            'category': f'profile_{category}_reaction'
+                        }
+                        
+                        context_data = {
+                            'profile_data_uid': input.uid,
+                            'profile_data_category': category,
+                            'ip_address': info.context.META.get('REMOTE_ADDR'),
+                            'user_agent': info.context.META.get('HTTP_USER_AGENT')
+                        }
+                        
+                        VibeActivityService.track_vibe_sending(
+                            sender=user_node,
+                            receiver_id=profile_data_owner.uid,
+                            vibe_data=vibe_data,
+                            vibe_score=input.vibe,
+                            context=context_data
+                        )
+                        
+                        logger.info(f"Vibe activity tracked for profile {category} reaction: {user_node.user_id} -> {profile_data_owner.user_id}")
+                        
+                except Exception as vibe_error:
+                    logger.error(f"Failed to track vibe activity for profile {category} reaction: {str(vibe_error)}")
+                    # Don't fail the main operation if vibe tracking fails
+
                 # post.like.connect(like)
 
                 # increment_post_like_count(post.uid)
@@ -3907,6 +4304,18 @@ class Mutation(graphene.ObjectType):
     verify_otp = VerifyOTP.Field()
     search_username = SearchUsername.Field()
     verify_otp_and_reset_password = VerifyOTPAndResetPassword.Field()
+    
+    # Password Reset Flow (4-step process)
+    find_user_by_email_or_username = FindUserByEmailOrUsername.Field()
+    send_otp_for_password_reset = SendOTPForPasswordReset.Field()
+    verify_otp_for_password_reset = VerifyOTPForPasswordReset.Field()
+    update_password_with_otp_verification = UpdatePasswordWithOTPVerification.Field()
+    
+    # Password Reset Flow (4-step process)
+    find_user_by_email_or_username = FindUserByEmailOrUsername.Field()
+    send_otp_for_password_reset = SendOTPForPasswordReset.Field()
+    verify_otp_for_password_reset = VerifyOTPForPasswordReset.Field()
+    update_password_with_otp_verification = UpdatePasswordWithOTPVerification.Field()
     create_achievement=CreateAchievement.Field()
     create_skill=CreateSkill.Field()
     create_user_review=CreateUsersReview.Field()

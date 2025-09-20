@@ -1285,6 +1285,9 @@ class CommunityDetailsType(ObjectType):
                     group_icon_id=subcommunity.group_icon_id,
                     group_icon_url=FileDetailType(**generate_presigned_url.generate_file_info(
                         subcommunity.group_icon_id)),
+                    cover_image_id=subcommunity.cover_image_id,
+                    cover_image_url=FileDetailType(**generate_presigned_url.generate_file_info(
+                        subcommunity.cover_image_id)) if subcommunity.cover_image_id else None,
                     category=subcommunity.category,
                     is_login_user_member=is_login_user_mem,
                     is_admin=i_admin,
@@ -1952,6 +1955,20 @@ class SecondaryCommunityCategoryType(ObjectType):
             
             
             data=[]
+            if details=="All Communities":
+               # New query to get all communities for the user without any conditions
+               if community_type:
+                  params = {"user_uid": user_uid, "community_type": community_type.value}    
+                  results,_ = db.cypher_query(get_all_user_communities_with_filter, params)
+               else:
+                  params = {"user_uid": user_uid}    
+                  results,_ = db.cypher_query(get_all_user_communities, params)
+
+               for community in results:
+                   community_node = community[0]
+                   data.append(
+                       CommunityFeedType.from_neomodel(community_node)
+                    )
             if details=="Mutual Community":
 
                 if community_type:

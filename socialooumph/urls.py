@@ -1,17 +1,11 @@
 from django.views.decorators.csrf import csrf_exempt
 from graphene_django.views import GraphQLView
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path,include
 from django.shortcuts import redirect
 from schema import schema, schemaV2
 from auth_manager.views import CustomGraphQLView
 from docs.views import docs_home, api_reference, integration_guide
-
-# Import activity tracker URLs
-try:
-    from activity_tracker.urls import urlpatterns as activity_tracker_urls
-except ImportError:
-    activity_tracker_urls = []
 
 
 
@@ -25,11 +19,8 @@ urlpatterns = [
     path('docs/', docs_home, name='docs_home'),
     path('docs/reference/', api_reference, name='api_reference'),
     path('docs/guide/', integration_guide, name='integration_guide'),
-    
-    # Activity Tracker API Endpoints
-    path('api/activity/', include(activity_tracker_urls)),
-    
-    # Other apps
+
+
     path('', include('upload.urls')),
 
 ]
