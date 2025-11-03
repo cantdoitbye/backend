@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 from .enums.otp_purpose_enum import OtpPurposeEnum
 from django.db import models
-# from vibe_manager.models import IndividualVibe  # Removed to prevent circular import
+from vibe_manager.models import IndividualVibe
 import uuid
 import hashlib
 from django.apps import apps
@@ -49,6 +49,8 @@ class Users(DjangoNode, StructuredNode):
     updated_at = DateTimeProperty(default_now=True)  # Last modification timestamp
     updated_by = StringProperty()  # Last modifier reference
     is_active = BooleanProperty(default=False)  # Account activation status
+    is_bot = BooleanProperty(default=False)  # Flag to identify AI bot accounts
+    persona = StringProperty()  # Bot persona/character description (e.g., "tech_enthusiast", "foodie", "traveler")
     
     profile = RelationshipTo('Profile', 'HAS_PROFILE')  # Define the relationship 
     story=RelationshipTo('story.models.Story','HAS_STORY')
@@ -560,7 +562,7 @@ class ProfileReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
-        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
+        # IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {
@@ -680,6 +682,7 @@ class BackProfileReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {
@@ -1028,6 +1031,7 @@ class ProfileDataReactionManager(models.Model):
         if category not in category_map:
             raise ValueError("Invalid category. Choose from 'education', 'achievement', 'skill', or 'experience'.")
 
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  
 
         setattr(self, category_map[category], [
@@ -1299,6 +1303,7 @@ class AchievementReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {
@@ -1367,6 +1372,7 @@ class EducationReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {
@@ -1435,6 +1441,7 @@ class SkillReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {
@@ -1503,6 +1510,7 @@ class ExperienceReactionManager(models.Model):
 
     def initialize_reactions(self):
         """Populate the initial 10 vibes with `vibes_count=0` and `cumulative_vibe_score=0`."""
+        IndividualVibe = apps.get_model('vibe_manager', 'IndividualVibe')
         first_10_vibes = IndividualVibe.objects.all()[:10]  # Get the first 10 vibes
         for vibe in first_10_vibes:
             reaction_info = {

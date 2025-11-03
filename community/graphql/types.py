@@ -153,6 +153,8 @@ class CommunityType(ObjectType):
     communitymessage = graphene.List(lambda:CommunityMessagesNonCommunityType)
     community_review=graphene.List(lambda:CommunityReviewNonCommunityType)
     members=graphene.List(lambda:MembershipNonCommunityType)
+    mentioned_users = graphene.List(UserType)
+
     
     # Agent management fields
     leader_agent = graphene.Field('agentic.graphql.types.AgentType')
@@ -219,11 +221,13 @@ class CommunityType(ObjectType):
             cover_image_id=community.cover_image_id,
             cover_image_url=cover_image_url,
             category=community.category,
-            created_by=UserType.from_neomodel(community.created_by.single()) if community.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(community.created_by.single()) if community.created_by.single() and isinstance(community.created_by.single(), Users) else None,
             communitymessage=[CommunityMessagesNonCommunityType.from_neomodel(x) for x in community.communitymessage],
             community_review=[CommunityReviewNonCommunityType.from_neomodel(x) for x in community.community_review],
             members=[MembershipNonCommunityType.from_neomodel(x) for x in community.members],
-            
+            mentioned_users=cls._get_description_mentioned_users(community),
+
             # Agent management fields
             leader_agent=leader_agent,
             has_leader_agent=has_leader_agent,
@@ -257,6 +261,26 @@ class CommunityType(ObjectType):
         except Exception as e:
             print(f"Error getting agent assignments: {e}")
             return []
+    @classmethod
+    def _get_description_mentioned_users(cls, community):
+        """Get users mentioned in the community description."""
+        try:
+            from post.services.mention_service import MentionService
+            
+            mentions = MentionService.get_mentions_for_content('community_description', community.uid)
+            
+            mentioned_users = []
+            for mention in mentions:
+                mentioned_user = mention.mentioned_user.single()
+                if mentioned_user:
+                    mentioned_users.append(UserType.from_neomodel(mentioned_user))
+            
+            return mentioned_users
+            
+        except Exception as e:
+            print(f"Error getting mentioned users for community {community.uid}: {e}")
+            return []    
+
 
 
 class CommunityInformationType(ObjectType):
@@ -745,7 +769,8 @@ class CommunityGoalType(ObjectType):
             description=goal.description,
             file_id=goal.file_id,
             file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in goal.file_id] if goal.file_id else None),
-            created_by=UserType.from_neomodel(goal.created_by.single()) if goal.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(goal.created_by.single()) if goal.created_by.single() and isinstance(goal.created_by.single(), Users) else None,
             # community=CommunityType.from_neomodel(goal.community.single()) if goal.community.single() else None,
             timestamp=goal.timestamp,
             is_deleted=goal.is_deleted,
@@ -791,7 +816,8 @@ class CommunityActivityType(ObjectType):
             activity_type=activity.activity_type,
             file_id=activity.file_id,
             file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in activity.file_id] if activity.file_id else None),
-            created_by=UserType.from_neomodel(activity.created_by.single()) if activity.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(activity.created_by.single()) if activity.created_by.single() and isinstance(activity.created_by.single(), Users) else None,
             # community=CommunityType.from_neomodel(activity.community.single()) if activity.community.single() else None,
             date=activity.date,
             is_deleted=activity.is_deleted,
@@ -837,7 +863,8 @@ class CommunityAffiliationType(ObjectType):
             subject=affiliation.subject,
             file_id=affiliation.file_id,
             file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in affiliation.file_id] if affiliation.file_id else None),
-            created_by=UserType.from_neomodel(affiliation.created_by.single()) if affiliation.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(affiliation.created_by.single()) if affiliation.created_by.single() and isinstance(affiliation.created_by.single(), Users) else None,
             # community=CommunityType.from_neomodel(affiliation.community.single()) if affiliation.community.single() else None,
             timestamp=affiliation.timestamp,
             is_deleted=affiliation.is_deleted,
@@ -883,7 +910,8 @@ class CommunityAchievementType(ObjectType):
             subject=achievement.subject,
             file_id=achievement.file_id,
             file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in achievement.file_id] if achievement.file_id else None),
-            created_by=UserType.from_neomodel(achievement.created_by.single()) if achievement.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(achievement.created_by.single()) if achievement.created_by.single() and isinstance(achievement.created_by.single(), Users) else None,
             # community=CommunityType.from_neomodel(achievement.community.single()) if achievement.community.single() else None,
             timestamp=achievement.timestamp,
             is_deleted=achievement.is_deleted,
@@ -891,7 +919,7 @@ class CommunityAchievementType(ObjectType):
             my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in enhanced_data['my_vibe_details']],
             vibe_feed_list=[VibeFeedListType.from_neomodel(v) for v in enhanced_data['vibe_feed_list']],
             score=generate_connection_score()
-            
+        
             )
 
 class SubCommunityType(graphene.ObjectType):
@@ -958,7 +986,8 @@ class SubCommunityType(graphene.ObjectType):
             cover_image_id=sub_community.cover_image_id,
             cover_image_url=cover_image_url,
             category=sub_community.category,
-            created_by=UserType.from_neomodel(sub_community.created_by.single()) if sub_community.created_by.single() else None,
+            # Fixed: Verify created_by is a Users object before passing to UserType
+            created_by=UserType.from_neomodel(sub_community.created_by.single()) if sub_community.created_by.single() and isinstance(sub_community.created_by.single(), Users) else None,
             parent_community=CommunityType.from_neomodel(sub_community.parent_community.single()) if sub_community.parent_community.single() else None
         )
 
@@ -1312,25 +1341,25 @@ class CommunityDetailsType(ObjectType):
     
     @classmethod
     def _get_leader_agent(cls, community):
-        """Get the current leader agent for the community."""
+        """Get the current leader agent for the community, including inherited from parent communities."""
         try:
             # Import here to avoid circular imports
-            from agentic.models import AgentCommunityAssignment
+            from agentic.models import AgentCommunityAssignment, Agent
             from agentic.graphql.types import AgentType
-            
-            # Find active leader assignments for this community
-            all_assignments = AgentCommunityAssignment.nodes.all()
-            
-            for assignment in all_assignments:
-                assignment_community = assignment.community.single()
-                if (assignment_community and 
-                    assignment_community.uid == community.uid and 
-                    assignment.is_active()):
-                    
-                    agent = assignment.agent.single()
-                    if agent and agent.agent_type == 'COMMUNITY_LEADER':
-                        return AgentType.from_neomodel(agent)
-            
+            from community.models import SubCommunity, Community
+
+            # Use the inherited methods we added to the models
+            if isinstance(community, Community):
+                leader_agent = community.get_leader_agent_inherited()
+            elif isinstance(community, SubCommunity):
+                leader_agent = community.get_leader_agent_inherited()
+            else:
+                # Fallback to original logic for unknown types
+                leader_agent = None
+
+            if leader_agent and leader_agent.agent_type == 'COMMUNITY_LEADER':
+                return AgentType.from_neomodel(leader_agent)
+
             return None
         except Exception as e:
             print(f"Error getting leader agent: {e}")
@@ -2106,6 +2135,8 @@ class CommunityPostType(ObjectType):
     is_deleted = graphene.Boolean()
     creator = graphene.Field(UserType)
     score = graphene.Float()
+    mentioned_users = graphene.List(UserType)
+
     
     
 
@@ -2128,10 +2159,25 @@ class CommunityPostType(ObjectType):
                 is_deleted=post.is_deleted,
                 creator=UserType.from_neomodel(post.creator.single()) if post.creator.single() else None,
                 score=generate_connection_score(),
-            
-                
-
             )
+    def resolve_mentioned_users(self, info):
+        """Get users mentioned in this community post."""
+        try:
+            from post.services.mention_service import MentionService
+            
+            mentions = MentionService.get_mentions_for_content('community_post', self.uid)
+            
+            mentioned_users = []
+            for mention in mentions:
+                mentioned_user = mention.mentioned_user.single()
+                if mentioned_user:
+                    mentioned_users.append(UserType.from_neomodel(mentioned_user))
+            
+            return mentioned_users
+            
+        except Exception as e:
+            return []    
+
         
 
     
@@ -2295,6 +2341,49 @@ class UserAdminCommunitiesResponseType(ObjectType):
         return cls(
             communities=communities,
             total=total
+        )
+
+class AllCommunitiesResponseType(ObjectType):
+    """Paginated response type for all communities with total count"""
+    communities = graphene.List(CommunityType)
+    total = graphene.Int()
+
+    @classmethod
+    def create(cls, communities, total):
+        """Create a paginated response with communities list and total count"""
+        return cls(
+            communities=communities,
+            total=total
+        )
+
+class AllSubCommunitiesResponseType(ObjectType):
+    """Paginated response type for all subcommunities with total count"""
+    subcommunities = graphene.List(SubCommunityType)
+    total = graphene.Int()
+
+    @classmethod
+    def create(cls, subcommunities, total):
+        """Create a paginated response with subcommunities list and total count"""
+        return cls(
+            subcommunities=subcommunities,
+            total=total
+        )
+
+class LeaveCommunityChatResponseType(ObjectType):
+    """Response type for leaving community Matrix chat room"""
+    success = graphene.Boolean()
+    message = graphene.String()
+    room_id = graphene.String()
+    left_at = graphene.DateTime()
+
+    @classmethod
+    def create(cls, success, message, room_id=None, left_at=None):
+        """Create a response for leaving community chat"""
+        return cls(
+            success=success,
+            message=message,
+            room_id=room_id,
+            left_at=left_at
         )
     
 

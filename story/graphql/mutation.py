@@ -23,6 +23,8 @@ import asyncio
 from story.services.notification_service import NotificationService
 from user_activity.services.activity_service import ActivityService
 from vibe_manager.services.vibe_activity_service import VibeActivityService
+from post.services.mention_service import MentionService
+
 
 # Story creation mutation - creates new story with media and privacy settings
 # Used by: Story creation flow, content publishing
@@ -78,6 +80,25 @@ class CreateStory(Mutation):
             # Establish relationships in graph database
             story.created_by.connect(created_by)
             created_by.story.connect(story)
+
+            # Extract mentions from story content (title, content, captions)
+            from post.utils.mention_extractor import MentionExtractor
+            
+            # Combine story title, content, and captions for mention extraction
+            story_content = f"{input.get('title', '')} {input.get('content', '')} {input.get('captions', '')}".strip()
+            
+            print("Extracting mentions from story content...")
+            mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(story_content)
+            
+            if mentioned_user_uids:
+                # Create mentions for the story
+                MentionService.create_mentions(
+                    mentioned_user_uids=mentioned_user_uids,
+                    content_type='story',
+                    content_uid=story.uid,
+                    mentioned_by_uid=created_by.uid,
+                    mention_context='story_content'
+                )
 
             # Track story creation activity
             try:
@@ -471,6 +492,16 @@ class CreateStoryReaction(Mutation):
             
             story = Story.nodes.get(uid=story_uid)
             
+            # Check if user already reacted to this story to prevent duplicates
+            from neomodel import db
+            check_query = (
+                "MATCH (user:Users {user_id: $user_id})-[:HAS_USER]->(reaction:StoryReaction) "
+                "MATCH (reaction)-[:HAS_STORY]->(story:Story {uid: $story_uid}) "
+                "RETURN reaction"
+            )
+            check_params = {'user_id': user_id, 'story_uid': story_uid}
+            existing_results, _ = db.cypher_query(check_query, check_params)
+            
             # Update aggregated reaction analytics
             # Get or create StoryReactionManager for vibe tracking
             try:
@@ -481,24 +512,48 @@ class CreateStoryReaction(Mutation):
                 story_reaction_manager.initialize_reactions()
                 story_reaction_manager.save()
 
-            # Add reaction to aggregated analytics
-            story_reaction_manager.add_reaction(
-                vibes_name=input.reaction,  # Vibe name (e.g., "Happy", "Sad")
-                score=input.vibe            # Intensity score (1-5)
-            )
-            story_reaction_manager.save()
-
-            # Create individual reaction record
-            reaction = StoryReaction(
-                reaction=input.get('reaction', ''),
-                vibe=input.get('vibe', '')
-            )
-            reaction.save()
+            message = ""
+            if existing_results:
+                # User already reacted - update existing reaction
+                existing_reaction = StoryReaction.inflate(existing_results[0][0])
+                old_reaction = existing_reaction.reaction
+                old_vibe = existing_reaction.vibe
+                
+                # Update the reaction manager analytics
+                story_reaction_manager.update_reaction(
+                    old_vibes_name=old_reaction,
+                    new_vibes_name=input.reaction,
+                    old_score=old_vibe,
+                    new_score=input.vibe
+                )
+                
+                # Update the existing reaction
+                existing_reaction.reaction = input.reaction
+                existing_reaction.vibe = input.vibe
+                existing_reaction.save()
+                reaction = existing_reaction
+                message = StoryMessages.STORY_REACTION_UPDATED
+            else:
+                # Add reaction to aggregated analytics
+                story_reaction_manager.add_reaction(
+                    vibes_name=input.reaction,  # Vibe name (e.g., "Happy", "Sad")
+                    score=input.vibe            # Intensity score (1-5)
+                )
+                
+                # Create individual reaction record
+                reaction = StoryReaction(
+                    reaction=input.reaction,
+                    vibe=input.vibe
+                )
+                reaction.save()
+                
+                # Establish graph relationships
+                reaction.story.connect(story)
+                reaction.user.connect(user)
+                story.storyreaction.connect(reaction)
+                message = StoryMessages.STORY_REACTION_CREATED
             
-            # Establish graph relationships
-            reaction.story.connect(story)
-            reaction.user.connect(user)
-            story.storyreaction.connect(reaction)
+            story_reaction_manager.save()
             
             # Track story reaction activity
             try:
@@ -549,7 +604,7 @@ class CreateStoryReaction(Mutation):
                 logger = logging.getLogger(__name__)
                 logger.error(f"Failed to track vibe activity: {str(e)}")
             
-            return CreateStoryReaction(success=True, message=StoryMessages.STORY_REACTION_CREATED)
+            return CreateStoryReaction(success=True, message=message)
             
         except Exception as error:
             message = getattr(error, 'message', str(error))

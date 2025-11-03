@@ -240,7 +240,7 @@ def flag_agent_messages(messages: List[Dict[str, Any]], community_uid: str) -> L
 def get_matrix_credentials_for_community(community_uid: str) -> Optional[Dict[str, str]]:
     """
     Gets Matrix credentials for accessing a community's room.
-    Uses the hardcoded OoumphLead user (ID: 119) who is part of every community.
+    Uses the hardcoded OoumphLead user (ID: 771) who is part of every community.
     
     Args:
         community_uid: UID of the community
@@ -249,16 +249,16 @@ def get_matrix_credentials_for_community(community_uid: str) -> Optional[Dict[st
         dict: Contains 'access_token' and 'user_id' or None if not available
     """
     try:
-        # Use hardcoded OoumphLead user (ID: 119) who is part of every community
+        # Use hardcoded OoumphLead user (ID: 771) who is part of every community
         try:
-            matrix_profile = MatrixProfile.objects.get(user=119)
+            matrix_profile = MatrixProfile.objects.get(user=771)
             if matrix_profile.access_token and matrix_profile.matrix_user_id:
                 return {
                     'access_token': matrix_profile.access_token,
                     'user_id': matrix_profile.matrix_user_id
                 }
         except MatrixProfile.DoesNotExist:
-            matrix_logger.warning(f"No Matrix profile found for OoumphLead user (ID: 119)")
+            matrix_logger.warning(f"No Matrix profile found for OoumphLead user (ID: 771)")
             return None
                     
         matrix_logger.warning(f"No Matrix credentials found for OoumphLead user")
@@ -408,7 +408,7 @@ async def ban_user_from_room(
             timeout=timeout
         )
         
-        if hasattr(response, 'event_id'):
+        if hasattr(response, 'transport_response') and response.transport_response.status == 200:
             matrix_logger.info(f"Successfully banned user {target_user_id} from room {room_id}")
             return True
         else:
@@ -471,5 +471,59 @@ async def unban_user_from_room(
     except Exception as e:
         matrix_logger.error(f"Error unbanning user {target_user_id}: {e}")
         raise MatrixMessageError(f"Error unbanning user: {e}")
+    finally:
+        await client.close()
+
+
+async def leave_matrix_room(
+    access_token: str,
+    user_id: str,
+    room_id: str,
+    timeout: int = 10
+) -> bool:
+    """
+    Allows a user to voluntarily leave a Matrix room.
+    
+    Args:
+        access_token: User's Matrix access token
+        user_id: User's Matrix user ID
+        room_id: Matrix room ID to leave
+        timeout: Request timeout
+        
+    Returns:
+        bool: True if successful, False otherwise
+        
+    Raises:
+        MatrixMessageError: If leave fails
+    """
+    client = AsyncClient(settings.MATRIX_SERVER_URL)
+    client.access_token = access_token
+    client.user_id = user_id
+    
+    try:
+        response = await asyncio.wait_for(
+            client.room_leave(room_id),
+            timeout=timeout
+        )
+        
+        # Check if the response indicates success
+        # RoomLeaveResponse doesn't have event_id, but we can check for successful HTTP response
+        if hasattr(response, 'transport_response') and response.transport_response.status == 200:
+            matrix_logger.info(f"Successfully left room {room_id}")
+            return True
+        elif hasattr(response, 'event_id'):
+            # Fallback check for event_id if it exists
+            matrix_logger.info(f"Successfully left room {room_id}")
+            return True
+        else:
+            matrix_logger.error(f"Failed to leave room {room_id}: {response}")
+            raise MatrixMessageError(f"Failed to leave room: {response}")
+            
+    except asyncio.TimeoutError:
+        matrix_logger.error(f"Timeout leaving room {room_id}")
+        raise MatrixMessageError(f"Timeout leaving room")
+    except Exception as e:
+        matrix_logger.error(f"Error leaving room {room_id}: {e}")
+        raise MatrixMessageError(f"Error leaving room: {e}")
     finally:
         await client.close()

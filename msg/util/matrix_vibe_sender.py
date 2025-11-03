@@ -14,6 +14,7 @@ async def send_vibe_reaction_to_matrix(
     vibe_name: str,
     vibe_intensity: float,
     individual_vibe_id: int,
+    profile_image_url: str = None,
     timeout: int = 10
 ) -> str:
     """
@@ -27,6 +28,7 @@ async def send_vibe_reaction_to_matrix(
         vibe_name: Name from IndividualVibe.name_of_vibe
         vibe_intensity: Intensity level (1.0 to 5.0)
         individual_vibe_id: ID from IndividualVibe model
+        profile_image_url: User's profile image URL (optional)
         timeout: Request timeout
         
     Returns:
@@ -42,8 +44,17 @@ async def send_vibe_reaction_to_matrix(
         clean_vibe_id = int(individual_vibe_id)
         clean_vibe_name = str(vibe_name).replace(":", "_").replace(" ", "_").strip()
         
-        # Create simple vibe key without problematic characters
-        vibe_key = f"ooumph_vibe_{clean_vibe_id}_{clean_vibe_name}_{clean_intensity}"
+        # Sanitize profile image URL if provided
+        clean_profile_image = ""
+        if profile_image_url:
+            # Remove problematic characters and encode URL-safe characters
+            clean_profile_image = str(profile_image_url).replace(":", "_").replace(" ", "_").replace("/", "_").strip()
+        
+        # Create vibe key with profile image
+        if clean_profile_image:
+            vibe_key = f"ooumph_vibe_{clean_vibe_id}_{clean_vibe_name}_{clean_intensity}_{clean_profile_image}"
+        else:
+            vibe_key = f"ooumph_vibe_{clean_vibe_id}_{clean_vibe_name}_{clean_intensity}"
         
         # Simple reaction content - no custom fields that might cause JSON issues
         reaction_content = {

@@ -79,7 +79,15 @@ class PostType(ObjectType):
                         sorted_reactions = []
 
             user_node=Users.nodes.get(uid=info.context.user)
-            post_creator = post.created_by.single() if post.created_by.single() else None
+            # Handle different creator types for Post vs CommunityPost
+            from community.models import CommunityPost
+            post_creator = None
+            if isinstance(post, CommunityPost):
+                # For community posts, creator points to Users
+                post_creator = post.creator.single() if post.creator else None
+            else:
+                # For regular posts, created_by points to Users
+                post_creator = post.created_by.single() if post.created_by else None
             profile = user_node.profile.single() if user_node.profile.single() else None
             
             # Get connection between viewing user and post creator
@@ -191,6 +199,7 @@ class CommentType(ObjectType):
     depth_level = graphene.Int()                          # Nesting depth (0 = top-level)
     is_reply = graphene.Boolean()                         # True if this is a reply to another comment
     vibe_reactions = graphene.List(lambda: CommentVibeType)  # Vibe reactions on this comment
+    mentioned_users = graphene.List(UserType)
 
     @classmethod
     def from_neomodel(cls, comment, info=None, max_reply_depth=2, current_depth=0):
@@ -348,6 +357,26 @@ class CommentType(ObjectType):
             is_reply=is_reply,
             vibe_reactions=vibe_reactions
         )
+    def resolve_mentioned_users(self, info):
+        """Get users mentioned in this comment using the existing MentionService."""
+        try:
+           from post.services.mention_service import MentionService
+        
+           # Use the existing method
+           mentions = MentionService.get_mentions_for_content('comment', self.uid)
+        
+        # Extract mentioned users
+           mentioned_users = []
+           for mention in mentions:
+              mentioned_user = mention.mentioned_user.single()
+              if mentioned_user:
+                mentioned_users.append(UserType.from_neomodel(mentioned_user))
+        
+           return mentioned_users
+        
+        except Exception as e:
+          logger.error(f"Error getting mentioned users for comment {self.uid}: {str(e)}")
+        return []
     
 class NestedCommentsResponse(ObjectType):
     """Response type for nested comment queries with metadata."""
@@ -880,10 +909,19 @@ class FeedTestType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, post_data,reactions_nodes=None,connection_node=None,circle_node=None,user_node=None,profile=None,query_share_count=None, query_overall_score=None):
+        # Handle None post_data
+        if not post_data:
+            logger.error("FeedTestType.from_neomodel called with None post_data")
+            return None
+            
         created_at_unix=post_data.get('created_at'),
-        created_at=datetime.utcfromtimestamp(created_at_unix[0])
+        created_at=datetime.utcfromtimestamp(created_at_unix[0]) if created_at_unix[0] else datetime.now()
         uid=post_data.get('uid'),
         
+        if not uid or not uid[0]:
+            logger.error("FeedTestType.from_neomodel called with missing uid")
+            return None
+            
         post_reaction_manager = PostReactionUtils.get_reaction_manager(uid[0])
 
         
@@ -901,17 +939,10 @@ class FeedTestType(ObjectType):
         # Replace the cursor generation with this:
         try:
             timestamp_iso = created_at.isoformat() if created_at else "2025-08-01T00:00:00.000000"
-            cursor = base64.b64encode(f"{timestamp_iso}_{uid}".encode()).decode()
+            cursor = base64.b64encode(f"{timestamp_iso}_{uid[0]}".encode()).decode()
         except Exception as e:
-            logger.warning(f"Cursor generation failed: {e}")
-            cursor = base64.b64encode(f"2025-08-01T00:00:00.000000_{uid}".encode()).decode()
-        logger.info(f"🔍 FeedTestType.from_neomodel called with:")
-        logger.info(f"   - connection_node: {type(connection_node)} - {connection_node}")
-        logger.info(f"   - circle_node: {type(circle_node)} - {circle_node}")
-        
-        logger.info(f"🔍 FeedTestType.from_neomodel called with:")
-        logger.info(f"   - connection_node: {type(connection_node)} - {connection_node}")
-        logger.info(f"   - circle_node: {type(circle_node)} - {circle_node}")
+            logger.warning(f"Cursor generation failed for uid {uid}: {e}")
+            cursor = base64.b64encode(f"2025-08-01T00:00:00.000000_{uid[0] if uid else 'unknown'}".encode()).decode()
         
         return cls(
             uid=post_data.get('uid'),
@@ -978,16 +1009,14 @@ class ConnectionFeedType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, connection_node, circle_node):
-        # 🔍 Add debug logging
-        logger.info(f"🔍 ConnectionFeedType.from_neomodel called:")
-        logger.info(f"   - connection_node: {connection_node}")
-        logger.info(f"   - circle_node: {circle_node}")
-        
+        if not connection_node:
+            return None
+            
         return cls(
             uid=connection_node['uid'],
             connection_status=connection_node['connection_status'],
             timestamp=str(connection_node['timestamp']),
-            circle=CircleFeedType.from_neomodel(circle_node) if circle_node else None  # 🔑 KEY FIX
+            circle=CircleFeedType.from_neomodel(circle_node) if circle_node else None
         )
 
 # This belong to FeedTestType
@@ -1001,10 +1030,6 @@ class CircleFeedType(ObjectType):
         if not circle_node:
             return None
             
-        # 🔍 Add debug logging
-        logger.info(f"🔍 CircleFeedType.from_neomodel called:")
-        logger.info(f"   - circle_node: {circle_node}")
-        
         return cls(
             uid=circle_node['uid'],
             circle_type=circle_node['circle_type'],
@@ -1025,7 +1050,6 @@ class UserFeedType(ObjectType):
 
     @classmethod
     def from_neomodel(cls, user_node,profile):
-        print("Inside user type")
         try:
             return cls(
                 uid=user_node['uid'],

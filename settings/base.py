@@ -58,6 +58,8 @@ INSTALLED_APPS = [
     'agentic',
     'user_activity',
     'analytics',
+    'truststream',
+    'notification',
 
 
 ]

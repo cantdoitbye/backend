@@ -1,2 +1,1 @@
-from .schema import schema, schemaV2
-
+from .schema import schema

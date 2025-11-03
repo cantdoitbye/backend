@@ -9,6 +9,7 @@ from graphene_django import DjangoObjectType
 
 
 from auth_manager.Utils.otp_generator import generate_otp
+from auth_manager.Utils.phone_generator import generate_unique_indian_mobile, generate_unique_username, generate_realistic_indian_data
 
 from auth_manager.services import send_otp,feedback
 from msg.graphql.types import MatrixProfileType
@@ -28,7 +29,7 @@ from neomodel import db
 from graphql_jwt.decorators import login_required,superuser_required
 from django.contrib.auth import authenticate
 
-from auth_manager.validators.rules import user_validations,validate_dob,string_validation
+from auth_manager.validators.rules import user_validations,validate_dob,string_validation,skill_validation,education_validation,experience_validation
 from .messages import UserMessages,ErrorMessages
 
 from django.utils import timezone
@@ -161,6 +162,8 @@ class CreateUser(Mutation):
             password=input.get('password')
             user_type = input.get("user_type", "personal")
             invite_token = input.get('invite_token')
+            is_bot = input.get('is_bot', False)
+            persona = input.get('persona')
 
             user_validations.validate_create_user_inputs(email=email,password=password)
             # Check if user exists in SQLite
@@ -213,6 +216,9 @@ class CreateUser(Mutation):
             refresh_token = create_refresh_token(user)
             user_node =Users.nodes.get(user_id=str(user.id))
             user_node.user_type = user_type
+            user_node.is_bot = is_bot
+            if persona:
+                user_node.persona = persona
             user_node.save()
             user=UserType.from_neomodel(user_node)
 
@@ -544,6 +550,32 @@ class UpdateUserProfile(graphene.Mutation):
             user.save()
             profile_node.save()
             onboarding_status.save()
+
+            if bio := input.get("bio"):
+               profile_node.bio = bio
+               onboarding_status.bio_set = True
+            
+            # Extract mentions from bio text content
+            if bio_text := input.get('bio'):
+                from post.utils.mention_extractor import MentionExtractor
+                from post.services.mention_service import MentionService
+                
+                # Extract usernames from bio text and convert to UIDs
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(bio_text)
+                
+                if mentioned_user_uids:
+                    # Get current user's UID
+                    current_user = Users.nodes.get(user_id=user_id)
+                    
+                    # Create mentions for the bio
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='bio',
+                        content_uid=profile_node.uid,
+                        mentioned_by_uid=current_user.uid,
+                        mention_context='bio_content'
+                    )
+        
 
             # Track activity for analytics
             try:
@@ -3225,6 +3257,8 @@ class CreateUserV2(Mutation):
             email = input.get('email')
             password=input.get('password')
             user_type = input.get("user_type", "personal")
+            is_bot = input.get('is_bot', False)
+            persona = input.get('persona')
             user_validations.validate_create_user_inputs(email=email,password=password)
             # Check if user exists in SQLite
             if User.objects.filter(email=email).exists():
@@ -3268,6 +3302,9 @@ class CreateUserV2(Mutation):
             refresh_token = create_refresh_token(user)
             user_node =Users.nodes.get(user_id=str(user.id))
             user_node.user_type = user_type
+            user_node.is_bot = is_bot
+            if persona:
+                user_node.persona = persona
             user_node.save()
             user=UserType.from_neomodel(user_node)
 
@@ -3709,7 +3746,7 @@ class CreateAchievement(Mutation):
 
             achievement = Achievement(
                 what=input.get('what', ''),
-                description=input.get('description', ''),
+                description=input.get('description', None),
                 from_source=input.get('from_source', ''),
                 created_on =input.get('created_on', ''),
                 file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
@@ -3797,6 +3834,7 @@ class CreateEducation(Mutation):
             - what: Institution or degree name
             - field_of_study: Field of study
             - from_source: Source of the education record
+            - description: Education description
             - created_on: Creation timestamp
             - file_id: List of file attachment IDs
             - from_date: Start date (optional)
@@ -3838,6 +3876,18 @@ class CreateEducation(Mutation):
             
        
             profile = Profile.nodes.get(user_id=user_id)
+            
+            # Validate education input
+            # from_source = institution/school name
+            # what = degree/qualification
+            # field_of_study = academic field/major
+            school_name = input.get('from_source', '')
+            degree = input.get('what', '')
+            field_of_study = input.get('field_of_study', '')
+            
+            validation_result = education_validation.validate_education_input(school_name, degree, field_of_study)
+            if not validation_result.get('valid'):
+                raise GraphQLError(validation_result.get('error'))
 
             if input.file_id:
                 for id in input.file_id:
@@ -3845,9 +3895,10 @@ class CreateEducation(Mutation):
 
             
             education = Education(
-                    what=input.get('what', ''),
-                    field_of_study=input.get('field_of_study', ''),
-                    from_source=input.get('from_source', ''),
+                    what=degree,
+                    field_of_study=field_of_study,
+                    from_source=school_name,
+                    description=input.get('description', ''),
                     created_on =input.get('created_on', ''),
                     file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
                 )
@@ -3906,6 +3957,17 @@ class UpdateEducation(Mutation):
     def mutate(self, info, input):
         try:
             education = Education.nodes.get(uid=input.uid)
+
+            # If education fields are being updated, validate them
+            school_name = input.get('from_source', education.from_source)
+            degree = input.get('what', education.what)
+            field_of_study = input.get('field_of_study', education.field_of_study)
+            
+            # Only validate if at least one of the three key fields is being updated
+            if 'from_source' in input or 'what' in input or 'field_of_study' in input:
+                validation_result = education_validation.validate_education_input(school_name, degree, field_of_study)
+                if not validation_result.get('valid'):
+                    raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
                 setattr(education, key, value)
@@ -3973,15 +4035,27 @@ class CreateExperience(Mutation):
             profile = Profile.nodes.get(user_id=user_id)
             # profile = Profile.nodes.get(uid=input.profile_uid)
             
+            # Validate experience input
+            # from_source = company/organization name
+            # what = title/position/role
+            # description = work summary/responsibilities
+            company_name = input.get('from_source', '')
+            title = input.get('what', '')
+            description = input.get('description', '')
+            
+            validation_result = experience_validation.validate_experience_input(company_name, title, description)
+            if not validation_result.get('valid'):
+                raise GraphQLError(validation_result.get('error'))
+            
             if input.file_id:
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
 
             experience = Experience(
-                what=input.get('what', ''),
-                description=input.get('description', ''),
+                what=title,
+                description=description,
                 created_on=input.get('created_on', ''),
-                from_source=input.get('from_source', ''),
+                from_source=company_name,
                 file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
             )
             if 'from_date' in input and input['from_date'] is not None:
@@ -4037,6 +4111,17 @@ class UpdateExperience(Mutation):
     def mutate(self, info, input):
         try:
             experience = Experience.nodes.get(uid=input.uid)
+
+            # If experience fields are being updated, validate them
+            company_name = input.get('from_source', experience.from_source)
+            title = input.get('what', experience.what)
+            description = input.get('description', experience.description)
+            
+            # Only validate if at least one of the three key fields is being updated
+            if 'from_source' in input or 'what' in input or 'description' in input:
+                validation_result = experience_validation.validate_experience_input(company_name, title, description)
+                if not validation_result.get('valid'):
+                    raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
                 setattr(experience, key, value)
@@ -4103,14 +4188,21 @@ class CreateSkill(Mutation):
        
             profile = Profile.nodes.get(user_id=user_id)
             
+            # Validate skill input
+            from_source = input.get('from_source', '')
+            what = input.get('what', '')
+            
+            validation_result = skill_validation.validate_skill_input(from_source, what)
+            if not validation_result.get('valid'):
+                raise GraphQLError(validation_result.get('error'))
             
             if input.file_id:
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
 
             skill_data = {
-                'what': input.get('what', ''),
-                'from_source': input.get('from_source', ''),
+                'what': what,
+                'from_source': from_source,
                 'file_id': input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
             }
             
@@ -4170,6 +4262,16 @@ class UpdateSkill(Mutation):
     def mutate(self, info, input):
         try:
             skill = Skill.nodes.get(uid=input.uid)
+
+            # If from_source or what are being updated, validate them
+            from_source = input.get('from_source', skill.from_source)
+            what = input.get('what', skill.what)
+            
+            # Only validate if either field is being updated
+            if 'from_source' in input or 'what' in input:
+                validation_result = skill_validation.validate_skill_input(from_source, what)
+                if not validation_result.get('valid'):
+                    raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
                 setattr(skill, key, value)
@@ -4268,6 +4370,223 @@ class GenerateTokenByEmail(graphene.Mutation):
             )
 
 
+class CreateVerifiedUser(Mutation):
+    """
+    Creates a fully verified user account with complete profile setup.
+    
+    This mutation creates a comprehensive user account that includes:
+    - Django User model with authentication
+    - Neo4j Users node with all relationships
+    - Complete Profile with generated phone number
+    - Verified OnboardingStatus (all fields set to True)
+    - Default Score values
+    - ConnectionStats for networking
+    - Matrix profile for chat integration
+    
+    Args:
+        input (CreateVerifiedUserInput): User creation data containing:
+            - email: User's email address
+            - first_name: User's first name
+            - last_name: User's last name
+            - password: User's password
+            - user_type: Account type (defaults to "personal")
+            - is_bot: Bot flag (defaults to False)
+            - persona: Bot persona (optional)
+            - gender: User gender (optional)
+            - bio: User biography (optional)
+            - designation: Job title (optional)
+            - worksat: Workplace (optional)
+            - lives_in: Location (optional)
+            - state: State (optional)
+            - city: City (optional)
+            - profile_pic_id: Profile picture file ID (optional)
+            - cover_image_id: Cover image file ID (optional)
+    
+    Returns:
+        CreateVerifiedUser: Response containing:
+            - user: Created user object from Neo4j
+            - token: JWT access token
+            - refresh_token: JWT refresh token
+            - success: Boolean indicating operation success
+            - message: Success or error message
+    
+    Raises:
+        GraphQLError: If user already exists or creation fails
+    
+    Note:
+        - Creates fully verified account (no OTP verification needed)
+        - Generates unique Indian mobile number automatically
+        - Sets up all required relationships and default values
+        - Includes Matrix chat registration
+    """
+    user = graphene.Field(UserType)
+    token = graphene.String()
+    refresh_token = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateVerifiedUserInput(required=True)
+
+    def mutate(self, info, input):
+        try:
+            # Extract input data
+            email = input.get('email')
+            first_name = input.get('first_name')
+            last_name = input.get('last_name')
+            password = input.get('password')
+            user_type = input.get('user_type', 'personal')
+            is_bot = input.get('is_bot', False)
+            persona = input.get('persona')
+            gender = input.get('gender')
+            bio = input.get('bio')
+            designation = input.get('designation')
+            worksat = input.get('worksat')
+            lives_in = input.get('lives_in')
+            state = input.get('state')
+            city = input.get('city')
+            profile_pic_id = input.get('profile_pic_id')
+            cover_image_id = input.get('cover_image_id')
+
+            # Validate required fields
+            if not email or not first_name or not last_name or not password:
+                raise GraphQLError('Email, first name, last name, and password are required')
+
+            # Validate email and password using existing validators
+            user_validations.validate_create_user_inputs(email=email, password=password)
+
+            # Check if user already exists
+            if User.objects.filter(email=email).exists():
+                raise GraphQLError(f'User with email {email} already exists')
+            
+            if Users.nodes.get_or_none(email=email):
+                raise GraphQLError(f'User with email {email} already exists in Neo4j')
+
+            # Generate unique username and mobile number
+            username = generate_unique_username(f"{first_name}_{last_name}")
+            mobile_number = generate_unique_indian_mobile()
+            
+            # Get realistic Indian data if not provided
+            if is_bot and not (designation and worksat and city and state):
+                indian_data = generate_realistic_indian_data()
+                designation = designation or indian_data['designation']
+                worksat = worksat or indian_data['company']
+                city = city or indian_data['city']
+                state = state or indian_data['state']
+                lives_in = lives_in or indian_data['lives_in']
+
+            # 1. Create Django User
+            django_user = User.objects.create(
+                username=username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name
+            )
+            django_user.set_password(password)
+            django_user.save()
+
+            # 2. Get the automatically created Neo4j Users node (created by signal)
+            user_node = Users.nodes.get(user_id=str(django_user.id))
+            user_node.first_name = first_name
+            user_node.last_name = last_name
+            user_node.user_type = user_type
+            user_node.is_bot = is_bot
+            user_node.is_active = True  # Set as active (verified)
+            if persona:
+                user_node.persona = persona
+            user_node.save()
+
+            # 3. Update the automatically created Profile with complete data
+            profile = user_node.profile.single()
+            if profile:
+                profile.phone_number = mobile_number
+                if gender:
+                    profile.gender = gender
+                if bio:
+                    profile.bio = bio
+                if designation:
+                    profile.designation = designation
+                if worksat:
+                    profile.worksat = worksat
+                if lives_in:
+                    profile.lives_in = lives_in
+                if state:
+                    profile.state = state
+                if city:
+                    profile.city = city
+                if profile_pic_id:
+                    profile.profile_pic_id = profile_pic_id
+                if cover_image_id:
+                    profile.cover_image_id = cover_image_id
+                profile.save()
+
+                # 4. Update OnboardingStatus to fully verified
+                onboarding = profile.onboarding.single()
+                if onboarding:
+                    onboarding.email_verified = True
+                    onboarding.phone_verified = True
+                    onboarding.username_selected = True
+                    onboarding.first_name_set = True
+                    onboarding.last_name_set = True
+                    onboarding.gender_set = bool(gender)
+                    onboarding.bio_set = bool(bio)
+                    onboarding.state = bool(state)
+                    onboarding.city = bool(city)
+                    onboarding.save()
+
+            # 5. Generate authentication tokens
+            token = get_token(django_user)
+            refresh_token = create_refresh_token(django_user)
+
+            # 6. Create/Update Matrix profile (if it was created by signal)
+            try:
+                matrix_profile = MatrixProfile.objects.get(user=django_user)
+                # Matrix registration was already attempted by signal
+                # We can update it if needed, but signal handles the creation
+            except MatrixProfile.DoesNotExist:
+                # Create Matrix profile if signal didn't create it
+                MatrixProfile.objects.create(
+                    user=django_user,
+                    pending_matrix_registration=True
+                )
+
+            return CreateVerifiedUser(
+                user=UserType.from_neomodel(user_node),
+                token=token,
+                refresh_token=refresh_token,
+                success=True,
+                message="Verified user account created successfully with all required data"
+            )
+
+        except GraphQLError as error:
+            return CreateVerifiedUser(
+                user=None,
+                token=None,
+                refresh_token=None,
+                success=False,
+                message=str(error)
+            )
+        except Exception as error:
+            # Better error message handling
+            error_message = str(error)
+            if hasattr(error, 'message'):
+                error_message = error.message
+            elif hasattr(error, 'args') and error.args:
+                error_message = str(error.args[0])
+            
+            # Fallback for empty error messages
+            if not error_message or error_message in ['{}', '']:
+                error_message = f"User creation failed: {type(error).__name__}"
+            
+            return CreateVerifiedUser(
+                user=None,
+                token=None,
+                refresh_token=None,
+                success=False,
+                message=error_message
+            )
+
+
 class Mutation(graphene.ObjectType):
     register_user = CreateUser.Field()
     register_userV2 = CreateUserV2.Field()
@@ -4344,44 +4663,7 @@ class Mutation(graphene.ObjectType):
 
     create_profile_data_like=CreateProfileDataReactionV2.Field()
     create_profile_data_comment=CreateProfileDataCommentV2.Field()
-
-class MutationV2(graphene.ObjectType):
-    register_user = CreateUserV2.Field()
-    login_by_username_email=LoginUsingUsernameEmail.Field()
-    logout=Logout.Field()
-    generate_token_by_email = GenerateTokenByEmail.Field()
-
-    update_user_profile = UpdateUserProfile.Field()
-    select_username = SelectUsername.Field()
-
-    add_interest=CreateInterest.Field()
-    edit_interest=UpdateInterest.Field()
-    delete_intrest=DeleteInterest.Field()
-
-
-    send_otp = SendOTP.Field()
-    verify_otp = VerifyOTP.Field()
-    search_username = SearchUsername.Field()
-    verify_otp_and_reset_password = VerifyOTPAndResetPassword.Field()
     
-    create_user_review=CreateUsersReview.Field()
-    delete_user_review=DeleteUsersReview.Field()
+    create_verified_user=CreateVerifiedUser.Field()
 
-    create_back_profile_review=CreateBackProfileReview.Field()
-
-    send_invite=CreateInvite.Field()
-
-    create_achievement=CreateAchievement.Field()
-    create_education=CreateEducation.Field()
-    create_experience=CreateExperience.Field()
-    create_skill=CreateSkill.Field()
-
-    update_achievement=UpdateAchievement.Field()
-    update_education=UpdateEducation.Field()
-    update_skill=UpdateSkill.Field()
-    update_experience=UpdateExperience.Field()
-
-
-    create_profile_data_like=CreateProfileDataReactionV2.Field()
-    create_profile_data_comment=CreateProfileDataCommentV2.Field()
 

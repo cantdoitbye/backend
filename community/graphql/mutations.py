@@ -1,6 +1,8 @@
 import asyncio
 import graphene
 from graphene import Mutation
+from graphql import GraphQLError
+from datetime import datetime
 
 from .types import *
 from community.models import *
@@ -26,7 +28,11 @@ from post.models import Like, PostReactionManager
 from post.redis import increment_post_like_count
 from user_activity.services.activity_service import ActivityService
 from vibe_manager.services.vibe_activity_service import VibeActivityService
+from post.services.mention_service import MentionService
 
+
+# Common constants
+ADMIN_USER_ID = "a9e34f9968504580896e722465f034b3"
 
 
 class SubCommunityRoleManagerType(DjangoObjectType):
@@ -187,7 +193,7 @@ class CreateCommunity(Mutation):
             print("Checking member_uid...")
             member_uid=input.get('member_uid') or []
             
-            member_uid.append('bf577b8e39f24a02805879461baf9561')
+            member_uid.append(ADMIN_USER_ID)
             if not member_uid:
                 print("No members selected")
                 return CreateCommunity(community=None, success=False,message=f"You have not selected any user")
@@ -220,6 +226,23 @@ class CreateCommunity(Mutation):
             membership.community.connect(community)
             community.members.connect(membership)
 
+            # Extract mentions from community description
+            if description := input.get('description'):
+                from post.utils.mention_extractor import MentionExtractor
+                
+                print("Extracting mentions from community description...")
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(description)
+                
+                if mentioned_user_uids:
+                    print("Creating description mentions...")
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='community_description',
+                        content_uid=community.uid,
+                        mentioned_by_uid=created_by.uid,
+                        mention_context='description'
+                    )
+
                         
             if community and access_token:
                  try:
@@ -229,6 +252,8 @@ class CreateCommunity(Mutation):
                          'community_circle': community.community_circle,
                          'category': community.category,
                          'created_date': community.created_date,
+                         'community_uid': community.uid,
+                         'community_name': community.name,
                     }
                     print("Setting community room filter data...")
                     filter_result = asyncio.run(set_room_avatar_score_and_filter(
@@ -263,7 +288,7 @@ class CreateCommunity(Mutation):
                     can_message=True,
                     is_notification_muted=False
                 )
-                if member == "bf577b8e39f24a02805879461baf9561":
+                if member == ADMIN_USER_ID:
                     membership.is_admin=True
                     membership.can_message=True
                     membership.is_notification_muted=False
@@ -536,6 +561,32 @@ class UpdateCommunity(Mutation):
             for key, value in input.items():
                 setattr(community, key, value)
             community.save()
+
+            # Extract mentions from updated community description  
+            if description := input.get('description'):
+                from post.utils.mention_extractor import MentionExtractor
+                
+                print("Extracting mentions from updated community description...")
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(description)
+                
+                if mentioned_user_uids:
+                    # Clear existing mentions for this community description
+                    try:
+                        existing_mentions = MentionService.get_mentions_for_content('community_description', community.uid)
+                        for mention in existing_mentions:
+                            mention.is_active = False
+                            mention.save()
+                    except Exception as e:
+                        print(f"Error clearing existing mentions: {e}")
+                    
+                    # Create new mentions
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='community_description',
+                        content_uid=community.uid,
+                        mentioned_by_uid=created_by.uid,
+                        mention_context='description'
+                    )
 
             if community and community.room_id:
                 try:
@@ -1595,7 +1646,7 @@ class CreateCommunityGoal(graphene.Mutation):
 
             community_name = community.name
             community_id = community.uid
-            members = community.members.all()
+            members = helperfunction.get_community_members(community)
             members_to_notify = []
             for member in members:
                 user = member.user.single()  # Get user from membership
@@ -1808,6 +1859,7 @@ class CreateCommunityActivity(graphene.Mutation):
                 description=input.description,
                 activity_type=input.activity_type,
                 file_id=input.file_id,
+                date=input.date,
             )
             activity.save()
             activity.created_by.connect(creator)
@@ -1821,7 +1873,7 @@ class CreateCommunityActivity(graphene.Mutation):
 
             community_name = community.name
             community_id = community.uid
-            members = community.members.all()
+            members = helperfunction.get_community_members(community)
             members_to_notify = []
             for member in members:
                 user = member.user.single()  # Get user from membership
@@ -2048,7 +2100,7 @@ class CreateCommunityAffiliation(graphene.Mutation):
 
             community_name = community.name
             community_id = community.uid
-            members = community.members.all()
+            members = helperfunction.get_community_members(community)
             members_to_notify = []
             for member in members:
                 user = member.user.single()  # Get user from membership
@@ -2273,7 +2325,7 @@ class CreateCommunityAchievement(graphene.Mutation):
 
             community_name = community.name
             community_id = community.uid
-            members = community.members.all()
+            members = helperfunction.get_community_members(community)
             members_to_notify = []
             for member in members:
                 user = member.user.single()  # Get user from membership
@@ -2829,7 +2881,7 @@ class CreateSubCommunity(Mutation):
         )
             
         member_uid=input.get('member_uid') or []
-        member_uid.append('bf577b8e39f24a02805879461baf9561')
+        member_uid.append(ADMIN_USER_ID)
         if not member_uid:
             return CreateSubCommunity(community=None, success=False,message=f"You have not selected any user")
         unavailable_user=userlist.get_unavailable_list_user(member_uid)
@@ -2856,6 +2908,39 @@ class CreateSubCommunity(Mutation):
                 community.child_communities.connect(sub_community)
             if input.get('sub_community_type').value=='sibling community':
                 community.sibling_communities.connect(sub_community)
+
+            # Set Matrix room avatar and filter data for sub-community
+            if sub_community and access_token:
+                try:
+                    sub_community_data = {
+                        'community_type': sub_community.sub_community_type,
+                        'community_circle': sub_community.sub_community_circle,
+                        'category': sub_community.category,
+                        'created_date': sub_community.created_date,
+                        'community_uid': sub_community.uid,
+                        'community_name': sub_community.name,
+                    }
+                    print("Setting sub-community room filter data...")
+                    filter_result = asyncio.run(set_room_avatar_score_and_filter(
+                        access_token=access_token,
+                        user_id=user_id,
+                        room_id=room_id,
+                        image_id=sub_community.group_icon_id,
+                        community_data=sub_community_data
+                    ))
+                    
+                    if filter_result["success"]:
+                        matrix_logger.info(f"Set avatar and score for sub-community room {room_id}")
+                        print(f"Sub-community filter data set successfully: {filter_result}")
+                    else:
+                        matrix_logger.warning(f"Failed to set sub-community filter: {filter_result.get('error')}")
+                        print(f"Failed to set sub-community filter data: {filter_result.get('error')}")
+                    
+                except Exception as e:
+                    matrix_logger.warning(f"Error setting sub-community filter data: {e}")
+                    print(f"Error setting sub-community filter data: {e}")
+            else:
+                print(f"DEBUG: sub-community filter data not set. room_id={room_id}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
             # Note:- Review and Optimisations required here(we can store can_message,can_edit_group_info,can_add_new_member,is_notification_muted in postgresql)
             # Member who created the community is itself a memeber
             membership = SubCommunityMembership(
@@ -2877,7 +2962,7 @@ class CreateSubCommunity(Mutation):
                     can_message=True,
                     is_notification_muted=False
                 )
-                if member == "bf577b8e39f24a02805879461baf9561":
+                if member == ADMIN_USER_ID:
                     membership.is_admin=True
                     membership.can_message=True
                     membership.is_notification_muted=False
@@ -2950,6 +3035,39 @@ class CreateSubCommunity(Mutation):
                     community.sub_community_children.connect(sub_community)
                 if input.get('sub_community_type').value == 'sibling community':
                     community.sub_community_sibling.connect(sub_community)
+
+                # Set Matrix room avatar and filter data for sub-community
+                if sub_community and access_token:
+                    try:
+                        sub_community_data = {
+                            'community_type': sub_community.sub_community_type,
+                            'community_circle': sub_community.sub_community_circle,
+                            'category': sub_community.category,
+                            'created_date': sub_community.created_date,
+                            'community_uid': sub_community.uid,
+                            'community_name': sub_community.name,
+                        }
+                        print("Setting sub-community room filter data...")
+                        filter_result = asyncio.run(set_room_avatar_score_and_filter(
+                            access_token=access_token,
+                            user_id=user_id,
+                            room_id=room_id,
+                            image_id=sub_community.group_icon_id,
+                            community_data=sub_community_data
+                        ))
+                        
+                        if filter_result["success"]:
+                            matrix_logger.info(f"Set avatar and score for sub-community room {room_id}")
+                            print(f"Sub-community filter data set successfully: {filter_result}")
+                        else:
+                            matrix_logger.warning(f"Failed to set sub-community filter: {filter_result.get('error')}")
+                            print(f"Failed to set sub-community filter data: {filter_result.get('error')}")
+                        
+                    except Exception as e:
+                        matrix_logger.warning(f"Error setting sub-community filter data: {e}")
+                        print(f"Error setting sub-community filter data: {e}")
+                else:
+                    print(f"DEBUG: sub-community filter data not set. room_id={room_id}, access_token={bool(access_token)}, matrix_user_id={bool(matrix_user_id)}")
                 
                 membership = SubCommunityMembership(
                     is_admin=True,
@@ -3088,15 +3206,63 @@ class UpdateSubCommunity(Mutation):
                 return UpdateSubCommunity(success=False, message="You must be an admin to update this sub-community")
             
             # for id in input.file_id:
+                         # Update group icon if valid
             if input.group_icon_id:
-                valid_id=get_valid_image(input.group_icon_id)
+                group_icon = get_valid_image(input.group_icon_id)
+                if group_icon:
+                    community.group_icon = group_icon
+                else:
+                    return UpdateSubCommunity(success=False, message="Invalid group_icon_id")
 
+                # Update cover image if valid
             if input.cover_image_id:
-                valid_id=get_valid_image(input.cover_image_id)
+                cover_image = get_valid_image(input.cover_image_id)
+                if cover_image:
+                    community.cover_image = cover_image
+                else:
+                    return UpdateSubCommunity(success=False, message="Invalid cover_image_id")
+
             
             for key, value in input.items():
                 setattr(community, key, value)
             community.save()
+            
+            # Update Matrix room avatar and filter data for sub-community
+            if community and community.room_id:
+                try:
+                    print(f"Updating Matrix room avatar for sub-community {community.uid}")
+                    matrix_profile = MatrixProfile.objects.get(user=user_id)
+                    if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                        sub_community_data = {
+                            'community_type': community.sub_community_type,
+                            'community_circle': community.sub_community_circle,
+                            'category': community.category,
+                            'created_date': community.created_date,
+                        }
+                        print("Setting sub-community room filter data...")
+                        avatar_result = asyncio.run(set_room_avatar_score_and_filter(
+                            access_token=matrix_profile.access_token,
+                            user_id=matrix_profile.matrix_user_id,
+                            room_id=community.room_id,
+                            image_id=community.group_icon_id,
+                            community_data=sub_community_data
+                        ))
+                        
+                        if avatar_result["success"]:
+                            matrix_logger.info(f"Updated Matrix room avatar for sub-community {community.uid}")
+                            print(f"Sub-community Matrix avatar updated successfully: {avatar_result}")
+                        else:
+                            matrix_logger.warning(f"Failed to update sub-community Matrix avatar: {avatar_result.get('error')}")
+                            print(f"Failed to update sub-community Matrix avatar: {avatar_result.get('error')}")
+                    else:
+                        print("Matrix profile missing credentials for avatar update")
+                        
+                except MatrixProfile.DoesNotExist:
+                    print(f"No Matrix profile found for user {user_id}")
+                except Exception as e:
+                    matrix_logger.warning(f"Error updating sub-community Matrix avatar: {e}")
+                    print(f"Error updating sub-community Matrix avatar: {e}")
+            
             return UpdateSubCommunity(community=SubCommunityType.from_neomodel(community), success=True,message=CommMessages.COMMUNITY_UPDATED)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
@@ -3673,34 +3839,65 @@ class CreateCommunityPost(Mutation):
             )
             post.save()
             post.creator.connect(creator)
+
+            # Extract mentions from community post content (title and text)
+            if post_title or post_text:
+                from post.utils.mention_extractor import MentionExtractor
+                
+                # Combine post title and text for mention extraction
+                post_content = f"{post_title or ''} {post_text or ''}".strip()
+                
+                print("Extracting mentions from community post content...")
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(post_content)
+                
+                if mentioned_user_uids:
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='community_post',
+                        content_uid=post.uid,
+                        mentioned_by_uid=creator.uid,
+                        mention_context='post_content'
+                    )
             
             if input.reaction and input.vibe:
                 try:
-                    # Create PostReactionManager for community post if it doesn't exist
-                    try:
-                        post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
-                    except PostReactionManager.DoesNotExist:
-                        post_reaction_manager = PostReactionManager(post_uid=post.uid)
-                        post_reaction_manager.initialize_reactions()
+                    # Check if user already liked their own community post to prevent duplicates
+                    from neomodel import db
+                    check_query = (
+                        "MATCH (user:Users {uid: $user_uid})-[:HAS_USER]->(like:Like) "
+                        "MATCH (like)-[:HAS_POST]->(post {uid: $post_uid}) "
+                        "RETURN like"
+                    )
+                    check_params = {'user_uid': creator.uid, 'post_uid': post.uid}
+                    existing_results, _ = db.cypher_query(check_query, check_params)
+                    
+                    # Only add vibe if user hasn't already reacted
+                    if not existing_results:
+                        # Create PostReactionManager for community post if it doesn't exist
+                        try:
+                            post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
+                        except PostReactionManager.DoesNotExist:
+                            post_reaction_manager = PostReactionManager(post_uid=post.uid)
+                            post_reaction_manager.initialize_reactions()
+                            post_reaction_manager.save()
+
+                        # Add this reaction to the aggregated analytics
+                        post_reaction_manager.add_reaction(
+                            vibes_name=input.reaction,
+                            score=input.vibe
+                        )
                         post_reaction_manager.save()
 
-                    # Add this reaction to the aggregated analytics
-                    post_reaction_manager.add_reaction(
-                        vibes_name=input.reaction,
-                        score=input.vibe
-                    )
-                    post_reaction_manager.save()
-
-                    # Create the individual like record
-                    like = Like(
-                        reaction=input.reaction,
-                        vibe=input.vibe
-                    )
-                    like.save()
-                    
-                    # Establish relationships
-                    like.user.connect(creator)
-                    post.like.connect(like)
+                        # Create the individual like record
+                        like = Like(
+                            reaction=input.reaction,
+                            vibe=input.vibe
+                        )
+                        like.save()
+                        
+                        # Establish relationships
+                        like.user.connect(creator)
+                        post.like.connect(like)
 
                     # Track vibe activity for community post reaction
                     try:
@@ -3854,6 +4051,105 @@ class DeleteCommunityPost(Mutation):
 
 
 
+class LeaveCommunityChat(Mutation):
+    """
+    Allows a user to leave a community's Matrix chat room.
+    
+    This mutation enables users to voluntarily leave Matrix chat rooms
+    associated with communities they are members of.
+    
+    Args:
+        input (LeaveCommunityChatInput): Contains room_id of the Matrix room to leave
+        
+    Returns:
+        LeaveCommunityChatResponseType: Success status and details
+        
+    Note:
+        - Requires user authentication
+        - User must have Matrix profile with valid credentials
+        - User must be a member of the Matrix room
+        - Does not affect community membership, only Matrix chat access
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    room_id = graphene.String()
+    left_at = graphene.DateTime()
+
+    class Arguments:
+        input = LeaveCommunityChatInput()
+    
+    @handle_graphql_community_errors 
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            room_id = input.room_id
+            
+            # Get user's Matrix profile
+            try:
+                from msg.models import MatrixProfile
+                matrix_profile = MatrixProfile.objects.get(user=user_id)
+                if not matrix_profile.access_token or not matrix_profile.matrix_user_id:
+                    return LeaveCommunityChat(
+                        success=False,
+                        message="Matrix profile not available or incomplete"
+                    )
+            except MatrixProfile.DoesNotExist:
+                return LeaveCommunityChat(
+                    success=False,
+                    message="Matrix profile not found"
+                )
+            
+            # Leave the Matrix room
+            try:
+                from msg.util.matrix_message_utils import leave_matrix_room
+                import asyncio
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    success = loop.run_until_complete(
+                        leave_matrix_room(
+                            access_token=matrix_profile.access_token,
+                            user_id=matrix_profile.matrix_user_id,
+                            room_id=room_id
+                        )
+                    )
+                finally:
+                    loop.close()
+                
+                if success:
+                    return LeaveCommunityChat(
+                        success=True,
+                        message="Successfully left community chat room",
+                        room_id=room_id,
+                        left_at=datetime.now()
+                    )
+                else:
+                    return LeaveCommunityChat(
+                        success=False,
+                        message="Failed to leave Matrix room"
+                    )
+                    
+            except Exception as matrix_error:
+                return LeaveCommunityChat(
+                    success=False,
+                    message=f"Matrix error: {str(matrix_error)}"
+                )
+                
+        except Exception as error:
+            return LeaveCommunityChat(
+                success=False,
+                message=f"Error leaving community chat: {str(error)}"
+            )
+
+
 class Mutation(graphene.ObjectType):
     create_community = CreateCommunity.Field()
     update_community = UpdateCommunity.Field()
@@ -3866,6 +4162,7 @@ class Mutation(graphene.ObjectType):
 
     add_member=AddMember.Field()
     remove_member=RemoveMember.Field()
+    leave_community_chat=LeaveCommunityChat.Field()
 
     add_sub_community_member=AddSubCommunityMember.Field()
     remove_sub_community_member=RemoveSubCommunityMember.Field()
@@ -3916,6 +4213,7 @@ class Mutation(graphene.ObjectType):
 
     create_community_post=CreateCommunityPost.Field()
     delete_community_post=DeleteCommunityPost.Field()
+    leave_community_chat=LeaveCommunityChat.Field()
 
 
 

@@ -52,11 +52,14 @@ class UserType(ObjectType):
     email = graphene.String()
     first_name=graphene.String()
     last_name=graphene.String()
+    name=graphene.String()  # Combined first_name and last_name
     user_type=graphene.String()
     created_at = graphene.DateTime()
     created_by = graphene.String()
     updated_at = graphene.DateTime()
     updated_by = graphene.String()
+    is_bot = graphene.Boolean()
+    persona = graphene.String()
     connection_stat = graphene.Field(lambda: ConnectionStatsType)
     profile = graphene.Field(lambda:ProfileNoUserType)
     # connection = graphene.Field(lambda: ConnectionNoUserType)
@@ -64,6 +67,17 @@ class UserType(ObjectType):
     @classmethod
     def from_neomodel(cls, user):
         try:
+            # Type safety check: Ensure user is actually a Users object and has profile attribute
+            # This prevents errors when Community or other objects are mistakenly passed
+            if not isinstance(user, Users) and not hasattr(user, 'profile'):
+                print(f"WARNING: UserType.from_neomodel received non-User object: {type(user).__name__}")
+                return None
+            
+            # Combine first_name and last_name to create full name
+            first_name = user.first_name or ""
+            last_name = user.last_name or ""
+            full_name = f"{first_name} {last_name}".strip() or user.username
+            
             return cls(
                 uid=user.uid,
                 user_id=user.user_id,
@@ -71,40 +85,57 @@ class UserType(ObjectType):
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
+                name=full_name,
                 user_type=user.user_type,
                 created_at=user.created_at,
                 created_by=user.created_by,
                 updated_at=user.updated_at,
                 updated_by=user.updated_by,
-                connection_stat=ConnectionStatsType.from_neomodel(user.connection_stat.single()) if user.connection_stat.single() else 0,
-                profile=ProfileNoUserType.from_neomodel(user.profile.single()) if user.profile.single() else None,
+                is_bot=user.is_bot,
+                persona=user.persona,
+                connection_stat=ConnectionStatsType.from_neomodel(user.connection_stat.single()) if hasattr(user, 'connection_stat') and user.connection_stat.single() else 0,
+                profile=ProfileNoUserType.from_neomodel(user.profile.single()) if hasattr(user, 'profile') and user.profile.single() else None,
                 # connection=ConnectionNoUserType.from_neomodel(user.connection.single()) if user.connection.single() else None,
                 
         )
-        except:
-            user_uid=user.get('uid')
-            created_at_unix=user.get('created_at')
-            created_at=datetime.fromtimestamp(created_at_unix)
-            updated_at_unix=user.get('updated_at')
-            updated_at=datetime.fromtimestamp(updated_at_unix)
-            user_node=Users.nodes.get(uid=user_uid)
-            # print(user_node)
-            return cls( 
-                uid = user.get('uid'),
-                user_id = user.get('user_id'),
-                username = user.get('username'),
-                email = user.get('email'),
-                first_name = user.get('first_name'),
-                last_name = user.get('last_name'),
-                user_type = user.get('user_type'),
-                created_at = created_at,
-                created_by = user.get('created_by'),
-                updated_at = updated_at,
-                updated_by = user.get('updated_by'),
-                connection_stat=ConnectionStatsType.from_neomodel(user_node.connection_stat.single()) if user_node.connection_stat.single() else 0,
-                profile=ProfileNoUserType.from_neomodel(user_node.profile.single()) if user_node.profile.single() else None,
-    
-            )
+        except Exception as e:
+            print(f"ERROR in UserType.from_neomodel: {str(e)}")
+            try:
+                user_uid=user.get('uid')
+                created_at_unix=user.get('created_at')
+                created_at=datetime.fromtimestamp(created_at_unix)
+                updated_at_unix=user.get('updated_at')
+                updated_at=datetime.fromtimestamp(updated_at_unix)
+                user_node=Users.nodes.get(uid=user_uid)
+                # print(user_node)
+                
+                # Combine first_name and last_name to create full name for dict-based user
+                first_name = user.get('first_name') or ""
+                last_name = user.get('last_name') or ""
+                full_name = f"{first_name} {last_name}".strip() or user.get('username')
+                
+                return cls( 
+                    uid = user.get('uid'),
+                    user_id = user.get('user_id'),
+                    username = user.get('username'),
+                    email = user.get('email'),
+                    first_name = user.get('first_name'),
+                    last_name = user.get('last_name'),
+                    name=full_name,
+                    user_type = user.get('user_type'),
+                    created_at = created_at,
+                    created_by = user.get('created_by'),
+                    updated_at = updated_at,
+                    updated_by = user.get('updated_by'),
+                    is_bot = user.get('is_bot'),
+                    persona = user.get('persona'),
+                    connection_stat=ConnectionStatsType.from_neomodel(user_node.connection_stat.single()) if user_node and hasattr(user_node, 'connection_stat') and user_node.connection_stat.single() else 0,
+                    profile=ProfileNoUserType.from_neomodel(user_node.profile.single()) if user_node and hasattr(user_node, 'profile') and user_node.profile.single() else None,
+        
+                )
+            except Exception as nested_e:
+                print(f"ERROR in UserType.from_neomodel fallback: {str(nested_e)}")
+                return None
 
 
 class ProfileType(ObjectType):
@@ -138,11 +169,11 @@ class ProfileType(ObjectType):
     experience=graphene.List(lambda:ExperienceNonProfileType)
     skill=graphene.List(lambda:SkillNonProfileType)
     education=graphene.List(lambda:EducationNonProfileType)
+    mentioned_users = graphene.List(UserType)
+
     
 
     @classmethod
-
-
     def from_neomodel(cls, profile):
         return cls(
             uid=profile.uid,
@@ -173,8 +204,28 @@ class ProfileType(ObjectType):
             achievement=[AchievementNonProfileType.from_neomodel(achievement) for achievement in profile.achievement],
             experience=[ExperienceNonProfileType.from_neomodel(experience) for experience in profile.experience],
             skill=[SkillNonProfileType.from_neomodel(skill) for skill in profile.skill],
-            education=[EducationNonProfileType.from_neomodel(education) for education in profile.education]
+            education=[EducationNonProfileType.from_neomodel(education) for education in profile.education],
+            mentioned_users=cls._get_bio_mentioned_users(profile)  # Add this line
         )
+    
+    @staticmethod
+    def _get_bio_mentioned_users(profile):
+        """Get users mentioned in the bio field."""
+        try:
+            from post.services.mention_service import MentionService
+            
+            mentions = MentionService.get_mentions_for_content('bio', profile.uid)
+            
+            mentioned_users = []
+            for mention in mentions:
+                mentioned_user = mention.mentioned_user.single()
+                if mentioned_user:
+                    mentioned_users.append(UserType.from_neomodel(mentioned_user))
+            
+            return mentioned_users
+            
+        except Exception as e:
+            return []
     
 
 class OnboardingStatusType(ObjectType):
@@ -244,6 +295,7 @@ class ScoreType(ObjectType):
             social_score=score.social_score,
             human_score=score.human_score,
             repo_score=score.repo_score,
+            overall_score=score.overall_score,
             profile=ProfileType.from_neomodel(score.profile.single()) if score.profile.single() else None,
         )
 
@@ -775,6 +827,8 @@ class ProfileNoUserType(ObjectType):
     lives_in = graphene.String()
     profile_pic_id = graphene.String()
     profile_pic=graphene.Field(FileDetailType)
+    cover_image_id = graphene.String()
+    cover_image=graphene.Field(FileDetailType)
 
     onboarding_status = graphene.List(lambda:OnboardingStatusNonProfileType)
     contact_info = graphene.List(lambda:ContactInfoTypeNoProfile)
@@ -807,6 +861,8 @@ class ProfileNoUserType(ObjectType):
             lives_in=profile.lives_in,
             profile_pic_id=profile.profile_pic_id,
             profile_pic=FileDetailType(**generate_presigned_url.generate_file_info(profile.profile_pic_id)) if profile.profile_pic_id else None,
+            cover_image_id=profile.cover_image_id,
+            cover_image=FileDetailType(**generate_presigned_url.generate_file_info(profile.cover_image_id)) if profile.cover_image_id else None,
             onboarding_status=[OnboardingStatusNonProfileType.from_neomodel(status) for status in profile.onboarding],
             contact_info=[ContactInfoTypeNoProfile.from_neomodel(contact) for contact in profile.contactinfo],
             score=ScoreNonProfileType.from_neomodel(profile.score.single()) if profile.score.single() else None,
@@ -1026,6 +1082,8 @@ class MatrixUserType(ObjectType):
     created_by = graphene.String()
     updated_at = graphene.DateTime()
     updated_by = graphene.String()
+    is_bot = graphene.Boolean()
+    persona = graphene.String()
     matrix_info = graphene.Field(MatrixInfoType)
 
     @classmethod
@@ -1042,11 +1100,18 @@ class MatrixUserType(ObjectType):
             created_by=user.created_by,
             updated_at=user.updated_at,
             updated_by=user.updated_by,
+            is_bot=user.is_bot,
+            persona=user.persona,
             matrix_info=matrix_info,
         )
 class ProfileInfoType(ObjectType):
     uid = graphene.String()
     user_id = graphene.String()
+    username = graphene.String()  # Username from user
+    email = graphene.String()  # Email from user
+    first_name = graphene.String()  # First name from user
+    last_name = graphene.String()  # Last name from user
+    name = graphene.String()  # Combined first_name and last_name from user
     gender = graphene.String()
     device_id = graphene.String()
     fcm_token = graphene.String()
@@ -1095,15 +1160,36 @@ class ProfileInfoType(ObjectType):
             dob=datetime.fromtimestamp(dob_unix)
 
         profile_uid = profile.get('uid')
-        user_uid = user.get('uid')
+        user_uid = user.get('uid') if user else None
         # vibes_count = cls._get_profile_vibes_count(profile_uid)
         vibes_count = cls._get_profile_vibes_count(profile_uid)
         vibes_count = vibes_count if vibes_count is not None else 0
+        
+        # Debug logging
+        print(f"DEBUG ProfileInfoType.from_neomodel: user={user}, type={type(user)}")
+        if user:
+            print(f"DEBUG: user keys = {user.keys() if isinstance(user, dict) else 'not a dict'}")
+            print(f"DEBUG: first_name={user.get('first_name') if isinstance(user, dict) else 'N/A'}")
+            print(f"DEBUG: last_name={user.get('last_name') if isinstance(user, dict) else 'N/A'}")
+        
+        # Combine first_name and last_name to create full name from user
+        first_name = user.get('first_name') or "" if user else ""
+        last_name = user.get('last_name') or "" if user else ""
+        username = user.get('username') or "" if user else ""
+        email = user.get('email') or "" if user else ""
+        full_name = f"{first_name} {last_name}".strip() or username or None
+        
+        print(f"DEBUG: Computed name = {full_name}")
             
        
         return cls(
             uid = profile.get('uid'),
             user_id = profile.get('user_id'),
+            username = username,
+            email = email,
+            first_name = first_name,
+            last_name = last_name,
+            name = full_name,
             gender = profile.get('gender'),
             device_id = profile.get('device_id'),
             fcm_token = profile.get('fcm_token'),
@@ -1283,6 +1369,8 @@ class UserInfoType(ObjectType):
     first_name=graphene.String()
     last_name=graphene.String()
     user_type=graphene.String()
+    is_bot = graphene.Boolean()
+    persona = graphene.String()
     profile = graphene.Field(ProfileDataType)
     
 
@@ -1297,6 +1385,8 @@ class UserInfoType(ObjectType):
                 first_name=user.first_name,
                 last_name=user.last_name,
                 user_type=user.user_type,
+                is_bot=user.is_bot,
+                persona=user.persona,
                 profile=ProfileDataType.from_neomodel(user.profile.single()) if user.profile.single() else None,
                 
                 
@@ -1310,6 +1400,8 @@ class UserInfoTypeV2(ObjectType):
     first_name=graphene.String()
     last_name=graphene.String()
     user_type=graphene.String()
+    is_bot = graphene.Boolean()
+    persona = graphene.String()
     profile = graphene.Field(ProfileDataTypeV2)
     
 
@@ -1323,6 +1415,8 @@ class UserInfoTypeV2(ObjectType):
                 first_name=user_data.get('first_name'),
                 last_name=user_data.get('last_name'),
                 user_type=user_data.get('user_type'),
+                is_bot=user_data.get('is_bot'),
+                persona=user_data.get('persona'),
                 profile=ProfileDataTypeV2.from_neomodel(profile_data),  
             )
 
@@ -2199,6 +2293,7 @@ class StatisticsType(ObjectType):
 class UserMentionType(graphene.ObjectType):
     """Type for user mention search results."""
     id = graphene.Int()
+    uid = graphene.String()
     username = graphene.String()
     display_name = graphene.String()
     first_name = graphene.String()

@@ -30,7 +30,7 @@ def get_send_connections_count(user):
     query = """
     MATCH (u:Users {user_id: $user_id})<-[:HAS_SEND_CONNECTION]-(c:Connection)
     RETURN count(c) 
-    """
+    """ 
     results, _ = db.cypher_query(query, {'user_id': user_id})
     
     send_connections_count = results[0][0] if results else 0

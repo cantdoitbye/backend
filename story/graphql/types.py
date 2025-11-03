@@ -49,7 +49,8 @@ class StoryType(ObjectType):
     
     # Computed fields
     story_image_url = graphene.Field(FileDetailType)  # Resolved file URL with metadata
-    
+    mentioned_users = graphene.List(UserType)
+
     # User relationships
     created_by = graphene.Field(UserType)
     updated_by = graphene.Field(UserType)
@@ -89,6 +90,23 @@ class StoryType(ObjectType):
             storyview=[StoryViewNonStoryType.from_neomodel(x) for x in story.storyview],
             storyshare=[StoryShareNonStoryType.from_neomodel(x) for x in story.storyshare],
         )
+    def resolve_mentioned_users(self, info):
+        """Get users mentioned in this story."""
+        try:
+            from post.services.mention_service import MentionService
+            
+            mentions = MentionService.get_mentions_for_content('story', self.uid)
+            
+            mentioned_users = []
+            for mention in mentions:
+                mentioned_user = mention.mentioned_user.single()
+                if mentioned_user:
+                    mentioned_users.append(UserType.from_neomodel(mentioned_user))
+            
+            return mentioned_users
+            
+        except Exception as e:
+            return []
 
 # Story comment type with user details
 # Used by: Comment sections, story interaction displays
@@ -358,12 +376,29 @@ class StoryDetailsType(ObjectType):
     is_deleted = graphene.Boolean()
     story_image_id = graphene.String()
     story_image_url = graphene.Field(FileDetailType)
+    score = graphene.Float()
     created_by = graphene.Field(UserStoryDetailsType)
     
     # Converts Neo4j timestamp to user-friendly format
     # Uses time_ago utility for "2 hours ago" style formatting
     @classmethod
     def from_neomodel(cls, story):
+        # Get user's overall score from their profile
+        creator = story.created_by.single()
+        user_score = 0.0
+        if creator:
+            profile = creator.profile.single()
+            if profile:
+                score_node = profile.score.single()
+                if score_node:
+                    # Use overall_score if set, otherwise fallback to cumulative_vibescore
+                    if hasattr(score_node, 'overall_score') and score_node.overall_score and score_node.overall_score > 0.0:
+                        user_score = score_node.overall_score
+                    elif hasattr(score_node, 'cumulative_vibescore'):
+                        user_score = score_node.cumulative_vibescore or 2.0
+                    else:
+                        user_score = 2.0  # Default to 2.0 if no score available
+        
         return cls(
             uid=story.uid,
             title=story.title,
@@ -375,7 +410,8 @@ class StoryDetailsType(ObjectType):
             is_deleted=story.is_deleted,
             story_image_id=story.story_image_id,
             story_image_url=FileDetailType(**generate_presigned_url.generate_file_info(story.story_image_id)),
-            created_by=UserStoryDetailsType.from_neomodel(story.created_by.single()) if story.created_by.single() else None,
+            score=user_score,
+            created_by=UserStoryDetailsType.from_neomodel(creator) if creator else None,
         )
 
 # Story details without user info - used for clicked story views
@@ -588,10 +624,11 @@ class SecondaryStoryType(ObjectType):
 
         # Query mapping for different connection circles
         # Each query returns stories from specific user connection types
+        # Using V2 queries for improved circle type handling
         query_mapping = {
-            "Inner": get_inner_story,      # Close connections
-            "Outer": get_outer_story,      # Extended connections  
-            "Universe": get_universe_story, # All connections
+            "Inner": get_inner_storyV2,      # Close connections
+            "Outer": get_outer_storyV2,      # Extended connections  
+            "Universe": get_universe_storyV2, # All connections
         }
 
         # Execute appropriate Cypher query based on category
@@ -606,11 +643,17 @@ class SecondaryStoryType(ObjectType):
     
         # Prioritize unviewed stories in feed ordering
         user = non_viewed_users + viewed_users
+        
+        # Calculate average score from all users in this category
+        category_score = 0.0
+        if user:
+            total_score = sum(u.score for u in user if u.score is not None)
+            category_score = total_score / len(user) if len(user) > 0 else 0.0
 
         return cls(
             title=details,
             count=new_story,
-            score=3.0,  # Static score - could be made dynamic
+            score=category_score,  # Dynamic score based on user scores
             vibes=total_vibes, 
             user=user
         )
@@ -656,6 +699,7 @@ class SecondaryUserStoryViewType(ObjectType):
     first_name = graphene.String()
     last_name = graphene.String()
     user_type = graphene.String()
+    score = graphene.Float()
     profile = graphene.Field(lambda:SecondaryProfileStoryViewType)
     story = graphene.Field(lambda:SecondaryUserStoryDetailsType)
     
@@ -664,6 +708,25 @@ class SecondaryUserStoryViewType(ObjectType):
     # Used by: Feed generation where data comes from optimized Cypher queries
     @classmethod
     def from_neomodel(cls, user, profile, story_data, user_id):
+        # Calculate user score from profile
+        # Note: user and profile here are dicts from Cypher query, not neomodel objects
+        # We need to fetch the actual user to get their score
+        from auth_manager.models import Users
+        user_score = 2.0  # Default to 2.0 instead of 0.0
+        try:
+            user_node = Users.nodes.get(uid=user['uid'])
+            profile_node = user_node.profile.single()
+            if profile_node:
+                score_node = profile_node.score.single()
+                if score_node:
+                    # Use overall_score if set, otherwise fallback to cumulative_vibescore
+                    if hasattr(score_node, 'overall_score') and score_node.overall_score and score_node.overall_score > 0.0:
+                        user_score = score_node.overall_score
+                    elif hasattr(score_node, 'cumulative_vibescore'):
+                        user_score = score_node.cumulative_vibescore or 2.0
+        except Exception:
+            pass  # Default to 2.0 if unable to fetch score
+        
         return cls(
             uid = user['uid'],
             user_id = user['user_id'],
@@ -672,6 +735,7 @@ class SecondaryUserStoryViewType(ObjectType):
             first_name = user['first_name'],
             last_name = user['last_name'],
             user_type = user['user_type'],
+            score = user_score,
             profile=SecondaryProfileStoryViewType.from_neomodel(profile) if profile else None,
             story=SecondaryUserStoryDetailsType.from_neomodel(story_data, user_id) if story_data else None
         )

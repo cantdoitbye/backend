@@ -287,8 +287,9 @@ post_feed_query="""
         LIMIT toInteger($limit * 0.8)
 
         UNION ALL
-        // Subquery 2: Fetch Community Post (FIXED - Removed non-existent profile relationship)
-        MATCH (community_post:CommunityPost {is_deleted: false})-[:HAS_COMMUNITY]->(community:Community)
+        // Subquery 2: Fetch Community Post (FIXED - Added membership check)
+        MATCH (me:Users {user_id: $log_in_user_node_id})-[:HAS_MEMBERSHIP]->(membership:Membership)-[:MEMBER_OF]->(community:Community)
+        MATCH (community)<-[:HAS_POST]-(community_post:CommunityPost {is_deleted: false})
         OPTIONAL MATCH (community_post)-[:HAS_POST_SHARE]->(share:PostShare)
         OPTIONAL MATCH (community_post)-[:HAS_COMMENT]->(comment:Comment)
         OPTIONAL MATCH (community_post)-[:HAS_LIKE]->(like:Like)

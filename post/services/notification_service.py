@@ -12,11 +12,13 @@ class NotificationService:
         """
         Send notification to post creator about new comment
         """
-        print("Starting comment notification...")
-        print("Notification URL:", self.notification_service_url)
-        print("Commenter:", commenter_name)
-        print("Post ID:", post_id)
-        print("Comment content preview:", comment_content)
+        print("🔔 NOTIFICATION DEBUG: Starting comment notification...")
+        print("🔔 NOTIFICATION DEBUG: Notification URL:", self.notification_service_url)
+        print("🔔 NOTIFICATION DEBUG: Commenter:", commenter_name)
+        print("🔔 NOTIFICATION DEBUG: Post ID:", post_id)
+        print("🔔 NOTIFICATION DEBUG: Comment ID:", comment_id)
+        print("🔔 NOTIFICATION DEBUG: Comment content preview:", comment_content)
+        print("🔔 NOTIFICATION DEBUG: Target device ID:", post_creator_device_id)
         
         headers = {
             'Content-Type': 'application/json',
@@ -36,8 +38,8 @@ class NotificationService:
             }
         }
         
-        print("Sending comment notification...")
-        print("Notification data:", notification_data)
+        print("🔔 NOTIFICATION DEBUG: Sending comment notification...")
+        print("🔔 NOTIFICATION DEBUG: Notification data:", notification_data)
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -47,13 +49,81 @@ class NotificationService:
                     headers=headers
                 ) as response:
                     response_text = await response.text()
-                    print(f"Response status: {response.status}")
-                    print(f"Response body: {response_text}")
+                    print(f"🔔 NOTIFICATION DEBUG: Response status: {response.status}")
+                    print(f"🔔 NOTIFICATION DEBUG: Response body: {response_text}")
                     if response.status != 200:
-                        print(f"Error response: {response_text}")
+                        print(f"🔔 NOTIFICATION DEBUG: Error response: {response_text}")
+                    else:
+                        print(f"🔔 NOTIFICATION DEBUG: ✅ Comment notification sent successfully!")
             except Exception as e:
-                print(f"Error sending comment notification: {str(e)}")
-                print(f"Full error details: {type(e).__name__}: {str(e)}")
+                print(f"🔔 NOTIFICATION DEBUG: ❌ Error sending comment notification: {str(e)}")
+                print(f"🔔 NOTIFICATION DEBUG: Full error details: {type(e).__name__}: {str(e)}")
+
+    async def notify_user_mentioned(self, mentioned_user_uid: str, mentioner_uid: str, content_type: str, content_uid: str):
+        """
+        Send notification to user when they are mentioned in content
+        """
+        print("🔔 MENTION NOTIFICATION DEBUG: Starting mention notification...")
+        print("🔔 MENTION NOTIFICATION DEBUG: Mentioned user UID:", mentioned_user_uid)
+        print("🔔 MENTION NOTIFICATION DEBUG: Mentioner UID:", mentioner_uid)
+        print("🔔 MENTION NOTIFICATION DEBUG: Content type:", content_type)
+        print("🔔 MENTION NOTIFICATION DEBUG: Content UID:", content_uid)
+        
+        # Get mentioned user's device ID
+        try:
+            from auth_manager.models import Users
+            mentioned_user = Users.nodes.get(uid=mentioned_user_uid)
+            mentioner = Users.nodes.get(uid=mentioner_uid)
+            
+            profile = mentioned_user.profile.single()
+            if not profile or not profile.device_id:
+                print("🔔 MENTION NOTIFICATION DEBUG: ❌ No device ID found for mentioned user")
+                return
+                
+            print("🔔 MENTION NOTIFICATION DEBUG: Target device ID:", profile.device_id)
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            notification_data = {
+                "title": f"You were mentioned by {mentioner.username}",
+                "body": f"You were mentioned in a {content_type}",
+                "token": profile.device_id,
+                "priority": "high",
+                "click_action": f"/{content_type}/{content_uid}",
+                "data": {
+                    "content_type": content_type,
+                    "content_uid": content_uid,
+                    "mentioner_uid": mentioner_uid,
+                    "type": "mention"
+                }
+            }
+            
+            print("🔔 MENTION NOTIFICATION DEBUG: Sending mention notification...")
+            print("🔔 MENTION NOTIFICATION DEBUG: Notification data:", notification_data)
+            
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.post(
+                        f"{self.notification_service_url}/notifications",
+                        json=notification_data,
+                        headers=headers
+                    ) as response:
+                        response_text = await response.text()
+                        print(f"🔔 MENTION NOTIFICATION DEBUG: Response status: {response.status}")
+                        print(f"🔔 MENTION NOTIFICATION DEBUG: Response body: {response_text}")
+                        if response.status != 200:
+                            print(f"🔔 MENTION NOTIFICATION DEBUG: Error response: {response_text}")
+                        else:
+                            print(f"🔔 MENTION NOTIFICATION DEBUG: ✅ Mention notification sent successfully!")
+                except Exception as e:
+                    print(f"🔔 MENTION NOTIFICATION DEBUG: ❌ Error sending mention notification: {str(e)}")
+                    print(f"🔔 MENTION NOTIFICATION DEBUG: Full error details: {type(e).__name__}: {str(e)}")
+                    
+        except Exception as e:
+            print(f"🔔 MENTION NOTIFICATION DEBUG: ❌ Error getting user data: {str(e)}")
 
     async def notifyNewPost(self, post_creator_name: str, followers: List[dict], post_id: str, post_image_url: str = None):
         """

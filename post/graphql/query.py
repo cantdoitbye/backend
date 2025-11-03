@@ -14,7 +14,7 @@ from .types import *
 from auth_manager.models import Users, Profile
 from post.models import *
 from connection.models import Circle
-from connection.graphql.types import CircleTypeEnum, CircleTypeEnumV2
+from connection.graphql.types import CircleTypeEnum
 from community.models import CommunityPost
 from post.utils.post_decorator import handle_graphql_post_errors
 from community.models import CommunityPost
@@ -273,6 +273,7 @@ class Query(graphene.ObjectType):
     def resolve_postcomments_by_post_uid(self, info, post_uid, include_replies=True, max_depth=2, limit=10, offset=0):
         """
         UPDATED: Your existing resolver with nested comment support and pagination.
+        Includes media interaction tracking for comments with media files.
         """
         try:
             print(f"DEBUG: Querying post_uid: {post_uid}")
@@ -293,6 +294,45 @@ class Query(graphene.ObjectType):
             else:
                 results, _ = db.cypher_query(
                     post_queries.top_level_comments_with_metrics_query, params)
+
+            # Initialize variables for media tracking BEFORE checking results
+            current_user = info.context.user
+            activity_service = None
+            ip_address = None
+            user_agent = None
+            
+            if current_user and current_user.is_authenticated:
+                try:
+                    from user_activity.services.activity_service import ActivityService
+                    request = info.context
+                    ip_address = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] if request.META.get('HTTP_X_FORWARDED_FOR') else request.META.get('REMOTE_ADDR')
+                    user_agent = request.META.get('HTTP_USER_AGENT', '')
+                    activity_service = ActivityService()
+                except Exception as e:
+                    logger.error(f"Failed to initialize activity service for media tracking: {e}")
+
+            # Track the interaction even if no comments are returned
+            if activity_service and current_user and current_user.is_authenticated:
+                try:
+                    activity_service.track_media_interaction(
+                        user=current_user,
+                        media_type='comment_media',
+                        media_id=post_uid,
+                        interaction_type='view',
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                        metadata={
+                            'post_uid': post_uid,
+                            'include_replies': include_replies,
+                            'query_type': 'postcomments_by_post_uid',
+                            'limit': limit,
+                            'offset': offset,
+                            'comments_found': len(results) if results else 0,
+                            'empty_result': not bool(results)
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to track post comment media interaction: {e}")
 
             if not results:
                 return []
@@ -395,6 +435,30 @@ class Query(graphene.ObjectType):
                     print(f"Error fetching comment vibe reactions: {e}")
                     comment_vibe_reactions = []
 
+                # Track specific media interactions for comments with media files
+                comment_file_ids = getattr(comment_node, 'comment_file_id', []) or []
+                if comment_file_ids and activity_service and current_user and current_user.is_authenticated:
+                    try:
+                        # Track each media file in the comment
+                        for file_id in comment_file_ids:
+                            activity_service.track_media_interaction(
+                                user=current_user,
+                                media_type='image',  # Assuming most comment media are images
+                                media_id=str(file_id),
+                                interaction_type='view',
+                                ip_address=ip_address,
+                                user_agent=user_agent,
+                                metadata={
+                                    'comment_uid': comment_node.uid,
+                                    'post_uid': post_uid,
+                                    'comment_has_media': True,
+                                    'media_count': len(comment_file_ids),
+                                    'query_type': 'comment_media_view'
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to track individual comment media interaction: {e}")
+
                 # Create CommentType with metrics from Cypher
                 enhanced_comment = CommentType(
                     uid=comment_node.uid,
@@ -408,7 +472,7 @@ class Query(graphene.ObjectType):
                     comments=int(comments_count) if comments_count is not None else 0,
                     shares=int(shares_count) if shares_count is not None else 0,
                     vibes=int(vibes_count) if vibes_count is not None else 0,
-                    comment_file_id=getattr(comment_node, 'comment_file_id', []) or [],
+                    comment_file_id=comment_file_ids,
                     comment_file_url=[],
                     parent_comment=parent_comment,
                     replies=[],
@@ -920,9 +984,18 @@ class Query(graphene.ObjectType):
     @monitor_feed_performance
     def resolve_my_feed_test(self, info, circle_type=None, first=20, after=None):
         """
-        Working pagination that provides all required parameters to existing query.
+        Analytics-Based Feed Algorithm
+        
+        Production-ready feed algorithm with:
+        - User analytics-based personalization
+        - Proper duplicate prevention for same day
+        - Tag-based preferences from user's created content
+        - Fallback mechanisms for all scenarios
+        - Frontend-compatible response structure
         """
         import base64
+        from datetime import datetime, timedelta
+        from django.utils import timezone
         start_time = time.time()
 
         try:
@@ -932,7 +1005,7 @@ class Query(graphene.ObjectType):
 
             # Validate pagination parameters
             first = min(max(1, first), 50)
-            logger.info(f"Generating feed for user {user_id}: first={first}, after={after}")
+            logger.info(f"Generating analytics-based feed for user {user_id}: first={first}, after={after}")
 
             # Parse cursor for timestamp-based pagination
             cursor_timestamp = None
@@ -953,7 +1026,7 @@ class Query(graphene.ObjectType):
                     decoded_cursor = base64.b64decode(raw.encode()).decode()
                     cursor_parts = decoded_cursor.split('_', 1)
                     if len(cursor_parts) == 2:
-                        cursor_timestamp = cursor_parts[0]
+                        cursor_timestamp = float(cursor_parts[0])
                         cursor_post_uid = cursor_parts[1]
                         logger.info(f"Using cursor: timestamp={cursor_timestamp}, post_uid={cursor_post_uid}")
                     else:
@@ -963,110 +1036,611 @@ class Query(graphene.ObjectType):
                     cursor_timestamp = None
                     cursor_post_uid = None
 
-            # Validate algorithm requirements
-            validation = validate_feed_algorithm_requirements(user_id)
-            if not validation.get('algorithm_ready'):
-                logger.warning(f"Algorithm not ready for user {user_id}")
-                fallback_feed = get_appropriate_fallback_feed(
-                    validation.get('user_category', 'unknown'),
-                    user_id
-                )
-                if fallback_feed:
-                    return fallback_feed[:first]  # Simple slice for fallback
-                return []
+            # Generate analytics-based personalized feed
+            final_feed = Query._generate_analytics_based_feed(
+                user_id=user_id,
+                first=first,
+                cursor_timestamp=cursor_timestamp,
+                cursor_post_uid=cursor_post_uid,
+                circle_type=circle_type
+            )
 
-            # Provide ALL required parameters to your existing query
-            params = {
-                "log_in_user_node_id": str(user_id),
-                "cursor_timestamp": cursor_timestamp,  # Can be None for first page
-                "cursor_post_uid": cursor_post_uid,    # Can be None for first page
-                "limit": first * 2  # Get more posts to account for algorithm filtering
-            }
-
-            # Execute your existing query with all required parameters
-            logger.debug("Executing post_feed_query with all parameters...")
-            logger.info(f"Debug: About to query with cursor_timestamp={cursor_timestamp}")
-            logger.info(f"Debug: Will show posts older than: {cursor_timestamp}")
-
-            results, _ = db.cypher_query(post_queries.post_feed_query, params)
-
-            if not results:
-                logger.warning(f"No content found for user {user_id}")
-                return []
-
-            logger.info(f"Retrieved {len(results)} items from query")
-
-            # Initialize utilities (your existing code)
-            Query.initialize_feed_utilities(results)
-
-            # Apply your existing algorithm
-            algorithm_start = time.time()
-            try:
-                algorithmically_sorted_results = apply_feed_algorithm(
-                    user_id=user_id,
-                    raw_content=results,
-                    circle_type=circle_type
-                )
-                algorithm_time = time.time() - algorithm_start
-                logger.info(f"Algorithm completed in {algorithm_time:.3f}s")
-            except Exception as algo_error:
-                logger.error(f"Algorithm failed: {algo_error}")
-                algorithmically_sorted_results = results
-                algorithm_time = 0.0
-
-            # Use your existing build_feed_response method
-            result_feed = Query.build_feed_response(algorithmically_sorted_results, circle_type)
-
-            # Limit to requested amount
-            final_feed = result_feed[:first]
-
-            # Add cursors using timestamp + uid format (matching your query expectations)
+            # Add cursors to feed items
             for item in final_feed:
                 if hasattr(item, 'uid'):
                     try:
-                        # Find the real Unix timestamp from the original results
-                        real_unix_timestamp = None
-                        for result in algorithmically_sorted_results:
-                            post_data = result[0] if result[0] else {}
-                            if post_data.get('uid') == item.uid:
-                                real_unix_timestamp = post_data.get('created_at')
-                                break
-                        # Use the Unix timestamp directly in cursor
-                        if real_unix_timestamp:
-                            cursor_data = f"{real_unix_timestamp}_{item.uid}"
+                        # Extract timestamp from created_at (which is already a Unix timestamp string)
+                        timestamp = getattr(item, 'created_at', '1000000000')
+                        if isinstance(timestamp, str):
+                            timestamp = timestamp
                         else:
-                            cursor_data = f"1000000000_{item.uid}"  # Very old Unix timestamp
+                            timestamp = str(timestamp)
+                        cursor_data = f"{timestamp}_{item.uid}"
                         item.cursor = base64.b64encode(cursor_data.encode()).decode()
                     except Exception as cursor_error:
                         logger.warning(f"Cursor generation failed for {item.uid}: {cursor_error}")
                         item.cursor = base64.b64encode(f"1000000000_{item.uid}".encode()).decode()
-            # Validate feed quality
-            if result_feed:
-                quality_metrics = validate_feed_quality(result_feed)
-                if quality_metrics['quality_score'] < 0.3:
-                    logger.warning(f"Low quality feed detected for user {user_id}")
 
             # Log metrics
             total_time = time.time() - start_time
-            log_feed_metrics(user_id, len(results), len(final_feed), algorithm_time, total_time)
-
-            # Debug: check what we got from the query
-            logger.info(f"Debug: Query returned {len(results)} results")
-            if results:
-                first_post = results[0][0] if results[0] and results[0][0] else {}
-                logger.info(f"Debug: First post timestamp: {first_post.get('created_at')}, uid: {first_post.get('uid')}")
-                logger.info(f"Debug: Cursor timestamp: {cursor_timestamp}, cursor_post_uid: {cursor_post_uid}")
-                logger.info(f"Feed completed: {len(final_feed)} items in {total_time:.3f}s")
+            logger.info(f"Analytics-based feed completed: {len(final_feed)} items in {total_time:.3f}s")
+            
             return final_feed
 
         except Exception as e:
-            logger.error(f"Error in my_feed_test: {e}")
+            logger.error(f"Error in analytics-based feed: {e}")
             try:
-                # Emergency fallback
-                emergency_feed = get_appropriate_fallback_feed('unknown', user_id, limit=first)
-                return emergency_feed[:first] if emergency_feed else []
+                # Emergency fallback - get any available content
+                emergency_feed = Query._get_emergency_fallback_feed(user_id, first)
+                return emergency_feed
             except Exception:
                 return []
+
+    @staticmethod
+    def _generate_analytics_based_feed(user_id, first, cursor_timestamp=None, cursor_post_uid=None, circle_type=None):
+        """
+        Generate personalized feed based on user activity analytics
+        """
+        from user_activity.models import ContentInteraction, SocialInteraction, ProfileActivity
+        from post.graphql.raw_queries import post_queries
+        from collections import defaultdict
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+        import time
+        
+        try:
+            logger.info(f"Generating analytics-based feed for user {user_id}")
+            
+            # Step 1: Build user analytics profile
+            user_profile = Query._build_user_analytics_profile(user_id)
+            logger.info(f"User profile built: new_user={user_profile['is_new_user']}, preferences={user_profile['preferred_content_types']}")
+            
+            # Step 2: Get today's viewed content to prevent duplicates
+            today_viewed = Query._get_today_viewed_content(user_id, timezone.now().date())
+            logger.info(f"User has viewed {len(today_viewed)} items today")
+            
+            # Step 3: Get base content pool using existing query
+            params = {
+                "log_in_user_node_id": str(user_id),
+                "cursor_timestamp": cursor_timestamp,
+                "cursor_post_uid": cursor_post_uid,
+                "limit": first * 3  # Get more content for filtering
+            }
+
+            results, _ = db.cypher_query(post_queries.post_feed_query, params)
+            logger.info(f"Base query returned {len(results)} results")
+            
+            # Step 4: Filter out today's viewed content
+            filtered_results = []
+            for result in results:
+                post_data = result[0] if result else {}
+                post_uid = post_data.get('uid')
+                if post_uid and post_uid not in today_viewed:
+                    filtered_results.append(result)
+            
+            logger.info(f"After duplicate filtering: {len(filtered_results)} results")
+            
+            # Step 5: Score and rank based on user analytics
+            if user_profile['is_new_user']:
+                # For new users, use diverse content with basic scoring
+                scored_results = Query._score_content_for_new_user(filtered_results, user_id)
+            else:
+                # For existing users, use analytics-based scoring
+                scored_results = Query._score_content_with_analytics(filtered_results, user_profile, user_id)
+            
+            # Step 6: Apply final filtering and convert to feed response
+            final_results = scored_results[:first]
+            
+            # Step 7: Initialize feed utilities and convert to GraphQL response
+            if final_results:
+                Query.initialize_feed_utilities(final_results)
+                feed_items = Query.build_feed_response(final_results, circle_type)
+                
+                # Track viewed content for future duplicate prevention
+                Query._track_viewed_content(user_id, [item.uid for item in feed_items if hasattr(item, 'uid')], content_source='analytics_feed')
+                
+                logger.info(f"Generated {len(feed_items)} feed items for user {user_id}")
+                return feed_items
+            
+            # Step 8: Fallback if no content found
+            logger.warning(f"No content after filtering for user {user_id}, using fallback")
+            return Query._get_fallback_content(user_id, first)
+            
+        except Exception as e:
+            logger.error(f"Error in _generate_analytics_based_feed: {e}")
+            import traceback
+            traceback.print_exc()
+            return Query._get_fallback_content(user_id, first)
+    
+    @staticmethod
+    def _build_user_analytics_profile(user_id):
+        """
+        Build comprehensive user profile from activity analytics
+        """
+        from user_activity.models import ContentInteraction, SocialInteraction, ProfileActivity
+        from collections import defaultdict
+        from datetime import timedelta
+        from django.utils import timezone
+        
+        profile = {
+            'content_preferences': defaultdict(float),
+            'interaction_preferences': defaultdict(float),
+            'social_behavior': defaultdict(float),
+            'tag_preferences': defaultdict(float),
+            'temporal_patterns': defaultdict(int),
+            'engagement_depth': 0.0,
+            'is_new_user': True,
+            'preferred_content_types': [],
+            'active_hours': [],
+        }
+        
+        try:
+            # Analyze content interactions (last 30 days)
+            recent_cutoff = timezone.now() - timedelta(days=30)
+            content_interactions = ContentInteraction.objects.filter(
+                    user_id=user_id,
+                created_at__gte=recent_cutoff
+            )
+            
+            if content_interactions.exists():
+                profile['is_new_user'] = False
+                
+                # Content type preferences
+                for interaction in content_interactions:
+                    weight = Query._get_interaction_weight(interaction.interaction_type)
+                    profile['content_preferences'][interaction.content_type] += weight
+                    profile['interaction_preferences'][interaction.interaction_type] += weight
+                    
+                    # Add engagement depth scoring
+                    if interaction.duration_seconds:
+                        profile['engagement_depth'] += min(interaction.duration_seconds / 60, 10) * 0.1
+                    if interaction.scroll_depth_percentage:
+                        profile['engagement_depth'] += interaction.scroll_depth_percentage / 100 * 0.2
+                    
+                    # Temporal patterns
+                    hour = interaction.created_at.hour
+                    profile['temporal_patterns'][hour] += 1
+            
+            # Analyze social interactions
+            social_interactions = SocialInteraction.objects.filter(
+                user_id=user_id,
+                created_at__gte=recent_cutoff
+            )
+            
+            for interaction in social_interactions:
+                profile['social_behavior'][interaction.interaction_type] += 1.0
+            
+            # Get user's tag preferences from their created content
+            user_tags = Query._get_user_tag_preferences(user_id)
+            profile['tag_preferences'] = user_tags
+            
+            # Determine preferred content types
+            if profile['content_preferences']:
+                sorted_prefs = sorted(profile['content_preferences'].items(), key=lambda x: x[1], reverse=True)
+                profile['preferred_content_types'] = [item[0] for item in sorted_prefs[:3]]
+            
+            # Determine active hours
+            if profile['temporal_patterns']:
+                sorted_hours = sorted(profile['temporal_patterns'].items(), key=lambda x: x[1], reverse=True)
+                profile['active_hours'] = [hour for hour, count in sorted_hours[:6]]  # Top 6 hours
+            
+            logger.info(f"Built profile for user {user_id}: new_user={profile['is_new_user']}, prefs={profile['preferred_content_types']}")
+            
+        except Exception as e:
+            logger.error(f"Error building user profile: {e}")
+            
+        return profile
+    
+    @staticmethod
+    def _get_interaction_weight(interaction_type):
+        """
+        Get weight for different interaction types
+        """
+        weights = {
+            'view': 1.0,
+            'like': 3.0,
+            'comment': 5.0,
+            'share': 7.0,
+            'create': 10.0,
+            'save': 6.0,
+            'reaction': 4.0,
+            'send_request': 2.0,
+            'accepted': 8.0,
+        }
+        return weights.get(interaction_type, 1.0)
+    
+    @staticmethod
+    def _get_user_tag_preferences(user_id):
+        """
+        Get user's tag preferences from their created content and interactions
+        """
+        from collections import defaultdict
+        
+        tag_preferences = defaultdict(float)
+        
+        try:
+            from auth_manager.models import Users
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Get tags from user's created posts
+            user_posts = user_node.post.all()
+            for post in user_posts:
+                # Since posts don't have tags field, use post_type as preference indicator
+                if hasattr(post, 'post_type') and post.post_type:
+                    tag_preferences[post.post_type.lower()] += 2.0  # Weight by content type they create
+            
+            # Get tags from user's created communities  
+            user_communities = user_node.community.all()
+            for community in user_communities:
+                if hasattr(community, 'community_name') and community.community_name:
+                    # Use community name as tag preference
+                    community_words = community.community_name.lower().split()
+                    for word in community_words:
+                        if len(word) > 2:  # Only meaningful words
+                            tag_preferences[word] += 1.5
+            
+            logger.info(f"Extracted {len(tag_preferences)} tag preferences for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error getting user tag preferences: {e}")
+        
+        return dict(tag_preferences)
+    
+    @staticmethod
+    def _score_content_for_new_user(results, user_id):
+        """
+        Score content for new users with basic diversity
+        """
+        try:
+            # For new users, provide diverse content with simple scoring
+            scored_results = []
+            content_type_counts = {'post': 0, 'community': 0, 'story': 0}
+            
+            for result in results:
+                post_data = result[0] if result else {}
+                
+                # Basic diversity scoring
+                content_type = post_data.get('post_type', 'unknown')
+                base_score = 1.0
+                
+                # Promote diversity by reducing score for over-represented types
+                if content_type in content_type_counts:
+                    if content_type_counts[content_type] < 3:
+                        base_score += 0.2  # Boost under-represented types
+                    content_type_counts[content_type] += 1
+                
+                # Add some randomness for new users
+                import random
+                base_score += random.uniform(-0.1, 0.1)
+                
+                scored_results.append({
+                    'result': result,
+                    'score': base_score,
+                    'post_data': post_data
+                })
+            
+            # Sort by score
+            scored_results.sort(key=lambda x: x['score'], reverse=True)
+            return [item['result'] for item in scored_results]
+            
+        except Exception as e:
+            logger.error(f"Error scoring content for new user: {e}")
+            return results
+    
+    @staticmethod
+    def _get_today_viewed_content(user_id, date):
+        """
+        Get content UIDs that user has already seen today
+        """
+        from user_activity.models import ContentInteraction, MediaInteraction
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        
+        try:
+            start_of_day = timezone.make_aware(datetime.combine(date, datetime.min.time()))
+            end_of_day = start_of_day + timedelta(days=1)
+            
+            viewed_content = set()
+            
+            # From content interactions
+            interactions = ContentInteraction.objects.filter(
+                user_id=user_id,
+                created_at__gte=start_of_day,
+                created_at__lt=end_of_day,
+                interaction_type__in=['view', 'like', 'comment', 'share']
+            )
+            
+            for interaction in interactions:
+                viewed_content.add(interaction.content_id)
+            
+            # From media interactions (posts viewed through comments)
+            media_interactions = MediaInteraction.objects.filter(
+                user_id=user_id,
+                created_at__gte=start_of_day,
+                created_at__lt=end_of_day,
+                media_type='comment_media'
+            )
+            
+            for interaction in media_interactions:
+                if interaction.metadata and 'post_uid' in interaction.metadata:
+                    viewed_content.add(interaction.metadata['post_uid'])
+            
+            logger.info(f"User {user_id} has viewed {len(viewed_content)} items today")
+            return viewed_content
+            
+        except Exception as e:
+            logger.error(f"Error getting today's viewed content: {e}")
+            return set()
+    
+    @staticmethod
+    def _get_today_viewed_fallback_content(user_id, date):
+        """
+        Get ONLY fallback content UIDs that user has seen today (not analytics content)
+        """
+        from user_activity.models import ContentInteraction
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        
+        try:
+            start_of_day = timezone.make_aware(datetime.combine(date, datetime.min.time()))
+            end_of_day = start_of_day + timedelta(days=1)
+            
+            viewed_fallback_content = set()
+            
+            # Get only content viewed as fallback or fallback_cycle
+            fallback_interactions = ContentInteraction.objects.filter(
+                user_id=user_id,
+                created_at__gte=start_of_day,
+                created_at__lt=end_of_day,
+                interaction_type='view',
+                metadata__source='feed_view',
+                metadata__content_source__in=['fallback', 'fallback_cycle']
+            )
+            
+            for interaction in fallback_interactions:
+                viewed_fallback_content.add(interaction.content_id)
+            
+            logger.info(f"User {user_id} has viewed {len(viewed_fallback_content)} fallback items today")
+            return viewed_fallback_content
+            
+        except Exception as e:
+            logger.error(f"Error getting today's viewed fallback content: {e}")
+            return set()
+    
+    @staticmethod
+    def _smart_randomize_content(results, user_id, limit, randomize_type='fallback_cycle'):
+        """
+        Smart randomization that considers user preferences and avoids predictable patterns
+        """
+        try:
+            import random
+            import time
+            
+            if randomize_type == 'fallback_cycle':
+                # For fallback cycles, use minute-based randomization for more frequent changes
+                current_minute = int(time.time() // 60)  # Changes every minute
+                seed_base = f"{user_id}_{current_minute}"
+            else:
+                # For other randomization, use hour-based for more stability
+                current_hour = int(time.time() // 3600)  # Changes every hour
+                seed_base = f"{user_id}_{current_hour}"
+            
+            random.seed(hash(seed_base))
+            
+            # Create a copy and shuffle
+            shuffled_results = results.copy()
+            random.shuffle(shuffled_results)
+            
+            # Take the required number of items
+            selected_results = shuffled_results[:limit]
+            
+            logger.info(f"Smart randomized {len(selected_results)} items for user {user_id} (type: {randomize_type}, seed: {seed_base})")
+            return selected_results
+            
+        except Exception as e:
+            logger.error(f"Error in smart randomization: {e}")
+            # Fallback to simple selection
+            return results[:limit]
+    
+    @staticmethod
+    def _score_content_with_analytics(results, user_profile, user_id):
+        """Score content based on user analytics profile"""
+        scored_results = []
+        try:
+            for result in results:
+                post_data = result[0] if result else {}
+                if not post_data:
+                    continue
+                score = Query._calculate_content_score(post_data, user_profile, user_id)
+                scored_results.append({
+                    'result': result,
+                    'score': score,
+                    'post_data': post_data
+                })
+            
+            # Sort by score descending
+            scored_results.sort(key=lambda x: x['score'], reverse=True)
+            return [item['result'] for item in scored_results]
+            
+        except Exception as e:
+            logger.error(f"Error scoring content: {e}")
+            return results
+    
+    @staticmethod
+    def _calculate_content_score(post_data, user_profile, user_id):
+        """Calculate personalized score for content item"""
+        try:
+            base_score = 1.0
+            
+            # Content type preference scoring
+            post_type = post_data.get('post_type', '').lower()
+            if post_type in user_profile['content_preferences']:
+                base_score += user_profile['content_preferences'][post_type] * 0.3
+            
+            # Tag/type preference scoring (using post_type as tag)
+            if post_type in user_profile['tag_preferences']:
+                base_score += user_profile['tag_preferences'][post_type] * 0.2
+            
+            # Engagement scoring based on vibe_score
+            vibe_score = post_data.get('vibe_score', 2.0)
+            if vibe_score > 2.0:
+                base_score += (vibe_score - 2.0) * 0.4
+            
+            # Recency bonus (newer content gets slight boost)
+            created_at = post_data.get('created_at', 0)
+            if created_at:
+                import time
+                current_time = time.time()
+                age_hours = (current_time - created_at) / 3600
+                if age_hours < 24:  # Content less than 24 hours old
+                    base_score += 0.2
+                elif age_hours < 72:  # Content less than 3 days old
+                    base_score += 0.1
+            
+            return max(base_score, 0.1)
+            
+        except Exception as e:
+            logger.error(f"Error calculating content score: {e}")
+            return 1.0
+    
+    @staticmethod
+    def _track_viewed_content(user_id, post_uids, content_source='analytics_feed'):
+        """Track viewed content for duplicate prevention"""
+        try:
+            from user_activity.models import ContentInteraction
+            from django.utils import timezone
+            
+            for post_uid in post_uids:
+                # Always create a new record for tracking purposes (don't use get_or_create)
+                # This ensures we track each view with the correct content_source
+                ContentInteraction.objects.create(
+                    user_id=user_id,
+                    content_type='post',
+                    content_id=post_uid,
+                    interaction_type='view',
+                    timestamp=timezone.now(),
+                    metadata={
+                        'source': 'feed_view',
+                        'algorithm': 'analytics_based',
+                        'content_source': content_source
+                    }
+                )
+            logger.info(f"Tracked {len(post_uids)} viewed items for user {user_id} (source: {content_source})")
+            
+        except Exception as e:
+            logger.error(f"Error tracking viewed content: {e}")
+    
+    @staticmethod
+    def _get_fallback_content(user_id, limit):
+        """Get fallback content when personalized content fails - ALWAYS PROVIDES CONTENT"""
+        try:
+            from post.graphql.raw_queries import post_queries
+            from django.utils import timezone
+            
+            # Get today's viewed FALLBACK content only (not all content)
+            today_viewed_fallback = Query._get_today_viewed_fallback_content(user_id, timezone.now().date())
+            
+            params = {
+                "log_in_user_node_id": str(user_id),
+                "cursor_timestamp": None,
+                "cursor_post_uid": None,
+                "limit": limit * 2  # Get more content for filtering
+            }
+            results, _ = db.cypher_query(post_queries.post_feed_query, params)
+            
+            if results:
+                # Filter out only previously viewed FALLBACK content
+                filtered_results = []
+                for result in results:
+                    post_data = result[0] if result else {}
+                    post_uid = post_data.get('uid')
+                    if post_uid and post_uid not in today_viewed_fallback:
+                        filtered_results.append(result)
+                    
+                    # Stop when we have enough content
+                    if len(filtered_results) >= limit:
+                        break
+                
+                logger.info(f"Fallback content: {len(results)} total, {len(filtered_results)} after fallback duplicate filtering")
+                
+                # If we have filtered results, use them
+                if filtered_results:
+                    Query.initialize_feed_utilities(filtered_results)
+                    fallback_feed = Query.build_feed_response(filtered_results, None)
+                    
+                    # Track fallback content as viewed
+                    fallback_uids = [item.uid for item in fallback_feed if hasattr(item, 'uid')]
+                    Query._track_viewed_content(user_id, fallback_uids, content_source='fallback')
+                    
+                    return fallback_feed
+                
+                # If no unviewed fallback content, provide fresh fallback (restart the cycle)
+                else:
+                    logger.info(f"User {user_id} has viewed all fallback content, restarting fallback cycle")
+                    
+                    # Smart randomization to avoid same sequence on every refresh
+                    fresh_results = Query._smart_randomize_content(results, user_id, limit, 'fallback_cycle')
+                    
+                    Query.initialize_feed_utilities(fresh_results)
+                    fresh_fallback_feed = Query.build_feed_response(fresh_results, None)
+                    
+                    # Track as new fallback cycle
+                    fresh_uids = [item.uid for item in fresh_fallback_feed if hasattr(item, 'uid')]
+                    Query._track_viewed_content(user_id, fresh_uids, content_source='fallback_cycle')
+                    
+                    logger.info(f"Restarted fallback cycle with {len(fresh_results)} randomized items")
+                    return fresh_fallback_feed
+            
+            # This should never happen - emergency fallback
+            logger.error(f"No content available in database for user {user_id} - using emergency fallback")
+            return Query._get_emergency_fallback_feed(user_id, limit)
+
+        except Exception as e:
+            logger.error(f"Error getting fallback content: {e}")
+            return Query._get_emergency_fallback_feed(user_id, limit)
+    
+    @staticmethod
+    def _get_emergency_fallback_feed(user_id, limit):
+        """Emergency fallback - get any available content, ignoring duplicates if necessary"""
+        try:
+            # First try with duplicate prevention
+            fallback_feed = Query._get_fallback_content(user_id, min(limit, 10))
+            
+            if fallback_feed:
+                return fallback_feed
+            
+            # If no content found even with fallback, get fresh content ignoring today's views
+            logger.warning(f"User {user_id} has viewed all available content today, providing fresh content")
+            
+            from post.graphql.raw_queries import post_queries
+            params = {
+                "log_in_user_node_id": str(user_id),
+                "cursor_timestamp": None,
+                "cursor_post_uid": None,
+                "limit": min(limit * 2, 20)  # Get more content for randomization
+            }
+            results, _ = db.cypher_query(post_queries.post_feed_query, params)
+            
+            if results:
+                # Smart randomization for emergency content
+                emergency_results = Query._smart_randomize_content(results, user_id, min(limit, 10), 'emergency')
+                
+                Query.initialize_feed_utilities(emergency_results)
+                emergency_feed = Query.build_feed_response(emergency_results, None)
+                
+                # Track emergency content as viewed
+                emergency_uids = [item.uid for item in emergency_feed if hasattr(item, 'uid')]
+                Query._track_viewed_content(user_id, emergency_uids, content_source='emergency')
+                
+                logger.info(f"Provided {len(emergency_feed)} randomized emergency items")
+                return emergency_feed
+            
+                return []
+            
+        except Exception as e:
+            logger.error(f"Error in emergency fallback: {e}")
+            return []
+
         
 
     @staticmethod
@@ -1192,17 +1766,17 @@ class Query(graphene.ObjectType):
 
         for post in sorted_results:
             try:
-                # Extract post components
+                # Extract post components - FIXED INDEXING to match query structure
+                # Query returns: post, user, profile, reactions, connection, circle, share_count, calculated_overall_score, created_at
                 post_node = post[0] if post[0] else None
                 user_node = post[1] if post[1] else None
                 profile_node = post[2] if post[2] else None
-                likes = post[3] if post[3] else None
+                likes = post[3] if post[3] else None  # reactions
                 connection = post[4] if post[4] else None
                 circle = post[5] if post[5] else None
-                share_count = post[6] if len(
-                    post) > 6 and post[6] is not None else 0
-                calculated_overall_score = post[7] if len(
-                    post) > 7 and post[7] is not None else 2.0
+                share_count = post[6] if len(post) > 6 and post[6] is not None else 0
+                calculated_overall_score = post[7] if len(post) > 7 and post[7] is not None else 2.0
+                # created_at is at post[8] but we don't need it here
 
                 # Track connection status
                 if connection is not None:
@@ -1215,6 +1789,11 @@ class Query(graphene.ObjectType):
                         original_circle_type = circle.get('circle_type')
                     else:
                         original_circle_type = getattr(circle, 'circle_type', None)
+                
+                # Debug logging only when there are actual issues
+                if post_node is None:
+                    logger.warning(f"Null post_node found in feed results")
+                    continue
 
                 # Apply circle type filtering
                 should_include_post = False
@@ -1222,10 +1801,13 @@ class Query(graphene.ObjectType):
                 if circle_type is None:
                     # No filter - include all posts
                     should_include_post = True
-                elif connection is not None and circle and original_circle_type:
-                    # Only include posts from connections with matching circle type
-                    if original_circle_type == circle_type.value:
-                        should_include_post = True
+                else:
+                    # Filter is applied - check if post matches the filter
+                    if connection is not None and circle and original_circle_type:
+                        # Post has connection and circle - check if it matches filter
+                        if original_circle_type == circle_type.value:
+                            should_include_post = True
+                    # Note: Posts without connections are excluded when filter is active
 
                 if should_include_post:
                     feed_item = FeedTestType.from_neomodel(
@@ -1238,7 +1820,9 @@ class Query(graphene.ObjectType):
                         query_share_count=share_count,
                         query_overall_score=calculated_overall_score
                     )
-                    result_feed.append(feed_item)
+                    # Only add non-None feed items
+                    if feed_item is not None:
+                        result_feed.append(feed_item)
 
             except Exception as item_error:
                 logger.error(f"Error processing feed item: {item_error}")
@@ -1333,110 +1917,3 @@ class Query(graphene.ObjectType):
         return [PostCategoryType.from_neomodel(user_node, detail, search) for detail in details]
 
 
-class QueryV2(graphene.ObjectType):
-    # version2 api
-    my_feed_test = graphene.List(
-        FeedTestTypeV2, circle_type=CircleTypeEnumV2())
-
-    @handle_graphql_post_errors
-    @login_required
-    def resolve_my_feed_test(self, info, circle_type=None):
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-
-        params = {
-            "log_in_user_node_id": str(user_id)  # ID of the logged-in user
-        }
-
-        # Execute the query
-        results, _ = db.cypher_query(post_queries.post_feed_queryV2, params)
-
-        result_feed = []
-        user_has_connection = False
-
-        PostReactionUtils.initialize_map(results)
-        IndividualVibeManager.store_data()  # Fetches and stores data
-
-        file_ids = []
-
-        for post in results:
-            post_data = post[0]
-            file_id = post_data.get('post_file_id')
-            if file_id:
-                for id in file_id:
-                    if id:
-                        file_ids.append(id)
-
-        FileURL.store_file_urls(file_ids)
-
-        login_user_node = Users.nodes.get(user_id=user_id)
-        login_user_uid = login_user_node.uid
-
-        for post in results:
-
-            post_node = post[0]if post[0]else None
-            connection = post[4] if post[4] else None
-            # Likes are the third element in each tuple
-            likes = post[3] if post[3] else None
-            user_node = post[1]if post[1] else None
-
-            circle = post[5] if post[5] else None
-            profile_node = post[2] if post[2] else None
-
-            if connection is not None:
-                user_has_connection = True
-
-            if circle:
-                user_relations = json.loads(circle.get("user_relations", "{}"))
-                original_circle_type = user_relations.get(
-                    login_user_uid, {}).get("circle_type")
-            else:
-                original_circle_type = None
-                user_relations = None
-
-            # Append for all posts if no circle_type is selected or its value is null
-            if circle_type is None or original_circle_type == circle_type.value:
-                result_feed.append(FeedTestTypeV2.from_neomodel(
-                    post_node, likes, connection, circle, user_node, profile_node, user_relations, login_user_uid))
-
-        if not user_has_connection:
-            if circle_type is not None:
-                return []  # No feed if a circle type is selected but no connections
-
-        return result_feed
-
-    post_by_uid = Query.post_by_uid
-    resolve_post_by_uid = Query.resolve_post_by_uid
-
-    my_post = Query.my_post
-    resolve_my_post = Query.resolve_my_post
-
-    post_by_userid = Query.post_by_userid
-    resolve_post_by_userid = Query.resolve_post_by_userid
-
-    post_reactions_by_post_uid = Query.post_reactions_by_post_uid
-    resolve_post_reactions_by_post_uid = Query.resolve_post_reactions_by_post_uid
-
-    post_reactions_analytic_by_post_uid = Query.post_reactions_analytic_by_post_uid
-    resolve_post_reactions_analytic_by_post_uid = Query.resolve_post_reactions_analytic_by_post_uid
-
-    postcomments_by_post_uid = Query.postcomments_by_post_uid
-    resolve_postcomments_by_post_uid = Query.resolve_postcomments_by_post_uid
-
-    recommended_post = graphene.List(PostCategoryTypeV2)
-
-    @handle_graphql_post_errors
-    @login_required
-    def resolve_recommended_post(self, info):
-
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-        user_node = Users.nodes.get(user_id=user_id)
-
-        try:
-            details = ["Top Vibes - Meme", "Top Vibes - Podcasts", "Top Vibes - Videos", "Top Vibes - Music",
-                       "Top Vibes - Articles", "Post From Connection", "Popular Post", "Recent Post"]
-            return [PostCategoryTypeV2.from_neomodel(user_node, detail) for detail in details]
-
-        except Exception as e:
-            raise Exception(e)

@@ -9,14 +9,24 @@ from graphene_django.types import DjangoObjectType
 class ConversationType(ObjectType):
     uid = graphene.String()
     members = graphene.List(UserType)
+    other_participants = graphene.List(UserType)
     name = graphene.String()
     timestamp = graphene.DateTime()
     created_by = graphene.Field(UserType)
+    
     @classmethod
-    def from_neomodel(cls, conversation):
+    def from_neomodel(cls, conversation, current_user_id=None):
+        all_members = [UserType.from_neomodel(member) for member in conversation.members.all()]
+        
+        # Filter out the current user from other_participants
+        other_participants = all_members
+        if current_user_id:
+            other_participants = [member for member in all_members if member.user_id != current_user_id]
+        
         return cls(
             uid=conversation.uid,
-            members=[UserType.from_neomodel(member) for member in conversation.members.all()],
+            members=all_members,
+            other_participants=other_participants,
             created_by=UserType.from_neomodel(conversation.created_by.single()) if conversation.created_by.single() else None,
             name=conversation.name,
             timestamp=conversation.timestamp
@@ -36,10 +46,10 @@ class ConversationMessageType(ObjectType):
     visible_to_blocked = graphene.Boolean()
 
     @classmethod
-    def from_neomodel(cls, message):
+    def from_neomodel(cls, message, current_user_id=None):
         return cls(
             uid=message.uid,
-            conversation=ConversationType.from_neomodel(message.conversation.single()) if message.conversation.single() else None,
+            conversation=ConversationType.from_neomodel(message.conversation.single(), current_user_id=current_user_id) if message.conversation.single() else None,
             sender=UserType.from_neomodel(message.sender.single()) if message.sender.single() else None,
             content=message.content,
             title=message.title,
@@ -60,10 +70,10 @@ class ReactionType(ObjectType):
     timestamp = graphene.DateTime()
 
     @classmethod
-    def from_neomodel(cls, reaction):
+    def from_neomodel(cls, reaction, current_user_id=None):
         return cls(
             uid=reaction.uid,
-            conv_message=ConversationMessageType.from_neomodel(reaction.conv_message.single()) if reaction.conv_message.single() else None,
+            conv_message=ConversationMessageType.from_neomodel(reaction.conv_message.single(), current_user_id=current_user_id) if reaction.conv_message.single() else None,
             reacted_by=UserType.from_neomodel(reaction.reacted_by.single()) if reaction.reacted_by.single() else None,
             reaction_type=reaction.reaction_type,
             emoji=reaction.emoji,

@@ -15,10 +15,10 @@ from auth_manager.validators.rules.regex_patterns import (
 
 def validate_username(username):
     """
-    Validates that the username is between 3 and 10 characters long.
+    Validates that the username is between 6 and 15 characters long.
     """
     if not re.match(USERNAME_PATTERN, username):
-        raise GraphQLError("Invalid username. Must be between 6 and 10 characters.")
+        raise GraphQLError("Invalid username. Must be between 6 and 15 characters.")
     return True
 
 
@@ -193,12 +193,12 @@ def validate_bio(input_string):
     # Explanation of the pattern:
     # (?!.*<[^>]+>)     : Rejects HTML tags (negative lookahead).
     # [A-Za-z0-9\s!#.,'\"-🌲💻\u00C0-\u017F] : Allows alphanumeric, spaces, valid special characters, emojis, and Unicode.
-    # {20,500}          : Enforces minimum length of 20 and maximum length of 500 characters.
+    # {1,200}           : Enforces minimum length of 1 and maximum length of 200 characters.
 
     # Validate using regex
     if not re.fullmatch(BIO_PATTERN, input_string):
         raise GraphQLError(
-            "Invalid input. Bio must be between 20 and 500 characters long, "
+            "Invalid input. Bio must be between 1 and 200 characters long, "
             "must not contain HTML tags, and can only include letters, numbers, "
             "spaces, valid special characters, emojis, and Unicode characters."
         )
@@ -207,12 +207,12 @@ def validate_bio(input_string):
 
 
 
-def validate_designation(input_string, max_length=50):
+def validate_designation(input_string, max_length=100):
     """
     Validates the designation field based on the following criteria:
     - Must not be empty.
     - Must only contain letters, spaces, and (if applicable) numbers in specific formats.
-    - Must be at least 1 character long and not exceed the maximum length.
+    - Must be at least 2 characters long and not exceed the maximum length.
     - Should reject invalid special characters.
     - Case-insensitivity is implicit as all case formats are valid.
 
@@ -230,6 +230,10 @@ def validate_designation(input_string, max_length=50):
     # Check for empty designation
     if not input_string.strip():
         raise GraphQLError("Invalid input. Designation field must not be empty.")
+    
+    # Check minimum length constraint
+    if len(input_string.strip()) < 2:
+        raise GraphQLError("Invalid input. Designation must be at least 2 characters long.")
 
     # Check length constraints
     if len(input_string) > max_length:
@@ -238,7 +242,7 @@ def validate_designation(input_string, max_length=50):
     # Validate against the regex pattern
     if not re.fullmatch(DESIGNATION_PATTERN, input_string):
         raise GraphQLError(
-            "Invalid input. Designation can only contain letters, spaces, and (if applicable) numbers."
+            "Invalid input. Designation must be between 2 and 100 characters and can only contain letters, spaces, and (if applicable) numbers."
         )
 
     return True

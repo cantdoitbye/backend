@@ -6,6 +6,14 @@ recommended_users_query = """
     ORDER BY u2.created_at DESC;
 
 """
+recommended_users_query_new = """
+    MATCH (u:Users {uid: $uid})
+    MATCH (u2:Users)-[:HAS_PROFILE]->(p2:Profile)-[:HAS_ONBOARDING_STATUS]->(o2:OnboardingStatus {email_verified: true})
+    WHERE NOT (u)-[:HAS_CONNECTION]->(u2) AND u <> u2
+    RETURN u2, p2
+    ORDER BY u2.created_at DESC
+    LIMIT 20;
+"""
 
 recommended_connected_users_query = """
     MATCH (u:Users {uid: $uid})-[:HAS_CONNECTION]->(c:Connection {connection_status: "Accepted"})<-[:HAS_CONNECTION]-(u2:Users)

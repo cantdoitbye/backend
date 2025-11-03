@@ -18,16 +18,14 @@ class StatusEnum(graphene.Enum):
     CANCELLED = "Cancelled"
     SENT="Sent"
 
-
 class StatusSecondaryUserEnum(graphene.Enum):
     ACCEPTED = "Accepted"
-    
+    REJECTED = "Rejected"
 
 class CircleTypeEnum(graphene.Enum):
     OUTER = "Outer"
     INNER = "Inner"
-    UNIVERSAL = "Universal"
-
+    UNIVERSAL = "Universe"
 
 class CircleTypeEnumV2(graphene.Enum):
     OUTER = "Outer"
@@ -112,6 +110,7 @@ class ConnectionV2Type(ObjectType):
     email=graphene.String()
     first_name=graphene.String()
     last_name=graphene.String()
+    name=graphene.String()  # Combined first_name and last_name
     user_type=graphene.String()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
     connection = graphene.Field(lambda: ConnectionConnectedUserType)
@@ -125,6 +124,12 @@ class ConnectionV2Type(ObjectType):
             return None
             
         user = Users.nodes.get(uid=user_uid)
+        
+        # Combine first_name and last_name to create full name
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip() or user.username
+        
         return cls(
             uid=user.uid,
             user_id=user.user_id,
@@ -132,6 +137,7 @@ class ConnectionV2Type(ObjectType):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
+            name=full_name,
             user_type=user.user_type,
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,
             connection=ConnectionConnectedUserType.from_neomodel(user.connection.single()) if user.connection.single() else None,
@@ -144,6 +150,7 @@ class GroupedCommunityMemberType(ObjectType):
     email=graphene.String()
     first_name=graphene.String()
     last_name=graphene.String()
+    name=graphene.String()  # Combined first_name and last_name
     user_type=graphene.String()
     score=graphene.Float()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
@@ -155,6 +162,12 @@ class GroupedCommunityMemberType(ObjectType):
         
             
         user = Users.nodes.get(uid=user_uid)
+        
+        # Combine first_name and last_name to create full name
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip() or user.username
+        
         return cls(
             uid=user.uid,
             user_id=user.user_id,
@@ -162,6 +175,7 @@ class GroupedCommunityMemberType(ObjectType):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
+            name=full_name,
             user_type=user.user_type,
             score=generate_connection_score(),
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,

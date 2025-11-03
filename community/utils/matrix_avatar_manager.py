@@ -58,7 +58,9 @@ async def set_room_avatar_score_and_filter(
                 "community_type": community_data.get('community_type', ''),
                 "community_circle": community_data.get('community_circle', ''),
                 "community_category": community_data.get('category', ''),
-                "created_date": str(community_data.get('created_date', ''))
+                "created_date": str(community_data.get('created_date', '')),
+                "community_uid": community_data.get('community_uid', ''),
+                "community_name": community_data.get('community_name', '')
             })
             print(f"DEBUG: Community filter data added")
         

@@ -39,6 +39,7 @@ import asyncio
 from post.redis import increment_post_like_count
 from user_activity.services.activity_service import ActivityService
 from vibe_manager.services.vibe_activity_service import VibeActivityService
+from post.services.mention_service import MentionService
 
 
 
@@ -110,6 +111,23 @@ class CreatePost(Mutation):
             post.created_by.connect(created_by)
             created_by.post.connect(post)
             
+            # Extract mentions from post content (title and text)
+            from post.utils.mention_extractor import MentionExtractor
+            
+            # Combine post title and text for mention extraction
+            post_content = f"{post_title or ''} {post_text or ''}".strip()
+            
+            # Extract usernames from post content and convert to UIDs
+            mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(post_content)
+            
+            if mentioned_user_uids:
+               MentionService.create_mentions(
+                 mentioned_user_uids=mentioned_user_uids,
+                 content_type='post',
+                 content_uid=post.uid,
+                 mentioned_by_uid=created_by.uid,
+                 mention_context='post_content'
+                )
             # Track post creation activity
             try:
                 activity_service = ActivityService()
@@ -135,34 +153,45 @@ class CreatePost(Mutation):
 
             if input.reaction and input.vibe:
                 try:
-                    # Create PostReactionManager for user post if it doesn't exist
-                    try:
-                        post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
-                    except PostReactionManager.DoesNotExist:
-                        post_reaction_manager = PostReactionManager(post_uid=post.uid)
-                        post_reaction_manager.initialize_reactions()
+                    # Check if user already liked their own post to prevent duplicates
+                    check_query = (
+                        "MATCH (user:Users {user_id: $user_id})-[:HAS_USER]->(like:Like) "
+                        "MATCH (like)-[:HAS_POST]->(post {uid: $post_uid}) "
+                        "RETURN like"
+                    )
+                    check_params = {'user_id': user_id, 'post_uid': post.uid}
+                    existing_results, _ = db.cypher_query(check_query, check_params)
+                    
+                    # Only add vibe if user hasn't already reacted
+                    if not existing_results:
+                        # Create PostReactionManager for user post if it doesn't exist
+                        try:
+                            post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
+                        except PostReactionManager.DoesNotExist:
+                            post_reaction_manager = PostReactionManager(post_uid=post.uid)
+                            post_reaction_manager.initialize_reactions()
+                            post_reaction_manager.save()
+
+                        # Add this reaction to the aggregated analytics
+                        post_reaction_manager.add_reaction(
+                            vibes_name=input.reaction,
+                            score=input.vibe
+                        )
                         post_reaction_manager.save()
 
-                    # Add this reaction to the aggregated analytics
-                    post_reaction_manager.add_reaction(
-                        vibes_name=input.reaction,
-                        score=input.vibe
-                    )
-                    post_reaction_manager.save()
+                        # Create the individual like record
+                        like = Like(
+                            reaction=input.reaction,
+                            vibe=input.vibe
+                        )
+                        like.save()
+                        
+                        # Establish relationships
+                        like.user.connect(created_by)
+                        post.like.connect(like)
 
-                    # Create the individual like record
-                    like = Like(
-                        reaction=input.reaction,
-                        vibe=input.vibe
-                    )
-                    like.save()
-                    
-                    # Establish relationships
-                    like.user.connect(created_by)
-                    post.like.connect(like)
-
-                    # Update engagement metrics in Redis
-                    increment_post_like_count(post.uid)
+                        # Update engagement metrics in Redis
+                        increment_post_like_count(post.uid)
                     
                 except Exception as vibe_error:
                     # Log the error but don't fail the post creation
@@ -604,49 +633,79 @@ class CreateComment(Mutation):
 
             # EXISTING LOGIC - Increment comment count in Redis for performance
             increment_post_comment_count(target_post.uid)
-            
-            # EXISTING LOGIC - Send notification to post creator about new comment
-            post_creator = target_post.created_by.single()
-            # if post_creator and post_creator.uid != user_node.uid:  # Don't notify if commenting on own post
-            #     profile = post_creator.profile.single()
-            #     if profile and profile.device_id:
-            #         notification_service = NotificationService()
-            #         loop = asyncio.new_event_loop()
-            #         asyncio.set_event_loop(loop)
-            #         try:
-            #             loop.run_until_complete(notification_service.notifyNewComment(
-            #                 commenter_name=user_node.username,
-            #                 post_creator_device_id=profile.device_id,
-            #                 post_id=target_post.uid,
-            #                 comment_id=comment.uid,
-            #                 comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content  # Truncate long comments
-            #             ))
-            #         finally:
-            #             loop.close()
 
-            # #notify parent comment author if this is a reply
-            # if parent_comment:
-            #     parent_comment_author = parent_comment.user.single()
-            #     if (parent_comment_author and 
-            #         parent_comment_author.uid != user_node.uid and 
-            #         parent_comment_author.uid != post_creator.uid):
+            # Extract mentions from comment content
+            if comment and input.content:
+                from post.utils.mention_extractor import MentionExtractor
+                
+                # Extract usernames from comment content and convert to UIDs
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(input.content)
+                
+                if mentioned_user_uids:
+                
+                # Get current user's UID
+                     current_user_uid = Users.nodes.get(user_id=info.context.user.id).uid
+                
+                    # Create mentions for the comment
+                     MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='comment',
+                        content_uid=comment.uid,
+                        mentioned_by_uid=current_user_uid,
+                        mention_context='comment_content'
+                     )
+
+            # EXISTING LOGIC - Send notification to post creator about new comment
+            # Handle different creator types for Post vs CommunityPost
+            post_creator = None
+            if isinstance(target_post, Post):
+                # For regular posts, created_by points to Users
+                post_creator = target_post.created_by.single()
+            elif isinstance(target_post, CommunityPost):
+                # For community posts, creator points to Users
+                post_creator = target_post.creator.single()
+            
+            if post_creator and isinstance(post_creator, Users) and post_creator.uid != user_node.uid:  # Don't notify if commenting on own post
+                if isinstance(post_creator, Users):
+                    profile = post_creator.profile.single()
+                    if profile and profile.device_id:
+                        notification_service = NotificationService()
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(notification_service.notifyNewComment(
+                                commenter_name=user_node.username,
+                                post_creator_device_id=profile.device_id,
+                                post_id=target_post.uid,
+                                comment_id=comment.uid,
+                                comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content  # Truncate long comments
+                            ))
+                        finally:
+                            loop.close()
+
+            #notify parent comment author if this is a reply
+            if parent_comment:
+                parent_comment_author = parent_comment.user.single()
+                if (parent_comment_author and 
+                    parent_comment_author.uid != user_node.uid and 
+                    parent_comment_author.uid != post_creator.uid):
                     
-            #         parent_profile = parent_comment_author.profile.single()
-            #         if parent_profile and parent_profile.device_id:
-            #             notification_service = NotificationService()
-            #             loop = asyncio.new_event_loop()
-            #             asyncio.set_event_loop(loop)
-            #             try:
-            #                 # You can extend your notification service to handle reply notifications
-            #                 loop.run_until_complete(notification_service.notifyNewComment(
-            #                     commenter_name=user_node.username,
-            #                     post_creator_device_id=parent_profile.device_id,
-            #                     post_id=target_post.uid,
-            #                     comment_id=comment.uid,
-            #                     comment_content=f"Replied: {input.content[:50]}..." if len(input.content) > 50 else f"Replied: {input.content}"
-            #                 ))
-            #             finally:
-            #                 loop.close()
+                    parent_profile = parent_comment_author.profile.single()
+                    if parent_profile and parent_profile.device_id:
+                        notification_service = NotificationService()
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            # You can extend your notification service to handle reply notifications
+                            loop.run_until_complete(notification_service.notifyNewComment(
+                                commenter_name=user_node.username,
+                                post_creator_device_id=parent_profile.device_id,
+                                post_id=target_post.uid,
+                                comment_id=comment.uid,
+                                comment_content=f"Replied: {input.content[:50]}..." if len(input.content) > 50 else f"Replied: {input.content}"
+                            ))
+                        finally:
+                            loop.close()
 
             # Track comment creation activity
             try:
@@ -785,58 +844,66 @@ class CreateLike(Mutation):
     @handle_graphql_post_errors   
     @login_required
     def mutate(self, info, input):
-        """
-        Create reaction with analytics tracking and aggregation.
-        
-        Process: Validate auth → find post → manage reaction analytics → create like
-        → update counters → save relationships
-        """
         user = info.context.user
         if user.is_anonymous:
             raise GraphQLError("Authentication Failure")
-
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
         
         try:
-            # Try to find regular post first, fallback to community post
             try:
                 post = Post.nodes.get(uid=input.post_uid)
             except Post.DoesNotExist:
-                post=CommunityPost.nodes.get(uid=input.post_uid)
-            
-            # Manage aggregated reaction analytics (Note:- Review and Optimisation needed)
-            try:
-                post_reaction_manager = PostReactionManager.objects.get(post_uid=input.post_uid)
-            except PostReactionManager.DoesNotExist:
-                # If no PostReactionManager exists, create and initialize with first 10 vibes
-                post_reaction_manager = PostReactionManager(post_uid=input.post_uid)
-                post_reaction_manager.initialize_reactions()  # Add the 10 vibes
-                post_reaction_manager.save()
+                post = CommunityPost.nodes.get(uid=input.post_uid)
 
-            # Add this reaction to the aggregated analytics
-            post_reaction_manager.add_reaction(
-                vibes_name=input.reaction,
-                score=input.vibe  # Assuming `reaction` is a numeric score to be averaged
+            query = (
+                "MATCH (user:Users {user_id: $user_id})-[r:HAS_USER]->(like:Like) "
+                "MATCH (like)-[:HAS_POST]->(post {uid: $post_uid}) "
+                "RETURN like"
             )
+            params = {'user_id': user_id, 'post_uid': input.post_uid}
+            results, _ = db.cypher_query(query, params)
+            existing_like_node = [Like.inflate(row[0]) for row in results]
+
+            post_reaction_manager, _ = PostReactionManager.objects.get_or_create(
+                post_uid=input.post_uid,
+                defaults={}
+            )
+            if not post_reaction_manager.post_vibe:
+                post_reaction_manager.initialize_reactions()
+
+            message = ""
+            if existing_like_node:
+                like = existing_like_node[0]
+                old_reaction = like.reaction
+                old_vibe = like.vibe
+
+                post_reaction_manager.update_reaction(
+                    old_vibes_name=old_reaction,
+                    new_vibes_name=input.reaction,
+                    old_score=old_vibe,
+                    new_score=input.vibe
+                )
+
+                like.reaction = input.reaction
+                like.vibe = input.vibe
+                like.save()
+                message = PostMessages.POST_REACTION_UPDATED
+            else:
+                post_reaction_manager.add_reaction(
+                    vibes_name=input.reaction,
+                    score=input.vibe
+                )
+                like = Like(reaction=input.reaction, vibe=input.vibe)
+                like.save()
+                like.user.connect(user_node)
+                post.like.connect(like)
+                increment_post_like_count(post.uid)
+                message = PostMessages.POST_REACTION_CREATED
+
             post_reaction_manager.save()
 
-            # Create the individual like record
-            like = Like(
-                reaction=input.reaction ,
-                vibe=input.vibe 
-            )
-            like.save()
-            
-            # Establish relationships
-            like.user.connect(user_node)
-            post.like.connect(like)
-
-            # Update engagement metrics in Redis
-            increment_post_like_count(post.uid)
-
-            # Track activity for analytics
             try:
                 ActivityService.track_content_interaction(
                     user=user_node,
@@ -849,18 +916,7 @@ class CreateLike(Mutation):
                         'like_id': like.uid
                     }
                 )
-            except Exception as e:
-                # Log error but don't fail the like creation
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f"Failed to track like activity: {str(e)}")
-
-            # Track vibe activity for sender and receiver
-            try:
-                # Get post owner for receiver tracking
                 post_owner = post.created_by.single()
-                
-                # Track vibe sending activity for the user who reacted
                 VibeActivityService.track_vibe_sending(
                     sender=user_node,
                     receiver_id=post_owner.user_id if post_owner else None,
@@ -880,16 +936,15 @@ class CreateLike(Mutation):
                     }
                 )
             except Exception as e:
-                # Log error but don't fail the like creation
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.error(f"Failed to track vibe activity: {str(e)}")
+                logger.error(f"Failed to track like activity: {str(e)}")
 
-            return CreateLike(like=LikeType.from_neomodel(like), success=True, message=PostMessages.POST_REACTION_CREATED)
+            return CreateLike(like=LikeType.from_neomodel(like), success=True, message=message)
         except Exception as error:
-            message=getattr(error , 'message' , str(error) )
+            message = getattr(error, 'message', str(error))
             return CreateLike(like=None, success=False, message=message)
-        
+
 
 class UpdateLike(Mutation):
     """

@@ -81,7 +81,7 @@ class UserMentionService:
     
     def _search_connected_users(self, user_id: int, query: str, limit: int) -> List[Dict]:
         """Search through user's connections with Redis caching."""
-        cache_key = f"user_connections:{user_id}"
+        cache_key = f"user_connections_v2:{user_id}"
         
         # Try cache first
         cached_connections = self.cache.get(cache_key)
@@ -120,13 +120,14 @@ class UserMentionService:
         print(f"DEBUG: _load_user_connections called with user_id={user_id}")
 
         try:
-            # Cypher query to get user's connections
+            # Updated Cypher query to use ConnectionV2 and get UID
             cypher_query = """
-            MATCH (u:Users {user_id: $user_id})-[:HAS_CONNECTION]->(conn:Connection)-[:HAS_RECIEVED_CONNECTION]->(connected_user:Users)
+            MATCH (u:Users {user_id: $user_id})-[:HAS_CONNECTION]->(conn:Connection)-[:HAS_RECIEVED_CONNECTION|HAS_SEND_CONNECTION]->(connected_user:Users)
             WHERE conn.connection_status = 'Accepted'
             MATCH (connected_user)-[:HAS_PROFILE]->(profile:Profile)
             RETURN DISTINCT
                 connected_user.user_id as user_id,
+                connected_user.uid as uid,
                 connected_user.username as username,
                 connected_user.first_name as first_name,
                 connected_user.last_name as last_name,
@@ -138,7 +139,14 @@ class UserMentionService:
             results, meta = db.cypher_query(cypher_query, {'user_id': str(user_id)})
             print(f"DEBUG: Query returned {len(results)} rows")
 
-            logger.info("Raw query results", extra={"user_id": user_id, "results_count": len(results), "results": results[:2] if results else []})
+            logger.info(
+                "Raw query results",
+                extra={
+                    "user_id": user_id,
+                    "results_count": len(results),
+                    "results": results[:2] if results else []
+                },
+            )
 
             if results:
                 print(f"DEBUG: First row sample: {results[0]}")
@@ -147,135 +155,158 @@ class UserMentionService:
             seen_user_ids = set()
 
             for row in results:
-
                 avatar_url = ""
-                if row[4]:  # profile_pic_id exists
-                   try:
-                       file_info = generate_presigned_url.generate_file_info(row[4])
-                       if file_info and 'url' in file_info:
-                          avatar_url = file_info['url']
-                   except Exception as e:
-                       logger.warning("Error generating avatar URL", extra={"profile_pic_id": row[4], "error": str(e)})
+                if row[5]:  # profile_pic_id exists (index 5 now because we added uid)
+                    try:
+                        file_info = generate_presigned_url.generate_file_info(row[5])
+                        if file_info and 'url' in file_info:
+                            avatar_url = file_info['url']
+                    except Exception as e:
+                        logger.warning(
+                            "Error generating avatar URL",
+                            extra={"profile_pic_id": row[5], "error": str(e)},
+                        )
 
                 user_data = {
                     'id': int(row[0]),
-                    'username': row[1] or '',
-                    'first_name': row[2] or '',
-                    'last_name': row[3] or '',
-                    'display_name': f"{row[2] or ''} {row[3] or ''}".strip() or row[1],
-                    'avatar_url':avatar_url,
+                    'uid': row[1],  # Add UID field
+                    'username': row[2] or '',
+                    'first_name': row[3] or '',
+                    'last_name': row[4] or '',
+                    'display_name': f"{row[3] or ''} {row[4] or ''}".strip() or row[2],
+                    'avatar_url': avatar_url,
                     'is_connection': True
                 }
-                
+
                 # Build search text for fast matching
                 search_parts = [
                     user_data['username'],
-                    user_data['first_name'], 
+                    user_data['first_name'],
                     user_data['last_name'],
-                    user_data['display_name']
+                    user_data['display_name'],
                 ]
-                # search_text = ' '.join(filter(None, search_parts)).lower()
-
-                # graphql_user_data = user_data.copy()
-                # user_data['_search_text'] = search_text  # Keep for internal filtering
-
 
                 user_data['_search_text'] = ' '.join(filter(None, search_parts)).lower()
-                
+
                 connections.append(user_data)
 
-                for conn in connections:
-                    if '_search_text' in conn:
-                        del conn['_search_text']
-            
+            # Clean up search text from connections (fix the bug)
+            clean_connections = []
+            for conn in connections:
+                clean_conn = conn.copy()
+                if '_search_text' in clean_conn:
+                    del clean_conn['_search_text']
+                clean_connections.append(clean_conn)
+
             # Cache connections
             cache_key = f"user_connections:{user_id}"
-            self.cache.set(cache_key, connections, self.connection_cache_ttl)
-            
-            logger.info("Loaded user connections", extra={"user_id": user_id, "count": len(connections)})
-            return connections
-            
+            self.cache.set(cache_key, clean_connections, self.connection_cache_ttl)
+
+            logger.info(
+                "Loaded user connections",
+                extra={"user_id": user_id, "count": len(clean_connections)},
+            )
+            return clean_connections
+
         except Exception as e:
-            logger.error("Error loading user connections", user_id=user_id, error=str(e))
+            logger.error(
+                "Error loading user connections",
+                extra={"user_id": user_id, "error": str(e)},
+            )
             return []
-    
+
     def _database_search_users(self, current_user_id: int, query: str, limit: int) -> List[Dict]:
         """Search users in Django User model and get profile pics from Neo4j."""
         try:
             # Search Django User model
             search_q = Q(
-                Q(username__istartswith=query) |
-                Q(first_name__istartswith=query) |
-                Q(last_name__istartswith=query)
+                Q(username__istartswith=query)
+                | Q(first_name__istartswith=query)
+                | Q(last_name__istartswith=query)
             )
-            
-            django_users = User.objects.filter(search_q).exclude(
-                id=current_user_id
-            ).filter(
-                is_active=True
-            ).values(
-                'id', 'username', 'first_name', 'last_name'
-            )[:limit]
-            
+
+            django_users = (
+                User.objects.filter(search_q)
+                .exclude(id=current_user_id)
+                .filter(is_active=True)
+                .values('id', 'username', 'first_name', 'last_name')[:limit]
+            )
+
             if not django_users:
                 return []
-            
-            # Get user IDs to query Neo4j for profile pics
+
+            # Get user IDs to query Neo4j for profile pics and UIDs
             user_ids = [str(user['id']) for user in django_users]
-            
-            # Query Neo4j for profile pictures
+
+            # Query Neo4j for profile pictures and UIDs
             cypher_query = """
             MATCH (u:Users)-[:HAS_PROFILE]->(p:Profile)
             WHERE u.user_id IN $user_ids
-            RETURN u.user_id as user_id, p.profile_pic_id as profile_pic_id
+            RETURN u.user_id as user_id, u.uid as uid, p.profile_pic_id as profile_pic_id
             """
-            
+
             neo4j_results, _ = db.cypher_query(cypher_query, {'user_ids': user_ids})
-            
-            # Create lookup dict for profile pics
-            profile_pics = {int(row[0]): row[1] for row in neo4j_results if row[1]}
-            
+
+            # Create lookup dicts for profile pics and UIDs
+            profile_data = {
+                int(row[0]): {'uid': row[1], 'profile_pic_id': row[2]} for row in neo4j_results
+            }
+
             results = []
             for user in django_users:
+                # Get profile data
+                user_profile = profile_data.get(user['id'], {})
+
                 # Generate avatar URL
                 avatar_url = "/static/default_avatar.png"
-                profile_pic_id = profile_pics.get(user['id'])
-                
+                profile_pic_id = user_profile.get('profile_pic_id')
+
                 if profile_pic_id:
                     try:
                         file_info = generate_presigned_url.generate_file_info(profile_pic_id)
                         if file_info and 'url' in file_info:
                             avatar_url = file_info['url']
                     except Exception as e:
-                        logger.warning("Error generating avatar URL", extra={"profile_pic_id": profile_pic_id, "error": str(e)})
-                
+                        logger.warning(
+                            "Error generating avatar URL",
+                            extra={"profile_pic_id": profile_pic_id, "error": str(e)},
+                        )
+
                 user_data = {
                     'id': user['id'],
+                    'uid': user_profile.get('uid'),  # Add UID field
                     'username': user['username'],
                     'first_name': user['first_name'] or '',
                     'last_name': user['last_name'] or '',
-                    'display_name': f"{user['first_name'] or ''} {user['last_name'] or ''}".strip() or user['username'],
+                    'display_name': f"{user['first_name'] or ''} {user['last_name'] or ''}".strip()
+                    or user['username'],
                     'avatar_url': avatar_url,
-                    'is_connection': False
+                    'is_connection': False,
                 }
-                results.append(user_data)
-            
+
+                # Only add users that have UIDs (exist in Neo4j)
+                if user_data['uid']:
+                    results.append(user_data)
+
             return results
-            
+
         except Exception as e:
-            logger.error("Error in database user search", extra={"current_user_id": current_user_id, "query": query, "error": str(e)})
+            logger.error(
+                "Error in database user search",
+                extra={"current_user_id": current_user_id, "query": query, "error": str(e)},
+            )
             return []
-    
+
     def _user_matches_query(self, user_data: Dict, query: str) -> bool:
         """Check if user matches search query from start of words."""
         query_lower = query.lower()
     
         # Check if query matches start of any word in username, first_name, last_name, display_name
         fields_to_check = [
-           user_data.get('username', ''),
-           user_data.get('first_name', ''), 
-           user_data.get('last_name', ''),
-           user_data.get('display_name', '')
+           user_data.get('username', '') or '',
+           user_data.get('first_name', '') or '', 
+           user_data.get('last_name', '') or '',
+           user_data.get('display_name', '') or ''
         ]
     
         for field in fields_to_check:
@@ -300,7 +331,7 @@ class UserMentionService:
         """Get all user connections without filtering."""
         print(f"DEBUG: _get_all_connections called with user_id={user_id}, limit={limit}")
 
-        cache_key = f"user_connections:{user_id}"
+        cache_key = f"user_connections_v2:{user_id}"  # Use new cache key for uid version
         # self.cache.delete(cache_key)
 
         # Try cache first

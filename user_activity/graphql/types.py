@@ -128,6 +128,9 @@ class ContentTypeEnum(graphene.Enum):
     COMMENT = 'comment'
     COMMUNITY_POST = 'community_post'
     REVIEW = 'review'
+    CONNECTION = 'connection'
+    CONVERSATION_MESSAGE = 'conversation_message'
+    MATRIX_MESSAGE = 'matrix_message'
 
 
 class InteractionTypeEnum(graphene.Enum):
@@ -147,6 +150,7 @@ class InteractionTypeEnum(graphene.Enum):
     RATE = 'rate'
     SCROLL_DEPTH = 'scroll_depth'
     TIME_SPENT = 'time_spent'
+    CREATE = 'create'
 
 
 class ActivityTypeEnum(graphene.Enum):
@@ -164,6 +168,13 @@ class ActivityTypeEnum(graphene.Enum):
     NAVIGATION = 'navigation'
     ERROR = 'error'
     FEATURE_USAGE = 'feature_usage'
+    POST_CREATE = 'post_create'
+    POST_UPDATE = 'post_update'
+    STORY_CREATE = 'story_create'
+    COMMUNITY_CREATE = 'community_create'
+    PAGE_VIEW = 'page_view'
+    SESSION_DATA = 'session_data'
+    SCROLL = 'scroll'
 
 
 class MediaTypeEnum(graphene.Enum):
@@ -173,6 +184,7 @@ class MediaTypeEnum(graphene.Enum):
     DOCUMENT = 'document'
     GIF = 'gif'
     THUMBNAIL = 'thumbnail'
+    COMMENT_MEDIA = 'comment_media'
 
 
 class SocialInteractionTypeEnum(graphene.Enum):
@@ -189,6 +201,7 @@ class SocialInteractionTypeEnum(graphene.Enum):
     TAG = 'tag'
     RECOMMENDATION_VIEW = 'recommendation_view'
     RECOMMENDATION_DISMISS = 'recommendation_dismiss'
+    PROFILE_VISIT = 'profile_visit'
 
 
 # Analytics aggregation types

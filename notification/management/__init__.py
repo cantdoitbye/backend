@@ -1,0 +1,5 @@
+"""
+Management command init file
+"""
+
+

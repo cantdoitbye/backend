@@ -118,10 +118,28 @@ class CreateConnection(Mutation):
             created_by_node.connection.connect(connection)
             receiver.connection.connect(connection)
 
+            if input.sub_relation:
+                relations = relation.get_subrelation(input.sub_relation)
+                
+                if relations:
+                    auto_circle_type = relations.default_circle
+                    relation_name = relations.relation.name
+                    
+                    if not auto_circle_type:
+                        auto_circle_type = input.circle.value
+                        print(f"Warning: No default_circle for {input.sub_relation}, using input: {auto_circle_type}")
+                else:
+                    auto_circle_type = input.circle.value
+                    relation_name = input.relation
+                    print(f"Warning: SubRelation '{input.sub_relation}' not found in database, using input circle")
+            else:
+                auto_circle_type = input.circle.value
+                relation_name = input.relation
+
             circle_choice=Circle(
-                    circle_type=input.circle.value,
+                    circle_type=auto_circle_type,
                     sub_relation=input.sub_relation,
-                    relation=input.relation
+                    relation=relation_name
             )
             circle_choice.save()
             connection.circle.connect(circle_choice)
@@ -148,11 +166,20 @@ class CreateConnection(Mutation):
 
             # Track activity for analytics
             try:
-                ActivityService.track_content_interaction_by_id(
-                    user_id=created_by_node.user_id,
-                    content_type="connection",
-                    content_id=connection.uid,
-                    interaction_type="send_request",
+                from user_activity.services.activity_service import ActivityService
+                from django.contrib.auth.models import User
+                
+                # Get Django user for activity tracking
+                django_user = User.objects.get(id=created_by_node.user_id)
+                target_user = User.objects.get(id=receiver.user_id)
+                
+                activity_service = ActivityService()
+                activity_service.track_social_interaction(
+                    user=django_user,
+                    target_user=target_user,
+                    interaction_type='connection_request',
+                    context_type='connection',
+                    context_id=str(connection.uid),
                     metadata={
                         "receiver_uid": receiver.uid,
                         "circle_type": input.circle.value,
@@ -812,13 +839,22 @@ class UpdateConnectionV2(Mutation):
 
             # Track activity for analytics
             try:
+                from user_activity.services.activity_service import ActivityService
+                from django.contrib.auth.models import User
+                
+                # Get Django users for activity tracking
+                django_user = User.objects.get(id=user_node.user_id)
+                activity_service = ActivityService()
+                
                 if input.connection_status == 'Accepted':
                     # Track acceptance for the receiver (current user)
-                    ActivityService.track_content_interaction_by_id(
-                        user_id=user_node.uid,
-                        content_type="connection",
-                        content_id=connection.uid,
-                        interaction_type="accept_request",
+                    sender_django_user = User.objects.get(id=sender.user_id)
+                    activity_service.track_social_interaction(
+                        user=django_user,
+                        target_user=sender_django_user,
+                        interaction_type='connection_accept',
+                        context_type='connection',
+                        context_id=str(connection.uid),
                         metadata={
                             "sender_uid": sender.uid,
                             "connection_version": "v2"
@@ -826,11 +862,13 @@ class UpdateConnectionV2(Mutation):
                     )
                 elif input.connection_status == 'Rejected':
                     # Track rejection for the receiver (current user)
-                    ActivityService.track_content_interaction_by_id(
-                        user_id=user_node.uid,
-                        content_type="connection",
-                        content_id=connection.uid,
-                        interaction_type="reject_request",
+                    sender_django_user = User.objects.get(id=sender.user_id)
+                    activity_service.track_social_interaction(
+                        user=django_user,
+                        target_user=sender_django_user,
+                        interaction_type='connection_decline',
+                        context_type='connection',
+                        context_id=str(connection.uid),
                         metadata={
                             "sender_uid": sender.uid,
                             "connection_version": "v2"
@@ -838,11 +876,13 @@ class UpdateConnectionV2(Mutation):
                     )
                 elif input.connection_status == 'Cancelled':
                     # Track cancellation for the sender (current user)
-                    ActivityService.track_content_interaction_by_id(
-                        user_id=user_node.uid,
-                        content_type="connection",
-                        content_id=connection.uid,
-                        interaction_type="cancel_request",
+                    receiver_django_user = User.objects.get(id=receiver_node.user_id)
+                    activity_service.track_social_interaction(
+                        user=django_user,
+                        target_user=receiver_django_user,
+                        interaction_type='connection_remove',
+                        context_type='connection',
+                        context_id=str(connection.uid),
                         metadata={
                             "receiver_uid": receiver_node.uid,
                             "connection_version": "v2"
@@ -1001,9 +1041,6 @@ class Mutation(graphene.ObjectType):
     - delete_connection: Connection deletion (shared between V1/V2)
     - update_connection_relation_or_circle: Legacy relationship updates
     
-    Migration Path:
-    - Use send_connection_v2 instead of send_connection
-    - Consider MutationV2 schema for full V2 experience
     """
     # send_connection=CreateConnection.Field()
     send_connection = CreateConnection.Field(
@@ -1013,33 +1050,3 @@ class Mutation(graphene.ObjectType):
     update_connection=UpdateConnection.Field()
     delete_connection=DeleteConnection.Field()
     update_connection_relation_or_circle=UpdateConnectionRelationOrCircle.Field()
-    
-
-
-class MutationV2(graphene.ObjectType):
-    """Enhanced Connection Mutations Schema (V2)
-    
-    Contains all V2 connection mutations providing the latest features
-    and improved functionality for connection management.
-    
-    Available Mutations:
-    - send_connection: V2 connection creation with enhanced features
-    - update_connection: V2 connection updates with simplified logic
-    - delete_connection: Connection deletion (shared with V1)
-    - update_connection_relation_or_circle: V2 relationship updates with advanced features
-    
-    Key Improvements:
-    - Enhanced relationship directionality
-    - Advanced circle management
-    - Modification count tracking
-    - Improved data structures
-    - Better scalability
-    
-    Recommended Usage:
-    Use this schema for new implementations requiring the latest
-    connection management features.
-    """
-    send_connection=CreateConnectionV2.Field()
-    update_connection=UpdateConnectionV2.Field()
-    delete_connection=DeleteConnection.Field()
-    update_connection_relation_or_circle=UpdateConnectionRelationOrCircleV2.Field()

@@ -10,6 +10,7 @@ class CreateStoryInput(graphene.InputObjectType):
     captions = custom_graphql_validator.SpecialCharacterString2_200.add_option("captions", "CreateStory")(desc="A brief caption or tagline for the story.")
     privacy = custom_graphql_validator.ListString.add_option("privacy", "CreateStory")(desc="Privacy level of the story, determining visibility.", required=True)
     story_image_id = custom_graphql_validator.String.add_option("storyImageId", "CreateStory")(desc="ID of the image associated with the story.")
+    mentioned_user_uids = graphene.List(graphene.String)
 
 class UpdateStoryInput(graphene.InputObjectType):
     """Input fields required to update an existing story."""
@@ -24,11 +25,11 @@ class DeleteInput(graphene.InputObjectType):
 
 class StoryCommentInput(graphene.InputObjectType):
     story_uid = custom_graphql_validator.String.add_option("storyUid", "CreateStoryComment")(required=True)
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "CreateStoryComment")()
+    content = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("content", "CreateStoryComment")(required=True)
 
 class UpdateStoryCommentInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateStoryComment")(required=True)
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "UpdateStoryComment")()
+    content = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("content", "UpdateStoryComment")(required=True)
 
 class StoryReactionInput(graphene.InputObjectType):
     story_uid = custom_graphql_validator.String.add_option("storyUid", "CreateStoryReaction")(required=True)

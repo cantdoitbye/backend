@@ -9,7 +9,7 @@ import logging
 from .types import (
     AgentType, AgentSummaryType, AgentAssignmentType, CommunityAgentSummaryType,
     AgentActionLogType, AgentMemoryType, AgentStatsType, AgentMemoryStatsType,
-    AgentAuditReportType
+    AgentAuditReportType, AllAgentsResponseType
 )
 from .inputs import (
     AgentFilterInput, AgentAssignmentFilterInput, PaginationInput,
@@ -42,8 +42,8 @@ class AgentQueries(ObjectType):
         description="Get a specific agent by UID"
     )
     
-    get_agents = graphene.List(
-        AgentType,
+    get_agents = graphene.Field(
+        AllAgentsResponseType,
         filters=graphene.Argument(AgentFilterInput),
         pagination=graphene.Argument(PaginationInput),
         description="Get list of agents with optional filtering and pagination"
@@ -206,19 +206,23 @@ class AgentQueries(ObjectType):
                 if filters.status:
                     query_filters['status'] = filters.status
             
-            # Get agents from database
-            agents = Agent.nodes.filter(**query_filters)
+            # Get all agents from database for filtering and counting
+            all_agents = Agent.nodes.filter(**query_filters)
             
             # Apply capability filter if specified
             if filters and filters.has_capability:
-                agents = [agent for agent in agents if agent.has_capability(filters.has_capability)]
+                all_agents = [agent for agent in all_agents if agent.has_capability(filters.has_capability)]
             
             # Apply date filters
             if filters:
                 if filters.created_after:
-                    agents = [agent for agent in agents if agent.created_date >= filters.created_after]
+                    all_agents = [agent for agent in all_agents if agent.created_date >= filters.created_after]
                 if filters.created_before:
-                    agents = [agent for agent in agents if agent.created_date <= filters.created_before]
+                    all_agents = [agent for agent in all_agents if agent.created_date <= filters.created_before]
+            
+            # Convert to list for pagination
+            all_agents = list(all_agents)
+            total_count = len(all_agents)
             
             # Apply pagination
             if pagination:
@@ -226,14 +230,19 @@ class AgentQueries(ObjectType):
                 page_size = pagination.page_size or 20
                 start_idx = (page - 1) * page_size
                 end_idx = start_idx + page_size
-                agents = list(agents)[start_idx:end_idx]
+                paginated_agents = all_agents[start_idx:end_idx]
+            else:
+                paginated_agents = all_agents
             
             # Convert to GraphQL types
-            return [AgentType.from_neomodel(agent) for agent in agents if agent]
+            agent_types = [AgentType.from_neomodel(agent) for agent in paginated_agents if agent]
+            
+            # Return paginated response
+            return AllAgentsResponseType.create(agent_types, total_count)
             
         except Exception as e:
             logger.error(f"Error getting agents: {str(e)}")
-            return []
+            return AllAgentsResponseType.create([], 0)
     
     @login_required
     def resolve_get_agents_summary(self, info, filters=None, pagination=None):

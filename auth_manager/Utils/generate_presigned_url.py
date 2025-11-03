@@ -95,18 +95,17 @@ def get_valid_image(image_id: str):
     # If image_id is None or empty, just return None without raising an error
     if not image_id or image_id == "":
         return None
-        
+
     try:
         # Check if the image_id is a valid numeric string
         if not isinstance(image_id, str) or not image_id.isdigit():
-            return None
-            
+            raise GraphQLError(f"Invalid file ID format: {image_id}. File ID must be a numeric string.")
+
         # Try to get the image
         return UploadFiles.objects.get(id=image_id)
     except UploadFiles.DoesNotExist:
-        # Instead of raising an error, return None so the calling code can continue
-        return None
+        raise GraphQLError(f"File with ID {image_id} does not exist.")
     except Exception as e:
         # Log the error but don't raise it
         print(f"Error validating image_id {image_id}: {e}")
-        return None
+        raise GraphQLError(f"Error validating file ID {image_id}: {str(e)}")

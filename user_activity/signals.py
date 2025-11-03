@@ -113,19 +113,28 @@ try:
         """Track like creation."""
         try:
             if created:
-                # Handle Neo4j relationship - get the first (and should be only) post
-                post_node = instance.post.single()
-                if post_node:
-                    ActivityService.track_content_interaction(
-                        user=instance.user.single(),
-                        content_type='post',
-                        content_id=str(post_node.uid),
-                        interaction_type='like',
-                        metadata={
-                            'like_id': str(instance.uid),
-                            'reaction_type': getattr(instance, 'reaction', 'like'),
-                        }
-                    )
+                # Handle Neo4j relationship - safely get post and user
+                try:
+                    post_node = instance.post.single()
+                    user_node = instance.user.single()
+                    if post_node and user_node:
+                        from django.contrib.auth.models import User
+                        try:
+                            django_user = User.objects.get(id=user_node.user_id)
+                            ActivityService.track_content_interaction(
+                                user=django_user,
+                                content_type='post',
+                                content_id=str(post_node.uid),
+                                interaction_type='like',
+                                metadata={
+                                    'like_id': str(instance.uid),
+                                    'reaction_type': getattr(instance, 'reaction', 'like'),
+                                }
+                            )
+                        except User.DoesNotExist:
+                            logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
+                except Exception as neo4j_error:
+                    logger.error(f"Failed to get Neo4j relationships for like: {neo4j_error}")
         except Exception as e:
             logger.error(f"Failed to track like activity: {e}")
     
@@ -133,18 +142,27 @@ try:
     def track_unlike_activity(sender, instance, **kwargs):
         """Track like deletion (unlike)."""
         try:
-            # Handle Neo4j relationship - get the first (and should be only) post
-            post_node = instance.post.single()
-            if post_node:
-                ActivityService.track_content_interaction(
-                    user=instance.user.single(),
-                    content_type='post',
-                    content_id=str(post_node.uid),
-                    interaction_type='unlike',
-                    metadata={
-                        'like_id': str(instance.uid),
-                    }
-                )
+            # Handle Neo4j relationship - safely get post and user
+            try:
+                post_node = instance.post.single()
+                user_node = instance.user.single()
+                if post_node and user_node:
+                    from django.contrib.auth.models import User
+                    try:
+                        django_user = User.objects.get(id=user_node.user_id)
+                        ActivityService.track_content_interaction(
+                            user=django_user,
+                            content_type='post',
+                            content_id=str(post_node.uid),
+                            interaction_type='unlike',
+                            metadata={
+                                'like_id': str(instance.uid),
+                            }
+                        )
+                    except User.DoesNotExist:
+                        logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
+            except Exception as neo4j_error:
+                logger.error(f"Failed to get Neo4j relationships for unlike: {neo4j_error}")
         except Exception as e:
             logger.error(f"Failed to track unlike activity: {e}")
     
@@ -155,17 +173,23 @@ try:
             if created:
                 # Handle Neo4j relationship - get the first (and should be only) post
                 post_node = instance.post.single()
-                if post_node:
-                    ActivityService.track_content_interaction(
-                        user=instance.user.single(),
-                        content_type='post',
-                        content_id=str(post_node.uid),
-                        interaction_type='view',
-                        metadata={
-                            'view_id': str(instance.uid),
-                            'view_source': getattr(instance, 'source', 'unknown'),
-                        }
-                    )
+                user_node = instance.user.single()
+                if post_node and user_node:
+                    from django.contrib.auth.models import User
+                    try:
+                        django_user = User.objects.get(id=user_node.user_id)
+                        ActivityService.track_content_interaction(
+                            user=django_user,
+                            content_type='post',
+                            content_id=str(post_node.uid),
+                            interaction_type='view',
+                            metadata={
+                                'view_id': str(instance.uid),
+                                'view_source': getattr(instance, 'source', 'unknown'),
+                            }
+                        )
+                    except User.DoesNotExist:
+                        logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
         except Exception as e:
             logger.error(f"Failed to track post view activity: {e}")
     
@@ -176,17 +200,23 @@ try:
             if created:
                 # Handle Neo4j relationship - get the first (and should be only) post
                 post_node = instance.post.single()
-                if post_node:
-                    ActivityService.track_content_interaction(
-                        user=instance.user.single(),
-                        content_type='post',
-                        content_id=str(post_node.uid),
-                        interaction_type='share',
-                        metadata={
-                            'share_id': str(instance.uid),
-                            'share_platform': getattr(instance, 'share_type', 'internal'),
-                        }
-                    )
+                user_node = instance.user.single()
+                if post_node and user_node:
+                    from django.contrib.auth.models import User
+                    try:
+                        django_user = User.objects.get(id=user_node.user_id)
+                        ActivityService.track_content_interaction(
+                            user=django_user,
+                            content_type='post',
+                            content_id=str(post_node.uid),
+                            interaction_type='share',
+                            metadata={
+                                'share_id': str(instance.uid),
+                                'share_platform': getattr(instance, 'share_type', 'internal'),
+                            }
+                        )
+                    except User.DoesNotExist:
+                        logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
         except Exception as e:
             logger.error(f"Failed to track post share activity: {e}")
     
@@ -197,16 +227,22 @@ try:
             if created:
                 # Handle Neo4j relationship - get the first (and should be only) post
                 post_node = instance.post.single()
-                if post_node:
-                    ActivityService.track_content_interaction(
-                        user=instance.user.single(),
-                        content_type='post',
-                        content_id=str(post_node.uid),
-                        interaction_type='save',
-                        metadata={
-                            'saved_id': str(instance.uid),
-                        }
-                    )
+                user_node = instance.user.single()
+                if post_node and user_node:
+                    from django.contrib.auth.models import User
+                    try:
+                        django_user = User.objects.get(id=user_node.user_id)
+                        ActivityService.track_content_interaction(
+                            user=django_user,
+                            content_type='post',
+                            content_id=str(post_node.uid),
+                            interaction_type='save',
+                            metadata={
+                                'saved_id': str(instance.uid),
+                            }
+                        )
+                    except User.DoesNotExist:
+                        logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
         except Exception as e:
             logger.error(f"Failed to track saved post activity: {e}")
     
@@ -216,16 +252,22 @@ try:
         try:
             # Handle Neo4j relationship - get the first (and should be only) post
             post_node = instance.post.single()
-            if post_node:
-                ActivityService.track_content_interaction(
-                    user=instance.user.single(),
-                    content_type='post',
-                    content_id=str(post_node.uid),
-                    interaction_type='unsave',
-                    metadata={
-                        'saved_id': str(instance.uid),
-                    }
-                )
+            user_node = instance.user.single()
+            if post_node and user_node:
+                from django.contrib.auth.models import User
+                try:
+                    django_user = User.objects.get(id=user_node.user_id)
+                    ActivityService.track_content_interaction(
+                        user=django_user,
+                        content_type='post',
+                        content_id=str(post_node.uid),
+                        interaction_type='unsave',
+                        metadata={
+                            'saved_id': str(instance.uid),
+                        }
+                    )
+                except User.DoesNotExist:
+                    logger.error(f"Django user not found for Neo4j user {user_node.user_id}")
         except Exception as e:
             logger.error(f"Failed to track unsaved post activity: {e}")
 
@@ -306,25 +348,125 @@ try:
     
     @receiver(post_save, sender=Connection)
     def track_connection_activity(sender, instance, created, **kwargs):
-        """Track connection creation."""
+        """Track connection creation and updates."""
         try:
+            from django.contrib.auth.models import User
+            activity_service = ActivityService()
+            
+            # Convert Neo4j relationship objects to Django User instances
+            created_by_node = instance.created_by.single()
+            receiver_node = instance.receiver.single()
+            
+            if not created_by_node or not receiver_node:
+                logger.warning(f"Missing user nodes for connection {instance.uid}")
+                return
+                
+            try:
+                created_by_user = User.objects.get(id=created_by_node.user_id)
+                receiver_user = User.objects.get(id=receiver_node.user_id)
+            except User.DoesNotExist as e:
+                logger.error(f"User not found for connection {instance.uid}: {e}")
+                return
+            
             if created:
-                # Create ActivityService instance
-                activity_service = ActivityService()
+                # Track connection request creation
                 activity_service.track_social_interaction(
-                    user=instance.created_by,
-                    target_user=instance.receiver,
+                    user=created_by_user,
+                    target_user=receiver_user,
                     interaction_type='connection_request',
                     metadata={
                         'connection_id': str(instance.uid),
-                        'connection_status': getattr(instance, 'connection_status', 'pending'),
+                        'connection_status': getattr(instance, 'connection_status', 'Received'),
                     }
                 )
+            else:
+                # Track connection status updates (accept, decline, etc.)
+                connection_status = getattr(instance, 'connection_status', '')
+                if connection_status == 'Accepted':
+                    # Track acceptance by receiver
+                    activity_service.track_social_interaction(
+                        user=receiver_user,
+                        target_user=created_by_user,
+                        interaction_type='connection_accept',
+                        metadata={
+                            'connection_id': str(instance.uid),
+                            'connection_status': connection_status,
+                        }
+                    )
+                elif connection_status == 'Rejected':
+                    # Track rejection by receiver
+                    activity_service.track_social_interaction(
+                        user=receiver_user,
+                        target_user=created_by_user,
+                        interaction_type='connection_decline',
+                        metadata={
+                            'connection_id': str(instance.uid),
+                            'connection_status': connection_status,
+                        }
+                    )
+                elif connection_status == 'Cancelled':
+                    # Track cancellation by sender
+                    activity_service.track_social_interaction(
+                        user=created_by_user,
+                        target_user=receiver_user,
+                        interaction_type='connection_remove',
+                        metadata={
+                            'connection_id': str(instance.uid),
+                            'connection_status': connection_status,
+                        }
+                    )
         except Exception as e:
             logger.error(f"Failed to track connection activity: {e}")
 
 except ImportError:
     logger.warning("Connection models not found, skipping connection-related signals")
+
+
+# Message model signals
+try:
+    from msg.models import ConversationMessages
+    
+    @receiver(post_save, sender=ConversationMessages)
+    def track_message_read_activity(sender, instance, created, **kwargs):
+        """Track message read activity when is_read is updated."""
+        try:
+            if not created and hasattr(instance, '_previous_is_read'):
+                # Check if is_read changed from False to True
+                if not instance._previous_is_read and instance.is_read:
+                    # Get sender and receiver for tracking
+                    message_sender = instance.sender.single()
+                    conversation = instance.conversation.single()
+                    
+                    if message_sender and conversation:
+                        # Track message read as social interaction
+                        from django.contrib.auth.models import User
+                        
+                        # Get all conversation members except the sender
+                        for member in conversation.members.all():
+                            if member.uid != message_sender.uid:
+                                try:
+                                    django_user = User.objects.get(id=member.user_id)
+                                    sender_django_user = User.objects.get(id=message_sender.user_id)
+                                    
+                                    activity_service = ActivityService()
+                                    activity_service.track_social_interaction(
+                                        user=django_user,
+                                        target_user=sender_django_user,
+                                        interaction_type='message_read',
+                                        context_type='conversation',
+                                        context_id=str(conversation.uid),
+                                        metadata={
+                                            'message_id': str(instance.uid),
+                                            'conversation_id': str(conversation.uid)
+                                        }
+                                    )
+                                except Exception as user_error:
+                                    logger.error(f"Failed to track message read for user {member.uid}: {user_error}")
+        except Exception as e:
+            logger.error(f"Failed to track message read activity: {e}")
+
+except ImportError:
+    logger.warning("Message models not found, skipping message-related signals")
 
 
 # Community model signals

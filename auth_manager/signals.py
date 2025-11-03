@@ -29,6 +29,9 @@ def create_or_update_user_meta_data(sender, instance, created, **kwargs):
 
         user_score=Score()
         user_score.save()
+        # Set initial overall_score to match cumulative_vibescore (both default to 2.0)
+        user_score.overall_score = user_score.cumulative_vibescore
+        user_score.save()
         profile.score.connect(user_score)
 
         user_circle=ConnectionStats()

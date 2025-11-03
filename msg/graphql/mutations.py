@@ -2,6 +2,7 @@ import asyncio
 import graphene
 from graphene import Mutation
 from graphql import GraphQLError
+import logging
 
 from .raw_query.block_exist import relationship_exists
 from .types import *
@@ -19,6 +20,8 @@ from msg.util.matrix_message_utils import (
     ban_user_from_room,
     unban_user_from_room
 )
+
+logger = logging.getLogger(__name__)
 from agentic.models import Agent
 from vibe_manager.utils import VibeUtils
 from vibe_manager.models import IndividualVibe
@@ -77,7 +80,7 @@ class CreateConversation(Mutation):
                     loop.close()
 
 
-            return CreateConversation(conversation=ConversationType.from_neomodel(conversation), success=True, message=MsgMessages.CONVERSATION_CREATED)
+            return CreateConversation(conversation=ConversationType.from_neomodel(conversation, current_user_id=user_id), success=True, message=MsgMessages.CONVERSATION_CREATED)
         except Exception as error:
             message=getattr(error,'message',str(error))
             return CreateConversation(conversation=None, success=False, message=message)
@@ -96,6 +99,9 @@ class UpdateConversation(Mutation):
             user = info.context.user
             if user.is_anonymous:
                 raise GraphQLError("Authentication Failure")
+            
+            payload = info.context.payload
+            user_id = payload.get('user_id')
 
             conversation = Conversation.nodes.get(uid=input.uid)
 
@@ -146,7 +152,7 @@ class UpdateConversation(Mutation):
                     finally:
                         loop.close()
 
-            return UpdateConversation(conversation=ConversationType.from_neomodel(conversation), success=True, message=MsgMessages.CONVERSATION_UPDATED)
+            return UpdateConversation(conversation=ConversationType.from_neomodel(conversation, current_user_id=user_id), success=True, message=MsgMessages.CONVERSATION_UPDATED)
         except Exception as error:
             message=getattr(error,'message',str(error))
             return UpdateConversation(conversation=None, success=False, message=message)
@@ -208,10 +214,19 @@ class CreateConversationMessage(Mutation):
             # Track activity for analytics
             try:
                 from user_activity.services.activity_service import ActivityService
-                ActivityService.track_content_interaction_by_id(
-                    user_id=user_id,
-                    content_type='conversation_message',
-                    interaction_type='create',
+                from django.contrib.auth.models import User
+                
+                # Get Django user for activity tracking
+                django_user = User.objects.get(id=user_id)
+                activity_service = ActivityService()
+                
+                # Track message sending as social interaction
+                activity_service.track_social_interaction(
+                    user=django_user,
+                    target_user=None,  # Group message, no specific target
+                    interaction_type='message_send',
+                    context_type='conversation',
+                    context_id=str(conversation.uid),
                     metadata={
                         'conversation_id': conversation.uid,
                         'message_id': msg.uid,
@@ -221,7 +236,7 @@ class CreateConversationMessage(Mutation):
                 )
             except Exception as e:
                 # Don't fail the mutation if activity tracking fails
-                pass
+                logger.error(f"Failed to track message activity: {e}")
 
             # Notify all conversation members except the sender
             # members_to_notify = []
@@ -248,7 +263,7 @@ class CreateConversationMessage(Mutation):
             #     finally:
             #         loop.close()
 
-            return CreateConversationMessage(msg=ConversationMessageType.from_neomodel(msg), success=True, message=MsgMessages.CONVERSATION_MSG_CREATED)
+            return CreateConversationMessage(msg=ConversationMessageType.from_neomodel(msg, current_user_id=user_id), success=True, message=MsgMessages.CONVERSATION_MSG_CREATED)
         except Exception as error:
             message=getattr(error,'message',str(error))
             return CreateConversationMessage(msg=None, success=False, message=message)
@@ -267,6 +282,9 @@ class UpdateConversationMessage(Mutation):
             user = info.context.user
             if user.is_anonymous:
                 raise GraphQLError("Authentication Failure")
+            
+            payload = info.context.payload
+            user_id = payload.get('user_id')
 
             msg_node = ConversationMessages.nodes.get(uid=input.uid)
 
@@ -283,7 +301,7 @@ class UpdateConversationMessage(Mutation):
 
             msg_node.save()
 
-            return UpdateConversationMessage(msg=ConversationMessageType.from_neomodel(msg_node), success=True, message=MsgMessages.CONVERSATION_MSG_UPDATED)
+            return UpdateConversationMessage(msg=ConversationMessageType.from_neomodel(msg_node, current_user_id=user_id), success=True, message=MsgMessages.CONVERSATION_MSG_UPDATED)
         except Exception as error:
             message=getattr(error,'message',str(error))
             return UpdateConversationMessage(msg=None, success=False, message=message)
@@ -517,6 +535,17 @@ class SendVibeToMessage(graphene.Mutation):
                     message="Matrix profile not found"
                 )
             
+            # Get user's profile image URL from profile_pic_id
+            profile_image_url = None
+            if hasattr(user_node, 'profile_pic_id') and user_node.profile_pic_id:
+                try:
+                    from auth_manager.Utils.generate_presigned_url import generate_file_info
+                    file_info = generate_file_info(user_node.profile_pic_id)
+                    if file_info and file_info.get('url'):
+                        profile_image_url = file_info['url']
+                except Exception as e:
+                    profile_image_url = None
+            
             # Send vibe reaction to Matrix
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -530,7 +559,8 @@ class SendVibeToMessage(graphene.Mutation):
                         original_event_id=message_event_id,
                         vibe_name=individual_vibe.name_of_vibe,
                         vibe_intensity=clean_intensity,
-                        individual_vibe_id=individual_vibe_id
+                        individual_vibe_id=individual_vibe_id,
+                        profile_image_url=profile_image_url
                     )
                 )
             finally:
@@ -775,12 +805,22 @@ class SendMatrixMessage(graphene.Mutation):
                 # Track activity for analytics
                 try:
                     from user_activity.services.activity_service import ActivityService
+                    from django.contrib.auth.models import User
+                    
                     payload = info.context.payload
                     user_id = payload.get('user_id')
-                    ActivityService.track_content_interaction_by_id(
-                        user_id=user_id,
-                        content_type='matrix_message',
-                        interaction_type='send',
+                    
+                    # Get Django user for activity tracking
+                    django_user = User.objects.get(id=user_id)
+                    activity_service = ActivityService()
+                    
+                    # Track matrix message sending as social interaction
+                    activity_service.track_social_interaction(
+                        user=django_user,
+                        target_user=None,  # Community message, no specific target
+                        interaction_type='message_send',
+                        context_type='matrix_community',
+                        context_id=str(community_uid),
                         metadata={
                             'community_id': community_uid,
                             'room_id': community.room_id,
@@ -791,7 +831,7 @@ class SendMatrixMessage(graphene.Mutation):
                     )
                 except Exception as e:
                     # Don't fail the mutation if activity tracking fails
-                    pass
+                    logger.error(f"Failed to track matrix message activity: {e}")
                 
                 return SendMatrixMessageResponse(
                     event_id=event_id,

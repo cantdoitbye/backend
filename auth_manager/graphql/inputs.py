@@ -3,6 +3,7 @@ import graphene
 from .types import DeleteTypeEnum
 # from auth_manager.Utils.auth_manager_validation import NonSpecialCharacterString
 from auth_manager.validators import custom_graphql_validator
+from auth_manager.validators.custom_graphql_validator import CreateAchievementWhatValidator, CreateAchievementFromSourceValidator
 
 class InviteTypeEnum(graphene.Enum):
     MENU = "menu"
@@ -25,6 +26,8 @@ class CreateUserInput(graphene.InputObjectType):
     password = custom_graphql_validator.String.add_option("password", "CreateUser")(required=True)
     user_type=custom_graphql_validator.String.add_option("userType", "CreateUser")(required=False)
     invite_token = custom_graphql_validator.String.add_option("inviteToken", "CreateUser")(required=False)
+    is_bot = custom_graphql_validator.Boolean.add_option("isBot", "CreateUser")(required=False)
+    persona = custom_graphql_validator.String.add_option("persona", "CreateUser")(required=False)
 
 
 class CreateUserInputV2(graphene.InputObjectType):
@@ -32,6 +35,26 @@ class CreateUserInputV2(graphene.InputObjectType):
     password = custom_graphql_validator.String.add_option("password", "CreateUserV2")(required=True)
     user_type=custom_graphql_validator.String.add_option("userType", "CreateUserV2")(required=False)
     invite_token=custom_graphql_validator.String.add_option("inviteToken", "CreateUserV2")(required=False)
+    is_bot = custom_graphql_validator.Boolean.add_option("isBot", "CreateUserV2")(required=False)
+    persona = custom_graphql_validator.String.add_option("persona", "CreateUserV2")(required=False)
+
+class CreateVerifiedUserInput(graphene.InputObjectType):
+    email = custom_graphql_validator.String.add_option("email", "CreateVerifiedUser")(required=True)
+    first_name = custom_graphql_validator.NonSpecialCharacterString2_30.add_option("firstName", "CreateVerifiedUser")(required=True)
+    last_name = custom_graphql_validator.NonSpecialCharacterString2_30.add_option("lastName", "CreateVerifiedUser")(required=True)
+    password = custom_graphql_validator.String.add_option("password", "CreateVerifiedUser")(required=True)
+    user_type = custom_graphql_validator.String.add_option("userType", "CreateVerifiedUser")(required=False)
+    is_bot = custom_graphql_validator.Boolean.add_option("isBot", "CreateVerifiedUser")(required=False)
+    persona = custom_graphql_validator.String.add_option("persona", "CreateVerifiedUser")(required=False)
+    gender = custom_graphql_validator.String.add_option("gender", "CreateVerifiedUser")(required=False)
+    bio = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("bio", "CreateVerifiedUser")(required=False)
+    designation = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("designation", "CreateVerifiedUser")(required=False)
+    worksat = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("worksat", "CreateVerifiedUser")(required=False)
+    lives_in = custom_graphql_validator.String.add_option("livesIn", "CreateVerifiedUser")(required=False)
+    state = custom_graphql_validator.String.add_option("state", "CreateVerifiedUser")(required=False)
+    city = custom_graphql_validator.String.add_option("city", "CreateVerifiedUser")(required=False)
+    profile_pic_id = custom_graphql_validator.String.add_option("profilePicId", "CreateVerifiedUser")(required=False)
+    cover_image_id = custom_graphql_validator.String.add_option("coverImageId", "CreateVerifiedUser")(required=False)
 
 class SocialLoginInput(graphene.InputObjectType):
     """Input for social login authentication"""
@@ -76,11 +99,11 @@ class CreateProfileInput(graphene.InputObjectType):
 
 class UpdateProfileInput(graphene.InputObjectType):
     first_name = custom_graphql_validator.NonSpecialCharacterString2_30.add_option("firstName", "UpdateProfile")()
-    last_name = custom_graphql_validator.NonSpecialCharacterString2_30.add_option("lastName", "UpdateProfile")()
+    last_name = custom_graphql_validator.SpaceSpecialCharacterString2_30.add_option("lastName", "UpdateProfile")()
     gender = custom_graphql_validator.String.add_option("gender", "UpdateProfile")()
     device_id = custom_graphql_validator.String.add_option("deviceId", "UpdateProfile")()
     fcm_token = custom_graphql_validator.String.add_option("fcmToken", "UpdateProfile")()
-    bio = custom_graphql_validator.NonSpecialCharacterString20_500.add_option("bio", "UpdateProfile")()
+    bio = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("bio", "UpdateProfile")()
     designation = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("designation", "UpdateProfile")()
     phone_number = custom_graphql_validator.PhoneNumberScalar.add_option("phoneNumber", "UpdateProfile")()
     born = custom_graphql_validator.DateTimeScalar.add_option("born", "UpdateProfile")()
@@ -90,7 +113,8 @@ class UpdateProfileInput(graphene.InputObjectType):
     cover_image_id = custom_graphql_validator.String.add_option("coverImageId", "UpdateProfile")()
     state = custom_graphql_validator.String.add_option("state", "UpdateProfile")()
     city = custom_graphql_validator.String.add_option("city", "UpdateProfile")()
- 
+    mentioned_user_uids = graphene.List(graphene.String)
+
 class OnboardingInput(graphene.InputObjectType):
     profile_uid = graphene.String()
     email_verified = graphene.Boolean()
@@ -193,8 +217,8 @@ class SelectUsernameInput(graphene.InputObjectType):
 
 
 class CreateAchievementInput(graphene.InputObjectType):
-    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateAchievement")(required=True)
-    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateAchievement")(required=True)
+    what = CreateAchievementWhatValidator.add_option("what", "CreateAchievement")(required=True)
+    from_source = CreateAchievementFromSourceValidator.add_option("fromSource", "CreateAchievement")(required=True)
     description = custom_graphql_validator.SpecialCharacterString2_100.add_option("description", "CreateAchievement")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateAchievement")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateAchievement")()
@@ -257,21 +281,21 @@ class CreateProfileDataReactionInputV2(graphene.InputObjectType):
 class CreateProfileCommentInputV2(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "CreateProfileCommentV2")(required=True)
     category=ProfiledataTypeEnum(required=True)
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "CreateProfileCommentV2")(required=True)
+    content = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("content", "CreateProfileCommentV2")(required=True)
 
 
 class UpdateProfileCommentInputV2(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateProfileCommentV2")(required=True)
-    content = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("content", "UpdateProfileCommentV2")(required=True)
+    content = custom_graphql_validator.NonSpecialCharacterString1_200.add_option("content", "UpdateProfileCommentV2")(required=True)
 
 class CreateEducationInput(graphene.InputObjectType):
     what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateEducation")(required=True)
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateEducation")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateEducation")()
     from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateEducation")(required=True)
-    field_of_study=custom_graphql_validator.String.add_option("fieldOfStudy", "CreateEducation")()
+    field_of_study=custom_graphql_validator.SpecialCharacterString2_50.add_option("fieldOfStudy", "CreateEducation")()
     created_on = graphene.DateTime()
-    file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateEducation")()
+    description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "CreateEducation")()
 
 
 class UpdateEducationInput(graphene.InputObjectType):
@@ -280,15 +304,15 @@ class UpdateEducationInput(graphene.InputObjectType):
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateEducation")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateEducation")()
     from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "UpdateEducation")()
-    field_of_study=custom_graphql_validator.String.add_option("fieldOfStudy", "UpdateEducation")()
-    file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateEducation")()
+    field_of_study=custom_graphql_validator.SpecialCharacterString2_50.add_option("fieldOfStudy", "UpdateEducation")()
+    description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "UpdateEducation")()
 
 
 class CreateExperienceInput(graphene.InputObjectType):
-    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateExperience")()
-    description = custom_graphql_validator.SpecialCharacterString10_200.add_option("description", "CreateExperience")()
+    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "CreateExperience")(required=True)
+    description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "CreateExperience")()
     created_on = graphene.DateTime()
-    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateExperience")()
+    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "CreateExperience")(required=True)
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateExperience")(required=True)
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "CreateExperience")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateExperience")()
@@ -296,15 +320,15 @@ class CreateExperienceInput(graphene.InputObjectType):
 
 class UpdateExperienceInput(graphene.InputObjectType):
     uid= custom_graphql_validator.String.add_option("uid", "UpdateExperience")(required=True)
-    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "UpdateExperience")()
-    description = custom_graphql_validator.SpecialCharacterString10_200.add_option("description", "UpdateExperience")()
-    from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "UpdateExperience")()
+    what = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("what", "UpdateExperience")()
+    description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "UpdateExperience")()
+    from_source = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("fromSource", "UpdateExperience")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateExperience")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateExperience")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateExperience")()
 
 class CreateSkillInput(graphene.InputObjectType):
-    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateSkill")()
+    what = custom_graphql_validator.SpecialCharacterString2_100.add_option("what", "CreateSkill")(required=True)
     from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "CreateSkill")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateSkill")()
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "CreateSkill")()
@@ -318,3 +342,14 @@ class UpdateSkillInput(graphene.InputObjectType):
     from_date = custom_graphql_validator.DateTimeScalar.add_option("fromDate", "UpdateSkill")()
     to_date = custom_graphql_validator.DateTimeScalar.add_option("toDate", "UpdateSkill")()
     file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateSkill")()
+
+class CreateStoryInput(graphene.InputObjectType):
+    title = custom_graphql_validator.SpecialCharacterString1_50.add_option("title", "CreateStory")(required=True)
+    content = custom_graphql_validator.SpecialCharacterString1_50.add_option("content", "CreateStory")(required=True)
+    captions = custom_graphql_validator.SpecialCharacterString1_100.add_option("captions", "CreateStory")(required=True)
+
+class UpdateStoryInput(graphene.InputObjectType):
+    uid = custom_graphql_validator.String.add_option("uid", "UpdateStory")(required=True)
+    title = custom_graphql_validator.SpecialCharacterString1_50.add_option("title", "UpdateStory")()
+    content = custom_graphql_validator.SpecialCharacterString1_50.add_option("content", "UpdateStory")()
+    captions = custom_graphql_validator.SpecialCharacterString1_100.add_option("captions", "UpdateStory")()

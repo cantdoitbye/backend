@@ -17,6 +17,7 @@ class CreateCommunityInput(graphene.InputObjectType):
     member_uid=custom_graphql_validator.ListString.add_option("memberUid", "CreateCommunity")()
     ai_generated = custom_graphql_validator.Boolean.add_option("aiGenerated", "CreateCommunity")(default_value=False, description="Indicates if this community is AI-generated")
     tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
+    mentioned_user_uids = graphene.List(graphene.String)
 
 class UpdateCommunityInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunity")(required=True)
@@ -27,11 +28,12 @@ class UpdateCommunityInput(graphene.InputObjectType):
     category = custom_graphql_validator.String.add_option("category", "UpdateCommunity")()
     group_icon_id=custom_graphql_validator.String.add_option("groupIconId", "UpdateCommunity")()
     cover_image_id=custom_graphql_validator.String.add_option("coverImageId", "UpdateCommunity")()
-
+    mentioned_user_uids = graphene.List(graphene.String)
+    
 class UpdateSubCommunityInput(graphene.InputObjectType):
     uid = graphene.String(required=True)
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "UpdateSubCommunity")( desc="The name of the sub-community.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "UpdateSubCommunity")(desc="The description of the sub-community.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "UpdateSubCommunity")( desc="The name of the sub-community.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "UpdateSubCommunity")(desc="The description of the sub-community.")
     sub_community_type = custom_graphql_validator.String.add_option("subCommunityType", "UpdateSubCommunity")( desc="The type of the sub-community.")
     sub_community_group_type = custom_graphql_validator.String.add_option("subCommunityGroupType", "UpdateSubCommunity")( desc="The group type designation of the sub-community.")
     sub_community_circle = CircleTypeEnum( desc="The circle type designation of the sub-community.")
@@ -42,6 +44,10 @@ class UpdateSubCommunityInput(graphene.InputObjectType):
 
 class DeleteInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "Delete")(required=True)
+
+class LeaveCommunityChatInput(graphene.InputObjectType):
+    """Input for leaving a community's Matrix chat room"""
+    room_id = custom_graphql_validator.String.add_option("roomId", "LeaveCommunityChat")(required=True, description="Matrix room ID to leave")
 
 class CreateCommMessageInput(graphene.InputObjectType):
     community_uid = custom_graphql_validator.String.add_option("communityUid", "createCommMessage")(required=True)
@@ -85,55 +91,56 @@ class UpdateCommunityInfoInput(graphene.InputObjectType):
     group_icon_id = custom_graphql_validator.String.add_option("groupIconId", "UpdateCommunityInfo")()
 
 class CreateCommunityGoalInput(graphene.InputObjectType):
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "CreateCommunityGoal")(required=True, desc="The name of the community goal.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "CreateCommunityGoal")(required=True, desc="The description of the community goal.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "CreateCommunityGoal")(required=True, desc="The name of the community goal.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "CreateCommunityGoal")(required=True, desc="The description of the community goal.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community goal.")
     community_uid = custom_graphql_validator.String.add_option("communityUid", "CreateCommunityGoal")(required=True, desc="The unique identifier of the community to which the goal belongs.")
     community_type=custom_graphql_validator.String.add_option("communityType", "CreateCommunityGoal")()
 
 class UpdateCommunityGoalInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunityGoal")(required=True, desc="The unique identifier of the community goal to be updated.")
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "UpdateCommunityGoal")(desc="The new name for the community goal.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "UpdateCommunityGoal")(desc="The new description for the community goal.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "UpdateCommunityGoal")(desc="The new name for the community goal.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "UpdateCommunityGoal")(desc="The new description for the community goal.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community goal.")
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateCommunityGoal")(desc="Whether the community goal should be marked as deleted or not.")
 
 class CreateCommunityActivityInput(graphene.InputObjectType):
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "CreateCommunityActivity")(required=True, desc="The name of the community activity.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "CreateCommunityActivity")( desc="The description of the community activity.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "CreateCommunityActivity")(required=True, desc="The name of the community activity.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "CreateCommunityActivity")( desc="The description of the community activity.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community activity.")
-    community_uid = custom_graphql_validator.String.add_option("communityUid", "CreateCommunityActivity")(desc="The unique identifier of the community to which the activity belongs.")
+    community_uid = custom_graphql_validator.String.add_option("communityUid", "CreateCommunityActivity")(required=True, desc="The unique identifier of the community to which the activity belongs.")
     community_type=custom_graphql_validator.String.add_option("communityType", "CreateCommunityActivity")()
     date = custom_graphql_validator.DateTimeScalar.add_option("date", "CreateCommunityActivity")( desc="The start date and time of the community activity.")
     activity_type = custom_graphql_validator.String.add_option("activityType", "CreateCommunityActivity")( desc="The type of the community activity.")
 
 class UpdateCommunityActivityInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunityActivity")(required=True, desc="The unique identifier of the community activity to be updated.")
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "UpdateCommunityActivity")(desc="The new name for the community activity.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "UpdateCommunityActivity")(desc="The new description for the community activity.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "UpdateCommunityActivity")(desc="The new name for the community activity.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "UpdateCommunityActivity")(desc="The new description for the community activity.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community activity.")
     date = custom_graphql_validator.DateTimeScalar.add_option("date", "UpdateCommunityActivity")(desc="The new start date and time of the community activity.")
     activity_type = custom_graphql_validator.String.add_option("activityType", "UpdateCommunityActivity")(desc="The new type of the community activity.")
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateCommunityActivity")(desc="Whether the community activity should be marked as deleted or not.")
 
 class CreateCommunityAffiliationInput(graphene.InputObjectType):
-    entity = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("entity", "CreateCommunityAffiliation")(required=True, desc="The name of the entity associated with the community.")
+    entity = custom_graphql_validator.NonSemiSpecialCharacterString2_100.add_option("entity", "CreateCommunityAffiliation")(required=True, desc="The name of the entity associated with the community.")
     subject= custom_graphql_validator.NonSpecialCharacterString5_100.add_option("subject", "CreateCommunityAffiliation")(required=True, desc="The subject or topic of the affiliation.")
-    date= custom_graphql_validator.DateTimeScalar.add_option("date", "CreateCommunityAffiliation")(desc="The date of the affiliation.")
+    date= custom_graphql_validator.DateTimeScalar.add_option("date", "CreateCommunityAffiliation")(required=True, desc="The date of the affiliation.")
     community_uid = custom_graphql_validator.String.add_option("communityUid","CreateCommunityAffiliation" )(required=True, desc="The unique identifier of the community to which the affiliation belongs.")
-    community_type=custom_graphql_validator.String.add_option("communityType", "CreateCommunityAffiliation")()
+    community_type=GroupTypeEnum(required=True, desc="The type of community for the affiliation.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community affiliation.")
 
 class UpdateCommunityAffiliationInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunityAffiliation")(required=True, desc="The unique identifier of the community affiliation to be updated.")
-    entity = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("entity", "UpdateCommunityAffiliation")(desc="The new name of the entity associated with the community.")
+    entity = custom_graphql_validator.NonSemiSpecialCharacterString2_100.add_option("entity", "UpdateCommunityAffiliation")(desc="The new name of the entity associated with the community.")
     subject= custom_graphql_validator.NonSpecialCharacterString5_100.add_option("subject", "UpdateCommunityAffiliation")(desc="The new subject or topic of the affiliation.")
     date= custom_graphql_validator.DateTimeScalar.add_option("date", "UpdateCommunityAffiliation")(desc="The new date of the affiliation.")
+    community_type=GroupTypeEnum(desc="The new type of community for the affiliation.")
     file_id=graphene.List(graphene.String,desc="The new file ID associated with the community affiliation.")
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateCommunityAffiliation")(desc="Whether the community affiliation should be marked as deleted or not.")
 
 class CreateCommunityAchievementInput(graphene.InputObjectType):
-    entity = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("entity", "CreateCommunityAchievement")(required=True, desc="The name of the entity associated with the community.")
+    entity = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("entity", "CreateCommunityAchievement")(required=True, desc="The name of the entity associated with the community.")
     subject= custom_graphql_validator.NonSpecialCharacterString5_100.add_option("subject", "CreateCommunityAchievement")(required=True, desc="The subject or topic of the achievement.")
     date= custom_graphql_validator.DateTimeScalar.add_option("date", "CreateCommunityAchievement")(desc="The date of the achievement.")
     community_uid = custom_graphql_validator.String.add_option("communityUid", "CreateCommunityAchievement")(required=True, desc="The unique identifier of the community to which the affiliation belongs.")
@@ -142,7 +149,7 @@ class CreateCommunityAchievementInput(graphene.InputObjectType):
 
 class UpdateCommunityAchievementInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunityAchievement")(required=True, desc="The unique identifier of the community achievement to be updated.")
-    entity = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("entity", "UpdateCommunityAchievement")(desc="The new name of the entity associated with the community.")
+    entity = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("entity", "UpdateCommunityAchievement")(desc="The new name of the entity associated with the community.")
     subject= custom_graphql_validator.NonSpecialCharacterString5_100.add_option("subject", "UpdateCommunityAchievement")(desc="The new subject or topic of the achievement.")
     date= custom_graphql_validator.DateTimeScalar.add_option("date", "UpdateCommunityAchievement")(desc="The new date of the achievement.")
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateCommunityAchievement")(desc="Whether the community achievement should be marked as deleted or not.")
@@ -182,8 +189,8 @@ class UpdateCommunityGroupInfoInput(graphene.InputObjectType):
 
 class CreateSubCommunityInput(graphene.InputObjectType):
     parent_community_uid = custom_graphql_validator.String.add_option("parentCommunityUid", "CreateSubCommunity")(required=True, desc="The unique identifier of the parent community.")
-    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "CreateSubCommunity")(required=True, desc="The name of the sub-community.")
-    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "CreateSubCommunity")(desc="The description of the sub-community.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "CreateSubCommunity")(required=True, desc="The name of the sub-community.")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "CreateSubCommunity")(required=True, desc="The description of the sub-community.")
     sub_community_type = SubCommunityTypeEnum(required=True, desc="The type of the sub-community.")
     sub_community_group_type = GroupTypeEnum(required=True, desc="The group type designation of the sub-community.")
     sub_community_circle = CircleTypeEnum(required=True, desc="The circle type designation of the sub-community.")
@@ -246,12 +253,12 @@ class CommunityPermissionInput(graphene.InputObjectType):
 
 class CreateCommunityPostInput(graphene.InputObjectType):
     community_uid=custom_graphql_validator.String.add_option("communityUid", "CreateCommunityPost")(required=True, desc="The unique identifier of the community.")
-    post_title = custom_graphql_validator.SpecialCharacterString2_100.add_option("postTitle", "CreateCommunityPost")(desc="The title of the post.")
-    post_text = custom_graphql_validator.SpecialCharacterString2_500.add_option("postText", "CreateCommunityPost")(desc="The text content of the post.")
+    post_title = custom_graphql_validator.SpecialCharacterString2_100.add_option("postTitle", "CreateCommunityPost")(required=True, desc="The title of the post.")
+    post_text = custom_graphql_validator.SpecialCharacterString2_200.add_option("postText", "CreateCommunityPost")(required=True, desc="The text content of the post.")
     post_type = custom_graphql_validator.String.add_option("postType", "CreateCommunityPost")(desc="The type of the post.")
     privacy = custom_graphql_validator.String.add_option("privacy", "CreateCommunityPost")(desc="The privacy setting of the post.")
     post_file_id=graphene.List(graphene.String)
     tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
     reaction = custom_graphql_validator.String.add_option("reaction", "CreateCommunityPost")()
     vibe = custom_graphql_validator.Float.add_option("vibe", "CreateCommunityPost")()
-    
+    mentioned_user_uids = graphene.List(graphene.String)

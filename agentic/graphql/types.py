@@ -591,32 +591,46 @@ class AgentSummaryType(ObjectType):
 
 class CommunityAgentSummaryType(ObjectType):
     """
-    Summary type for agents in a community context.
+    Summary type for agent assignments in a community.
     """
     agent = graphene.Field(AgentSummaryType)
     assignment = graphene.Field(AgentAssignmentType)
     is_leader = Boolean()
     assignment_date = DateTime()
-    
+
     @classmethod
     def from_assignment(cls, assignment):
-        """
-        Convert assignment to community agent summary.
-        
-        Args:
-            assignment: AgentCommunityAssignment instance
-            
-        Returns:
-            CommunityAgentSummaryType: Summary representation
-        """
+        """Create from assignment with agent and community data."""
         try:
-            agent = assignment.agent.single()
+            if not assignment:
+                return None
+            
+            # Get agent summary
+            agent_summary = AgentSummaryType.from_neomodel(assignment.agent.single()) if assignment.agent else None
+            
+            # Get assignment details
+            assignment_type = AgentAssignmentType.from_neomodel(assignment, include_agent=False, include_community=False)
+            
             return cls(
-                agent=AgentSummaryType.from_neomodel(agent) if agent else None,
-                assignment=AgentAssignmentType.from_neomodel(assignment, include_agent=False, include_community=False),
-                is_leader=assignment.is_active() and agent and agent.agent_type == 'COMMUNITY_LEADER',
+                agent=agent_summary,
+                assignment=assignment_type,
+                is_leader=assignment.status == 'leader',
                 assignment_date=assignment.assignment_date
             )
         except Exception as e:
-            print(f"Error converting assignment to community agent summary: {e}")
+            print(f"Error creating CommunityAgentSummaryType: {e}")
             return None
+
+
+class AllAgentsResponseType(ObjectType):
+    """Paginated response type for all agents with total count"""
+    agents = graphene.List(AgentType)
+    total = graphene.Int()
+
+    @classmethod
+    def create(cls, agents, total):
+        """Create a paginated response with agents list and total count"""
+        return cls(
+            agents=agents,
+            total=total
+        )

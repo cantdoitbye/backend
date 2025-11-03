@@ -1,0 +1,316 @@
+{
+	"info": {
+		"name": "Ooumph Backend - Education API Testing",
+		"description": "Complete collection for testing education API with emoji support and field validations",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000"
+		},
+		{
+			"key": "auth_token",
+			"value": "your-jwt-token-here"
+		}
+	],
+	"item": [
+		{
+			"name": "🔐 Authentication",
+			"item": [
+				{
+					"name": "Login (Get Token)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation Login {\\n      login(input: {\\n        username: \\\"your-username\\\",\\n        password: \\\"your-password\\\"\\n      }) {\\n        success\\n        message\\n        token\\n        refreshToken\\n        user {\\n          uid\\n          username\\n        }\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Get JWT token for authentication"
+					},
+					"response": []
+				}
+			],
+			"description": "Authentication requests"
+		},
+		{
+			"name": "🎓 Education API",
+			"item": [
+				{
+					"name": "✅ Create Education (With Emojis)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation CreateEducation {\\n      createEducation(input: {\\n        what: \\\"Bachelor of Science in Computer Science 💻\\\",\\n        fromSource: \\\"Harvard University - MIT 🚀\\\",\\n        fieldOfStudy: \\\"AI & Machine Learning 🤖\\\",\\n        description: \\\"Amazing 4-year journey learning algorithms, data structures, and cutting-edge AI technologies. Participated in hackathons and research projects! ✨🚀\\\",\\n        fromDate: \\\"2020-01-01T00:00:00\\\",\\n        toDate: \\\"2024-01-01T00:00:00\\\"\\n      }) {\\n        success\\n        message\\n        education {\\n          uid\\n          what\\n          fromSource\\n          fieldOfStudy\\n          description\\n        }\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test creating education with emojis and special characters"
+					},
+					"response": []
+				},
+				{
+					"name": "✅ Create Education (Simple)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation CreateEducation {\\n      createEducation(input: {\\n        what: \\\"Master of Business Administration\\\",\\n        fromSource: \\\"Stanford University\\\",\\n        fieldOfStudy: \\\"Business Analytics\\\",\\n        description: \\\"Comprehensive MBA program focusing on business strategy and data-driven decision making.\\\",\\n        fromDate: \\\"2018-09-01T00:00:00\\\",\\n        toDate: \\\"2020-06-01T00:00:00\\\"\\n      }) {\\n        success\\n        message\\n        education {\\n          uid\\n          what\\n          fromSource\\n          fieldOfStudy\\n          description\\n        }\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test creating education without emojis"
+					},
+					"response": []
+				},
+				{
+					"name": "🔄 Update Education",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation UpdateEducation {\\n      updateEducation(input: {\\n        uid: \\\"education-uid-here\\\",\\n        what: \\\"Master of Science in Data Science 📊\\\",\\n        fromSource: \\\"MIT - Massachusetts Institute of Technology 🎓\\\",\\n        fieldOfStudy: \\\"Machine Learning & AI 🤖\\\",\\n        description: \\\"Advanced degree focusing on big data, machine learning algorithms, and artificial intelligence applications.\\\"\\n      }) {\\n        success\\n        message\\n        education {\\n          uid\\n          what\\n          fromSource\\n          fieldOfStudy\\n          description\\n        }\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test updating education with emojis"
+					},
+					"response": []
+				},
+				{
+					"name": "📖 Query Education",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    query GetEducation {\\n      me {\\n        uid\\n        username\\n        education {\\n          uid\\n          what\\n          fromSource\\n          fieldOfStudy\\n          description\\n          fromDate\\n          toDate\\n        }\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test querying education data"
+					},
+					"response": []
+				}
+			],
+			"description": "Education API testing requests"
+		},
+		{
+			"name": "🧪 Validation Tests",
+			"item": [
+				{
+					"name": "❌ Test Field Limits (Should Fail)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation CreateEducation {\\n      createEducation(input: {\\n        what: \\\"A\\\",\\n        fromSource: \\\"A\\\",\\n        fieldOfStudy: \\\"A\\\",\\n        description: \\\"Hi\\\",\\n        fromDate: \\\"2020-01-01T00:00:00\\\"\\n      }) {\\n        success\\n        message\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test minimum length validation (should fail)"
+					},
+					"response": []
+				},
+				{
+					"name": "❌ Test Max Limits (Should Fail)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"\\n    mutation CreateEducation {\\n      createEducation(input: {\\n        what: \\\"\\\",\\n        fromSource: \\\"\\\",\\n        fieldOfStudy: \\\"\\\",\\n        description: \\\"\\\",\\n        fromDate: \\\"2020-01-01T00:00:00\\\"\\n      }) {\\n        success\\n        message\\n      }\\n    }\\n  \"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/graphql/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"graphql",
+								""
+							]
+						},
+						"description": "Test maximum length validation (should fail)"
+					},
+					"response": []
+				}
+			],
+			"description": "Validation testing requests"
+		},
+		{
+			"name": "📋 Test Current User",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"\\n    query {\\n      me {\\n        uid\\n        username\\n        email\\n        firstName\\n        lastName\\n      }\\n    }\\n  \"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/graphql/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"graphql",
+						""
+					]
+				},
+				"description": "Test current user query"
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Set current timestamp",
+					"pm.collectionVariables.set('timestamp', new Date().toISOString());",
+					"",
+					"// Validate token exists",
+					"if (!pm.collectionVariables.get('auth_token') || pm.collectionVariables.get('auth_token') === 'your-jwt-token-here') {",
+					"    console.warn('⚠️ Please set your JWT token in the auth_token variable');",
+					"}"
+				]
+			}
+		}
+	]
+}

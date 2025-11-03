@@ -76,7 +76,7 @@ class Query(graphene.ObjectType):
         
         # Execute recommendation algorithm via Cypher query
         results, _ = db.cypher_query(
-            user_related_queries.recommended_users_query, params)
+            user_related_queries.recommended_users_query_new, params)
         
         # Process results and build recommendation list
         for result in results:
@@ -1127,7 +1127,7 @@ class Query(graphene.ObjectType):
             List[ConnectionV2CategoryType]: Connections grouped by circle type
             
         Business Logic:
-            - Retrieves all connections for the authenticated user
+            - Retrieves all ConnectionV2 connections for the authenticated user
             - Groups connections into predefined circles (Inner, Outer, Universe)
             - Determines the connected user (receiver or creator) for each connection
             - Filters out empty circle groups
@@ -1147,7 +1147,9 @@ class Query(graphene.ObjectType):
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
-        connections = user_node.connection.all() 
+        
+        # Use ConnectionV2 instead of legacy Connection
+        connections = user_node.connectionv2.all() 
 
         circles = ['Inner', 'Outer', 'Universe']
         result = []
@@ -1156,18 +1158,27 @@ class Query(graphene.ObjectType):
                 "title": circle,
                 "data": []
             })
+        
         for connection in connections:
-            circle = connection.circle.single()
-            if circle:
-                circle_type = circle.circle_type
-                for circle_group in result:
-                    if circle_group['title'] == circle_type:
-                     
-                        connected_user = connection.receiver.single() if str(connection.receiver.single().uid) != user_node.uid else connection.created_by.single()
-                        connection_data = ConnectionV2Type.from_neomodel(connection, user_uid=connected_user.uid)
-                        if connection_data:  # Only add if connection_data is not None
-                            circle_group['data'].append(connection_data)
-                        break
+            # Only process accepted connections
+            if connection.connection_status != 'Accepted':
+                continue
+                
+            circle_node = connection.circle.single()
+            if circle_node:
+                # Get user-specific circle type from CircleV2 user_relations JSON
+                user_data = circle_node.user_relations.get(user_node.uid, {})
+                circle_type = user_data.get('circle_type')
+                
+                if circle_type:
+                    for circle_group in result:
+                        if circle_group['title'] == circle_type:
+                            # Determine the connected user (not the logged-in user)
+                            connected_user = connection.receiver.single() if str(connection.receiver.single().uid) != user_node.uid else connection.created_by.single()
+                            connection_data = ConnectionV2Type.from_neomodel(connection, user_uid=connected_user.uid)
+                            if connection_data:  # Only add if connection_data is not None
+                                circle_group['data'].append(connection_data)
+                            break
         
         # Filter out circle groups with empty data arrays
         return [circle_group for circle_group in result if circle_group['data']]
@@ -1247,356 +1258,3 @@ class Query(graphene.ObjectType):
         except Exception as e:
             raise Exception(f"Error fetching community members: {str(e)}")
 
-      
-class QueryV2(graphene.ObjectType):
-    """
-    Enhanced GraphQL query class for connection management (Version 2).
-    
-    This class provides improved connection queries with enhanced filtering,
-    better performance, and additional features compared to the original Query class.
-    It focuses on ConnectionV2 entities and provides more sophisticated
-    relationship management capabilities.
-    
-    Features:
-        - Enhanced connection filtering with improved circle type support
-        - Better user connection mapping and relationship tracking
-        - Improved performance through optimized query patterns
-        - Support for advanced connection status management
-        - Enhanced user feed and recommendation systems
-    
-    Use Cases:
-        - Modern connection management interfaces
-        - Advanced social networking features
-        - Improved user experience with better filtering
-        - Enhanced relationship analytics and insights
-    """
-
-    # Enhanced connection queries with improved filtering
-    my_connection = graphene.List(
-        UserConnectedUserTypeV2, status=StatusEnum(), circle_type=CircleTypeEnumV2())
-    
-    @handle_graphql_connection_errors
-    @login_required
-    def resolve_my_connection(self, info, status=None, circle_type=None):
-        """
-        Retrieve enhanced user connections with advanced filtering (Version 2).
-        
-        This improved version provides better connection filtering with enhanced
-        circle type support and improved user-connection mapping. It returns
-        actual user objects with their associated connection details.
-        
-        Args:
-            info: GraphQL resolve info containing request context and user payload
-            status (StatusEnum, optional): Filter by connection status
-                - Received: Connection requests received by current user
-                - Sent: Connection requests sent by current user
-                - Accepted: Established connections
-                - Cancelled: Cancelled connections
-            circle_type (CircleTypeEnumV2, optional): Enhanced circle type filtering
-                - Inner: Close personal connections
-                - Outer: Professional connections
-                - Universe: Public connections
-                
-        Returns:
-            List[UserConnectedUserTypeV2]: Enhanced user connection objects
-            
-        Business Logic:
-            - Uses ConnectionV2 entities for improved functionality
-            - Implements user-connection mapping for better data structure
-            - Supports dynamic circle type checking per user
-            - Filters connections based on user perspective (sent vs received)
-            - Returns enhanced user objects with connection context
-            
-        Improvements over V1:
-             - Better circle type handling with get_circle_type() method
-             - Enhanced user-connection mapping structure
-             - Improved filtering logic and performance
-         """
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-        user_node = Users.nodes.get(user_id=user_id)
-        login_user_uid = user_node.uid
-
-        connected_user = user_node.connectionv2.all()
-        email = user_node.email
-
-        def filter_connections(connection_status, email_check=None):
-            my_connections = []
-            # all_users = []
-            user_connection_map = []
-
-            for connection in connected_user:
-                # print(connection)
-                if status and connection.connection_status != connection_status:
-                    continue
-                if email_check and not email_check(connection, email):
-                    continue
-                if circle_type and connection.circle.single().get_circle_type(user_node.uid) != circle_type.value:
-                    continue
-
-                my_connections.append(connection)
-                # print("my_connections",my_connections)
-                created_by = connection.created_by.single()
-                receiver = connection.receiver.single()
-                if created_by.email != email:
-                    user_connection_map.append({
-                        'user': created_by,
-                        'connection': connection
-                    })
-                if receiver.email != email:
-                    user_connection_map.append({
-                        'user': receiver,
-                        'connection': connection
-                    })
-
-            return user_connection_map
-
-        if status:
-            if status.value == "Received":
-                mapped_data = filter_connections("Received", lambda conn, email: conn.created_by.single().email != email)
-            elif status.value == "Sent":
-                mapped_data = filter_connections("Received", lambda conn, email: conn.created_by.single().email == email)
-            elif status.value == "Accepted":
-                mapped_data = filter_connections("Accepted")
-            elif status.value == "Cancelled":
-                mapped_data = filter_connections("Cancelled")
-            
-            # Convert mapped data to your UserConnectedUserTypeV2
-            return [
-                UserConnectedUserTypeV2.from_neomodel(
-                    item['user'], 
-                    login_user_uid, 
-                    item['connection']
-                ) for item in mapped_data
-            ]
-
-    
-  
-        
-    # Enhanced connection detail queries
-    connection_details_by_user_id = graphene.List(UserConnectedUserTypeV2, user_id=graphene.String(required=True))
-    
-    @handle_graphql_connection_errors
-    @login_required
-    def resolve_connection_details_by_user_id(self, info, user_id):
-        """
-        Retrieve enhanced connection details between authenticated user and target user (V2).
-        
-        This improved version provides enhanced connection details using ConnectionV2
-        entities with better data structure and improved user representation.
-        
-        Args:
-            info: GraphQL resolve info containing request context and user payload
-            user_id (str): User ID of the target user to check connections with
-            
-        Returns:
-            List[UserConnectedUserTypeV2]: Enhanced connection details between users
-            
-        Business Logic:
-            - Uses Cypher query to find ConnectionV2 relationships between users
-            - Returns enhanced user connection objects with improved data structure
-            - Provides better connection context and user information
-            - Uses ConnectionV2 entities for improved functionality
-            
-        Improvements over V1:
-            - Enhanced UserConnectedUserTypeV2 objects with richer data
-            - Better connection context and relationship information
-            - Improved data structure for frontend consumption
-            
-        Cypher Query:
-            Matches users and their shared ConnectionV2 relationships using HAS_CONNECTION
-        """
-        payload = info.context.payload
-        user2_id = payload.get('user_id')
-        
-        # Define the Cypher query
-        query = """
-                    MATCH (u1:Users {user_id: $user_id})-[:HAS_CONNECTION]->(c:ConnectionV2)<-[:HAS_CONNECTION]-(u2:Users {user_id: $user2_id})
-                    RETURN c
-                """
-
-        # Parameters to pass to the query
-        params = {
-            # Replace with your variable holding user1 ID
-            "user_id": str(user_id),
-            # Replace with your variable holding user2 ID
-            "user2_id": str(user2_id)
-        }
-
-        # Execute the query
-        results, meta = db.cypher_query(query, params)
-        
-        connection_node = [ConnectionV2.inflate(row[0]) for row in results]
-
-        user_node = Users.nodes.get(user_id=user2_id)
-        login_user_uid = user_node.uid
-        secondary_user=user_node.nodes.get(user_id=user_id)
-        
-        return [UserConnectedUserTypeV2.from_neomodel(
-                    secondary_user, 
-                    login_user_uid, 
-                    x
-                ) for x in connection_node]
-        
-        
-
-    # Secondary user connection queries with enhanced filtering
-    connected_user_of_secondaryuser_by_useruid = graphene.List(
-        UserConnectedUserTypeV2,user_uid=graphene.String(required=True), status=StatusSecondaryUserEnum(), circle_type=CircleTypeEnumV2())
-    
-    @handle_graphql_connection_errors
-    @login_required
-    def resolve_connected_user_of_secondaryuser_by_useruid(self, info, user_uid,status=None, circle_type=None):
-        """
-        Retrieve enhanced connections of a secondary user by their UID (V2).
-        
-        This improved version provides enhanced connection filtering and data structure
-        for viewing another user's connections with better circle type handling.
-        
-        Args:
-            info: GraphQL resolve info containing request context and user payload
-            user_uid (str): UID of the secondary user whose connections to retrieve
-            status (StatusSecondaryUserEnum, optional): Filter by connection status
-            circle_type (CircleTypeEnumV2, optional): Filter by circle type
-            
-        Returns:
-            List[UserConnectedUserTypeV2]: Enhanced connections of the secondary user
-            
-        Business Logic:
-            - Fetches secondary user by UID and retrieves their ConnectionV2 relationships
-            - Applies enhanced filtering by status and circle type
-            - Uses improved get_circle_type() method for better circle classification
-            - Returns enhanced user connection objects with richer data structure
-            
-        Status Filtering:
-            - 'Received': Connections received by the secondary user
-            - 'Sent': Connections sent by the secondary user
-            - 'Accepted': Mutually accepted connections
-            - 'Cancelled': Cancelled connections
-            
-        Improvements over V1:
-            - Enhanced circle type handling with get_circle_type() method
-            - Better user-connection mapping structure
-            - Improved filtering logic and data representation
-            - Enhanced UserConnectedUserTypeV2 objects
-        """
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-        user_node = Users.nodes.get(uid=user_uid)
-        login_user_uid = user_node.uid
-        
-        connected_user = user_node.connectionv2.all()
-        email = user_node.email
-
-        def filter_connections(connection_status, email_check=None):
-            my_connections = []
-            # all_users = []
-            user_connection_map = []
-
-            for connection in connected_user:
-                
-                if status and connection.connection_status != connection_status:
-                    continue
-                if email_check and not email_check(connection, email):
-                    continue
-                if circle_type and connection.circle.single().get_circle_type(user_node.uid) != circle_type.value:
-                    continue
-
-                my_connections.append(connection)
-                
-                created_by = connection.created_by.single()
-                receiver = connection.receiver.single()
-                if created_by.email != email:
-                    user_connection_map.append({
-                        'user': created_by,
-                        'connection': connection
-                    })
-                if receiver.email != email:
-                    user_connection_map.append({
-                        'user': receiver,
-                        'connection': connection
-                    })
-
-            return user_connection_map
-
-        if status:
-            if status.value == "Received":
-                mapped_data = filter_connections("Received", lambda conn, email: conn.created_by.single().email != email)
-            elif status.value == "Sent":
-                mapped_data = filter_connections("Received", lambda conn, email: conn.created_by.single().email == email)
-            elif status.value == "Accepted":
-                mapped_data = filter_connections("Accepted")
-            elif status.value == "Cancelled":
-                mapped_data = filter_connections("Cancelled")
-            
-            # Convert mapped data to your UserConnectedUserTypeV2
-            return [
-                UserConnectedUserTypeV2.from_neomodel(
-                    item['user'], 
-                    login_user_uid, 
-                    item['connection']
-                ) for item in mapped_data
-            ]
-
-        
-        
-
-    # Enhanced user feed queries
-    users_feed_by_user_uid = graphene.List(
-        SecondaryUserTypeV2, user_uid=graphene.String(required=True))
-    
-    @handle_graphql_connection_errors
-    @login_required
-    def resolve_users_feed_by_user_uid(self, info, user_uid):
-        """
-        Generate enhanced user feed data for a secondary user by their UID (V2).
-        
-        This improved version provides enhanced user feed generation with better
-        relationship context and improved data structure for frontend consumption.
-        
-        Args:
-            info: GraphQL resolve info containing request context and user payload
-            user_uid (str): UID of the secondary user to generate feed for
-            
-        Returns:
-            List[SecondaryUserTypeV2]: Enhanced user feed data with relationship context
-            
-        Business Logic:
-            - Prevents self-feed generation (returns empty list for same user)
-            - Generates enhanced feed data with relationship context
-            - Provides 'Mutual Connection' and 'Common Interest' relationship types
-            - Uses SecondaryUserTypeV2 for improved data representation
-            
-        Feed Types:
-            - 'Mutual Connection': Indicates shared connections between users
-            - 'Common Interest': Indicates shared interests or communities
-            
-        Improvements over V1:
-            - Enhanced SecondaryUserTypeV2 objects with richer context
-            - Better relationship type classification
-            - Improved data structure for feed consumption
-            - Enhanced user relationship insights
-            
-        Security:
-            - Validates user authentication through login_required decorator
-            - Prevents self-feed generation for privacy
-        """
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-        user_node = Users.nodes.get(user_id=user_id)
-        user_node_uid = user_node.uid
-        if (user_node_uid == user_uid):
-            return []
-        details = ["Mutual Connection", "Common Interest"]
-        return [SecondaryUserTypeV2.from_neomodel(user_node_uid, user_uid, detail)for detail in details]
-    
-
-    # Inherited relation queries from Query class
-    # These methods provide backward compatibility and shared functionality
-    relations=Query.relations
-    resolve_relations=Query.resolve_relations
-
-    relations_by_id=Query.relation
-    resolve_relations_by_id=Query.resolve_relation
-
-    

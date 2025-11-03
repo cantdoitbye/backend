@@ -173,6 +173,10 @@ class VibeUtils:
                 score.human_score
             ) / 4
             
+            # Step 11.5: Update overall_score to match cumulative_vibescore
+            # This ensures the overall_score is always in sync with the calculated vibe score
+            score.overall_score = score.cumulative_vibescore
+            
             # Step 12: Save updated scores to database
             score.save()
             

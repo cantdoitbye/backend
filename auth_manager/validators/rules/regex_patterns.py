@@ -28,9 +28,8 @@ PASSWORD_PATTERN = (
 
 
 # Matches usernames containing alphanumeric characters and underscores,
-# with a length between 6 and 10 characters.
-USERNAME_PATTERN = r"^[a-zA-Z0-9_]{3,9}$"
-# USERNAME_PATTERN = r"^[a-zA-Z0-9_]{4,10}$"
+# with a length between 3 and 9 characters.
+USERNAME_PATTERN = r"^[a-zA-Z0-9_]{6,15}$"
 
 # Matches job titles of any characters (letters, numbers, or special characters),
 # with a length between 3 and 24 characters.
@@ -55,12 +54,45 @@ VALID_LAST_NAME_PATTERN = r"^[A-Za-zÀ-ÖØ-öø-ÿ' -]{2,50}$"
 ALLOWED_GENDER_VALUES = {"male", "female", "non-binary", "agender"}
 
 
-BIO_PATTERN = r"^(?!.*<[^>]+>)[A-Za-z0-9\s!#.,'\"-🌲💻\u00C0-\u017F]{20,500}$"
+BIO_PATTERN = r"^(?!.*<[^>]+>)[A-Za-z0-9\s!#.,'\"-🌲💻\u00C0-\u017F]{1,200}$"
 
 
-DESIGNATION_PATTERN = r"^[A-Za-z0-9\s]{1,50}$"
+DESIGNATION_PATTERN = r"^[A-Za-z0-9\s]{2,100}$"
 
 
 CONTACt_NUMBER_PATTERN = r"^\+?[0-9\s\-().]{10,15}$"
+
+
+# Skill validation patterns
+# Matches strings that are not only numbers or symbols (must contain at least one letter)
+SKILL_FROM_PATTERN = r"^(?=.*[A-Za-z])[\w\s\-.'&,()]{2,100}$"
+SKILL_WHAT_PATTERN = r"^[\w\s\-.'&,()]{2,100}$"
+
+
+# Education validation patterns
+# School name must contain at least one letter and not be only symbols/numbers
+EDUCATION_SCHOOL_NAME_PATTERN = r"^(?=.*[A-Za-z])[\w\s\-.'&,()]{2,100}$"
+# Degree pattern allows various degree formats
+EDUCATION_DEGREE_PATTERN = r"^[\w\s\-.'&,()]{2,100}$"
+# Field of study pattern
+EDUCATION_FIELD_OF_STUDY_PATTERN = r"^[\w\s\-.'&,()]{2,50}$"
+
+
+# Experience validation patterns
+# Company name must contain at least one letter and not be only symbols/numbers
+EXPERIENCE_COMPANY_NAME_PATTERN = r"^(?=.*[A-Za-z])[\w\s\-.'&,()]{2,100}$"
+# Title pattern for job title/position/role
+EXPERIENCE_TITLE_PATTERN = r"^[\w\s\-.'&,()]{2,100}$"
+# Description pattern (5-200 characters)
+EXPERIENCE_DESCRIPTION_PATTERN = r"^[\w\s\-.'&,()!@#$%^*+=:;\"?/<>]{5,200}$"
+
+
+# Story validation patterns (1-50 or 1-100 characters, very permissive)
+# Story title pattern (1-50 characters)
+STORY_TITLE_PATTERN = r"^.{1,50}$"
+# Story content pattern (1-50 characters)
+STORY_CONTENT_PATTERN = r"^.{1,50}$"
+# Story captions pattern (1-100 characters)
+STORY_CAPTIONS_PATTERN = r"^.{1,100}$"
 
 

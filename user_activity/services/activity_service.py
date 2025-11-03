@@ -584,6 +584,39 @@ class ActivityService:
                 'message': str(e)
             }
     
+    def track_profile_visit(self, visitor: User, profile_owner: User, 
+                           duration_seconds: int = None, ip_address: str = None, 
+                           user_agent: str = None, metadata: Dict[str, Any] = None) -> bool:
+        """Track profile visit as both profile activity and social interaction."""
+        try:
+            # Track as profile activity
+            self.track_profile_activity(
+                visitor=visitor,
+                profile_owner=profile_owner,
+                activity_type='profile_view',
+                duration_seconds=duration_seconds,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                metadata=metadata
+            )
+            
+            # Track as social interaction
+            self.track_social_interaction(
+                user=visitor,
+                target_user=profile_owner,
+                interaction_type='profile_visit',
+                context_type='profile',
+                context_id=str(profile_owner.id),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                metadata=metadata or {}
+            )
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to track profile visit: {e}")
+            return False
+    
     def _is_celery_available(self) -> bool:
         """Check if Celery is available for async tasks."""
         try:

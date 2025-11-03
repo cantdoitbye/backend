@@ -47,3 +47,23 @@ def get_membership_for_user_in_sub_community(user_node, sub_community_node):
             return membership
     return None
 
+
+def get_community_members(community_or_subcommunity):
+    """
+    Get members from either Community or SubCommunity instances.
+    
+    This helper abstracts the difference in member relationship names
+    between Community (uses 'members') and SubCommunity (uses 'sub_community_members').
+    
+    :param community_or_subcommunity: Community or SubCommunity instance
+    :return: QuerySet of membership objects (Membership or SubCommunityMembership)
+    :raises TypeError: If the input is neither Community nor SubCommunity
+    """
+    from community.models import SubCommunity
+    
+    if isinstance(community_or_subcommunity, Community):
+        return community_or_subcommunity.members.all()
+    elif isinstance(community_or_subcommunity, SubCommunity):
+        return community_or_subcommunity.sub_community_members.all()
+    else:
+        raise TypeError(f"Expected Community or SubCommunity, got {type(community_or_subcommunity)}")

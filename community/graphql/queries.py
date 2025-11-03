@@ -1827,3 +1827,234 @@ class Query(graphene.ObjectType):
             raise Exception("Achievement not found")
         except Exception as error:
             raise Exception(str(error))
+
+    # New API: Get all communities with pagination
+    all_communities_paginated = graphene.Field(
+        'community.graphql.types.AllCommunitiesResponseType',
+        first=graphene.Int(description="Number of communities to return (limit)"),
+        skip=graphene.Int(description="Number of communities to skip (offset)"),
+        search=graphene.String(description="Search term to filter communities by name or description")
+    )
+
+    @handle_graphql_community_errors
+    @login_required
+    def resolve_all_communities_paginated(self, info, first=None, skip=None, search=None):
+        """Retrieve all communities with pagination and optional search.
+        
+        Fetches all communities in the system with support for pagination and search functionality.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            first (int, optional): Number of communities to return (limit)
+            skip (int, optional): Number of communities to skip (offset)
+            search (str, optional): Search term to filter communities by name or description
+            
+        Returns:
+            AllCommunitiesResponseType: Paginated response with communities list and total count
+            
+        Business Logic:
+            - Returns all communities in the system
+            - Supports case-insensitive search across community name and description
+            - Implements pagination with first (limit) and skip (offset)
+            - Results are ordered by community creation date (newest first)
+        """
+        from neomodel import db
+        
+        # Base query
+        base_query = """
+        MATCH (c:Community)
+        """
+        
+        # Add search filter if provided
+        search_filter = """
+        WHERE toLower(c.name) CONTAINS toLower($search) OR toLower(c.description) CONTAINS toLower($search)
+        """ if search else ""
+        
+        # Query for total count
+        count_query = base_query + search_filter + """
+        RETURN count(c) as total
+        """
+        
+        # Query for paginated results
+        data_query = base_query + search_filter + """
+        WITH c, count{(c)<-[:MEMBEROF]-(:Membership)} as member_count,
+             EXISTS((c)<-[:MEMBEROF]-(:Membership {is_leader: true})) as has_leader
+        RETURN c, member_count, has_leader
+        ORDER BY c.created_date DESC
+        """
+        
+        # Add pagination to data query
+        if skip:
+            data_query += f" SKIP {skip}"
+        if first:
+            data_query += f" LIMIT {first}"
+        
+        # Prepare parameters
+        params = {}
+        if search:
+            params['search'] = search
+        
+        # Execute count query
+        count_results, _ = db.cypher_query(count_query, params)
+        total_count = count_results[0][0] if count_results else 0
+        
+        # Execute data query
+        data_results, _ = db.cypher_query(data_query, params)
+        
+        # Convert results to CommunityType objects efficiently
+        communities = []
+        for result in data_results:
+            community_data = result[0]
+            member_count = result[1]
+            has_leader = result[2]
+            
+            # Create CommunityType directly without expensive operations
+            community_type = Query._create_lightweight_community_type(
+                community_data, member_count, has_leader
+            )
+            communities.append(community_type)
+        
+        # Return paginated response with total count
+        from community.graphql.types import AllCommunitiesResponseType
+        return AllCommunitiesResponseType.create(
+            communities=communities,
+            total=total_count
+        )
+
+    # New API: Get all subcommunities with pagination
+    all_subcommunities_paginated = graphene.Field(
+        'community.graphql.types.AllSubCommunitiesResponseType',
+        first=graphene.Int(description="Number of subcommunities to return (limit)"),
+        skip=graphene.Int(description="Number of subcommunities to skip (offset)"),
+        search=graphene.String(description="Search term to filter subcommunities by name or description")
+    )
+
+    @handle_graphql_community_errors
+    @login_required
+    def resolve_all_subcommunities_paginated(self, info, first=None, skip=None, search=None):
+        """Retrieve all subcommunities with pagination and optional search.
+        
+        Fetches all subcommunities in the system with support for pagination and search functionality.
+        
+        Args:
+            info: GraphQL resolve info containing request context
+            first (int, optional): Number of subcommunities to return (limit)
+            skip (int, optional): Number of subcommunities to skip (offset)
+            search (str, optional): Search term to filter subcommunities by name or description
+            
+        Returns:
+            AllSubCommunitiesResponseType: Paginated response with subcommunities list and total count
+            
+        Business Logic:
+            - Returns all subcommunities in the system
+            - Supports case-insensitive search across subcommunity name and description
+            - Implements pagination with first (limit) and skip (offset)
+            - Results are ordered by subcommunity creation date (newest first)
+        """
+        from neomodel import db
+        
+        # Base query
+        base_query = """
+        MATCH (sc:SubCommunity)
+        """
+        
+        # Add search filter if provided
+        search_filter = """
+        WHERE toLower(sc.name) CONTAINS toLower($search) OR toLower(sc.description) CONTAINS toLower($search)
+        """ if search else ""
+        
+        # Query for total count
+        count_query = base_query + search_filter + """
+        RETURN count(sc) as total
+        """
+        
+        # Query for paginated results
+        data_query = base_query + search_filter + """
+        WITH sc, count{(sc)<-[:SUB_MEMBEROF]-(:SubCommunityMembership)} as member_count
+        RETURN sc, member_count
+        ORDER BY sc.created_date DESC
+        """
+        
+        # Add pagination to data query
+        if skip:
+            data_query += f" SKIP {skip}"
+        if first:
+            data_query += f" LIMIT {first}"
+        
+        # Prepare parameters
+        params = {}
+        if search:
+            params['search'] = search
+        
+        # Execute count query
+        count_results, _ = db.cypher_query(count_query, params)
+        total_count = count_results[0][0] if count_results else 0
+        
+        # Execute data query
+        data_results, _ = db.cypher_query(data_query, params)
+        
+        # Convert results to SubCommunityType objects efficiently
+        subcommunities = []
+        for result in data_results:
+            subcommunity_data = result[0]
+            member_count = result[1]
+            
+            # Create SubCommunityType directly without expensive operations
+            subcommunity_type = Query._create_lightweight_subcommunity_type(
+                subcommunity_data, member_count
+            )
+            subcommunities.append(subcommunity_type)
+        
+        # Return paginated response with total count
+        from community.graphql.types import AllSubCommunitiesResponseType
+        return AllSubCommunitiesResponseType.create(
+            subcommunities=subcommunities,
+            total=total_count
+        )
+
+    @staticmethod
+    def _create_lightweight_subcommunity_type(subcommunity_data, member_count):
+        """Create a lightweight SubCommunityType object without expensive operations."""
+        from auth_manager.Utils import generate_presigned_url
+        from datetime import datetime
+        
+        # Generate file URLs only if needed
+        group_icon_url = None
+        if subcommunity_data.get('group_icon_id'):
+            try:
+                file_info = generate_presigned_url.generate_file_info(subcommunity_data['group_icon_id'])
+                if file_info and file_info.get('url'):
+                    group_icon_url = FileDetailType(**file_info)
+            except Exception:
+                pass
+        
+        cover_image_url = None
+        if subcommunity_data.get('cover_image_id'):
+            try:
+                file_info = generate_presigned_url.generate_file_info(subcommunity_data['cover_image_id'])
+                if file_info and file_info.get('url'):
+                    cover_image_url = FileDetailType(**file_info)
+            except Exception:
+                pass
+        
+        return SubCommunityType(
+            uid=subcommunity_data.get('uid'),
+            name=subcommunity_data.get('name'),
+            description=subcommunity_data.get('description'),
+            sub_community_type=subcommunity_data.get('sub_community_type'),
+            sub_community_group_type=subcommunity_data.get('sub_community_group_type'),
+            sub_community_circle=subcommunity_data.get('sub_community_circle'),
+            room_id=subcommunity_data.get('room_id'),
+            created_date=datetime.fromtimestamp(subcommunity_data.get('created_date')) if subcommunity_data.get('created_date') else None,
+            updated_date=datetime.fromtimestamp(subcommunity_data.get('updated_date')) if subcommunity_data.get('updated_date') else None,
+            number_of_members=member_count,
+            group_invite_link=subcommunity_data.get('group_invite_link'),
+            group_icon_id=subcommunity_data.get('group_icon_id'),
+            group_icon_url=group_icon_url,
+            cover_image_id=subcommunity_data.get('cover_image_id'),
+            cover_image_url=cover_image_url,
+            category=subcommunity_data.get('category'),
+            # Skip expensive operations for list view
+            created_by=None,
+            parent_community=None
+        )

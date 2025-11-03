@@ -42,6 +42,13 @@ class UserActivity(BaseActivityModel):
         ('navigation', 'Page Navigation'),
         ('error', 'Error Encountered'),
         ('feature_usage', 'Feature Usage'),
+        ('post_create', 'Post Created'),
+        ('post_update', 'Post Updated'),
+        ('story_create', 'Story Created'),
+        ('community_create', 'Community Created'),
+        ('page_view', 'Page View'),
+        ('session_data', 'Session Data'),
+        ('scroll', 'Scroll Activity'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activities')
@@ -72,6 +79,9 @@ class ContentInteraction(BaseActivityModel):
         ('comment', 'Comment'),
         ('community_post', 'Community Post'),
         ('review', 'Review'),
+        ('connection', 'Connection'),
+        ('conversation_message', 'Conversation Message'),
+        ('matrix_message', 'Matrix Message'),
     ]
     
     INTERACTION_TYPES = [
@@ -91,6 +101,7 @@ class ContentInteraction(BaseActivityModel):
         ('rate', 'Rate'),
         ('scroll_depth', 'Scroll Depth'),
         ('time_spent', 'Time Spent'),
+        ('create', 'Create'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='content_interactions')
@@ -163,6 +174,7 @@ class MediaInteraction(BaseActivityModel):
         ('document', 'Document'),
         ('gif', 'GIF'),
         ('thumbnail', 'Thumbnail'),
+        ('comment_media', 'Comment Media'),
     ]
     
     INTERACTION_TYPES = [

@@ -17,9 +17,11 @@ class Query(graphene.ObjectType):
 
    @login_required
    def resolve_conversation_byuid(self, info, conversation_uid):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
         try:
             conv = Conversation.nodes.get(uid=conversation_uid)
-            return ConversationType.from_neomodel(conv)
+            return ConversationType.from_neomodel(conv, current_user_id=user_id)
         except Conversation.DoesNotExist:
             return None
    
@@ -35,7 +37,7 @@ class Query(graphene.ObjectType):
         try:
             
             my_conversation=user_node.conversation.all()
-            return [ConversationType.from_neomodel(x) for x in my_conversation]
+            return [ConversationType.from_neomodel(x, current_user_id=user_id) for x in my_conversation]
         except Exception as e:
             raise Exception(e)
 
@@ -49,9 +51,11 @@ class Query(graphene.ObjectType):
 
    @login_required
    def resolve_conversation_message_byuid(self, info, conversation_msg_uid):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
         try:
             conv_msg = ConversationMessages.nodes.get(uid=conversation_msg_uid)
-            return ConversationMessageType.from_neomodel(conv_msg)
+            return ConversationMessageType.from_neomodel(conv_msg, current_user_id=user_id)
         except ConversationMessages.DoesNotExist:
             return None  
   
@@ -70,7 +74,7 @@ class Query(graphene.ObjectType):
             for conv in my_conversation:
                    convmsg.extend(list(conv.conv_message))
                     # Extend the reactions list with the reactions of the current message
-            return [ConversationMessageType.from_neomodel(x) for x in convmsg]
+            return [ConversationMessageType.from_neomodel(x, current_user_id=user_id) for x in convmsg]
         except Exception as e:
             raise Exception(e)
 
@@ -84,9 +88,11 @@ class Query(graphene.ObjectType):
     
    @login_required
    def resolve_reactions_byuid(self, info, conversation_msg_uid):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
         conv_msg = ConversationMessages.nodes.get(uid=conversation_msg_uid)
         all_reaction = list(conv_msg.reaction.all())
-        return [ReactionType.from_neomodel(reaction) for reaction in all_reaction]
+        return [ReactionType.from_neomodel(reaction, current_user_id=user_id) for reaction in all_reaction]
    
 
    my_conv_reaction=graphene.List(ReactionType)
@@ -105,7 +111,7 @@ class Query(graphene.ObjectType):
                for message in conv.conv_message.all():
                    reactions.extend(list(message.reaction))
                     # Extend the reactions list with the reactions of the current message
-            return [ReactionType.from_neomodel(x) for x in reactions]
+            return [ReactionType.from_neomodel(x, current_user_id=user_id) for x in reactions]
         except Exception as e:
             raise Exception(e)
         

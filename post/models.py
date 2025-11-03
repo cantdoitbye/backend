@@ -21,6 +21,9 @@ from django.db import models
 from django.utils import timezone
 from django.contrib.auth.models import User
 from vibe_manager.models import IndividualVibe
+from django.contrib.contenttypes.models import ContentType
+
+
 
 
 class Post(DjangoNode, StructuredNode):
@@ -448,6 +451,49 @@ class PostView(DjangoNode, StructuredNode):
 
     def __str__(self):
         return ""
+    
+
+
+class UserMention(DjangoNode, StructuredNode):
+    """
+    Generic model for tracking user mentions/tags across all content types.
+    
+    This model can handle mentions in posts, community posts, comments, stories, 
+    bios, and any future content types using a generic approach.
+    """
+    uid = UniqueIdProperty()
+    mentioned_at = DateTimeProperty(default_now=True)
+    is_active = BooleanProperty(default=True)
+    
+    # Generic content identification
+    content_type = StringProperty(required=True)  # 'post', 'community_post', 'comment', 'story', 'bio', etc.
+    content_uid = StringProperty(required=True)   # UID of the content being mentioned in
+    
+    # Optional: specific context within content
+    mention_context = StringProperty()  # 'description', 'title', 'body', etc.
+    
+    # Relationships
+    mentioned_user = RelationshipTo('Users', 'MENTIONED_USER')
+    mentioned_by = RelationshipTo('Users', 'MENTIONED_BY')
+    
+    # Optional: keep specific relationships for common queries (indexes)
+    post = RelationshipTo('Post', 'MENTIONED_IN_POST')
+    community_post = RelationshipTo('community.models.CommunityPost', 'MENTIONED_IN_COMMUNITY_POST')
+    comment = RelationshipTo('Comment', 'MENTIONED_IN_COMMENT')
+    story = RelationshipTo('story.models.Story', 'MENTIONED_IN_STORY')
+    community_description = RelationshipTo('community.models.Community', 'MENTIONED_IN_COMMUNITY_DESCRIPTION')
+
+
+    
+    def save(self, *args, **kwargs):
+        self.mentioned_at = datetime.now()
+        super().save(*args, **kwargs)
+        
+    class Meta:
+        app_label = 'post'
+        
+    def __str__(self):
+        return f"Mention: {self.mentioned_user} by {self.mentioned_by} in {self.content_type}:{self.content_uid}"    
 
 
 # Django model for aggregated reaction analytics (Note: Review and Optimization needed)
@@ -534,3 +580,26 @@ class PostReactionManager(models.Model):
         Used by: Analytics queries, reaction display components
         """
         return self.post_vibe
+
+    def update_reaction(self, old_vibes_name, new_vibes_name, old_score, new_score):
+        """
+        Update an existing reaction from one vibe type to another.
+        
+        This handles the case where a user changes their reaction. It removes the
+        old reaction's contribution and adds the new one, ensuring analytics are correct.
+        """
+        # Remove the old reaction
+        for reaction in self.post_vibe:
+            if reaction['vibes_name'] == old_vibes_name:
+                if reaction['vibes_count'] > 0:
+                    # Decrement count and recalculate score
+                    total_score = reaction['cumulative_vibe_score'] * reaction['vibes_count'] - old_score
+                    reaction['vibes_count'] -= 1
+                    if reaction['vibes_count'] > 0:
+                        reaction['cumulative_vibe_score'] = total_score / reaction['vibes_count']
+                    else:
+                        reaction['cumulative_vibe_score'] = 0
+                break
+        
+        # Add the new reaction
+        self.add_reaction(new_vibes_name, new_score)

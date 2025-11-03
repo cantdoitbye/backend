@@ -196,6 +196,72 @@ class Query(graphene.ObjectType):
         # print(info.context.user)
         return [UserType.from_neomodel(user) for user in Users.nodes.all()]
     
+    bot_users = graphene.List(
+        UserInfoType,
+        first=graphene.Int(description="Number of bot users to return (limit)"),
+        skip=graphene.Int(description="Number of bot users to skip (offset)"),
+        search=graphene.String(description="Search term to filter bot users by firstName, lastName, username, or email")
+    )
+    
+    def resolve_bot_users(self, info, first=None, skip=None, search=None):
+        """
+        Retrieves all bot users in the system.
+        
+        Returns a filtered list of users where is_bot=True. Supports pagination
+        and search functionality. Requires user authentication.
+        
+        Args:
+            info: GraphQL resolve info context
+            first (int, optional): Number of bot users to return (limit)
+            skip (int, optional): Number of bot users to skip (offset)
+            search (str, optional): Search term to filter by firstName, lastName, username, or email
+        
+        Returns:
+            List[UserInfoType]: List of bot user objects
+        
+        Raises:
+            GraphQLError: If user is not authenticated
+        
+        Note:
+            - Requires login authentication
+            - Filters users where is_bot=True
+            - Supports pagination with first/skip parameters
+            - Supports search across name, username, and email fields
+        """
+        # Start with bot users filter
+        query_parts = ["MATCH (u:Users) WHERE u.is_bot = true"]
+        params = {}
+        
+        # Add search filter if provided
+        if search:
+            search_conditions = [
+                "toLower(u.first_name) CONTAINS toLower($search)",
+                "toLower(u.last_name) CONTAINS toLower($search)", 
+                "toLower(u.username) CONTAINS toLower($search)",
+                "toLower(u.email) CONTAINS toLower($search)"
+            ]
+            query_parts.append(f"AND ({' OR '.join(search_conditions)})")
+            params['search'] = search
+        
+        # Add return clause
+        query_parts.append("RETURN u ORDER BY u.created_at DESC")
+        
+        # Add pagination
+        if skip is not None:
+            query_parts.append(f"SKIP {skip}")
+        if first is not None:
+            query_parts.append(f"LIMIT {first}")
+        
+        query = " ".join(query_parts)
+        results, _ = db.cypher_query(query, params)
+        
+        bot_users = []
+        for row in results:
+            user_node = Users.inflate(row[0])
+            bot_users.append(UserInfoType.from_neomodel(user_node))
+        
+        return bot_users
+    
     get_invitee_details = graphene.Field(GetInviteDetails, invite_token=graphene.String(required=True))
 
     def resolve_get_invitee_details(self, info, invite_token):
@@ -315,12 +381,49 @@ class Query(graphene.ObjectType):
             - Uses error handling decorator
             - Returns profile data for viewing other users
         """
-        profile = Profile.nodes.get(user_id=user_id)
+        target_user_id = user_id  # Store the target user ID before it gets overwritten
+        profile = Profile.nodes.get(user_id=target_user_id)
         payload = info.context.payload
-        # print(info.context)
-        user_id = payload.get('user_id')
-        user_node=Users.nodes.get(user_id=user_id)
-        return ProfileDetailsVibeType.from_neomodel(profile,user_node)
+        visitor_user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=visitor_user_id)
+        
+        # Track profile visit activity
+        try:
+            from user_activity.services.activity_service import ActivityService
+            from django.contrib.auth.models import User
+            
+            # Only track if visitor is viewing someone else's profile
+            if visitor_user_id != target_user_id:
+                # Get Django users for activity tracking
+                visitor_django_user = User.objects.get(id=visitor_user_id)
+                target_django_user = User.objects.get(id=target_user_id)
+                
+                activity_service = ActivityService()
+                
+                # Extract request metadata
+                request = info.context
+                ip_address = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] if request.META.get('HTTP_X_FORWARDED_FOR') else request.META.get('REMOTE_ADDR')
+                user_agent = request.META.get('HTTP_USER_AGENT', '')
+                
+                # Track profile visit
+                activity_service.track_profile_visit(
+                    visitor=visitor_django_user,
+                    profile_owner=target_django_user,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    metadata={
+                        'profile_user_id': target_user_id,
+                        'visitor_user_id': visitor_user_id,
+                        'query_type': 'profile_by_user_id'
+                    }
+                )
+        except Exception as e:
+            # Don't fail the query if activity tracking fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to track profile visit activity: {e}")
+        
+        return ProfileDetailsVibeType.from_neomodel(profile, user_node)
         
         
         
@@ -375,6 +478,36 @@ class Query(graphene.ObjectType):
         post_count = results[0][9] if len(results[0]) > 9 and results[0][9] is not None else 0
         community_count = results[0][10] if len(results[0]) > 10 and results[0][10] is not None else 0
         connection_count = results[0][11] if len(results[0]) > 11 and results[0][11] is not None else 0
+
+        # Fallback: If user_node is None from Cypher query, get it from the Users model directly
+        if not user_node:
+            try:
+                from auth_manager.models import Users
+                user_obj = Users.nodes.get(user_id=user_id)
+                print(f"DEBUG: Fallback activated for user_id {user_id}, found user {user_obj.username}")
+                # Convert to dict format expected by ProfileInfoType.from_neomodel
+                user_node = {
+                    'uid': user_obj.uid,
+                    'user_id': user_obj.user_id,
+                    'username': user_obj.username,
+                    'email': user_obj.email,
+                    'first_name': user_obj.first_name if user_obj.first_name else '',
+                    'last_name': user_obj.last_name if user_obj.last_name else '',
+                    'user_type': user_obj.user_type,
+                    'created_at': user_obj.created_at.timestamp() if hasattr(user_obj.created_at, 'timestamp') and user_obj.created_at else None,
+                    'updated_at': user_obj.updated_at.timestamp() if hasattr(user_obj.updated_at, 'timestamp') and user_obj.updated_at else None,
+                    'created_by': user_obj.created_by,
+                    'updated_by': user_obj.updated_by,
+                    'is_bot': user_obj.is_bot,
+                    'persona': user_obj.persona,
+                }
+                print(f"DEBUG: user_node created with first_name={user_node['first_name']}, last_name={user_node['last_name']}")
+            except Exception as e:
+                print(f"ERROR: Could not fetch user for profile {profile.uid}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                user_node = None
+
 
         return ProfileInfoType.from_neomodel(profile_node,user_node,onboardingStatus_node,score_node,interest_node,achievement_node,education_node,skill_node,experience_node,post_count, community_count, connection_count)
         
@@ -1959,288 +2092,3 @@ class Query(graphene.ObjectType):
         
         return [UserMentionType(**user) for user in users]
 
-class QueryV2(graphene.ObjectType):
-    """
-    Version 2 of the GraphQL Query class.
-    
-    Provides enhanced query resolvers and additional functionality
-    for the GraphQL API, including invite management and user queries.
-    
-    Note:
-        - Inherits from graphene.ObjectType
-        - Includes both new resolvers and inherited ones from Query class
-        - Provides versioned API functionality
-    """
-
-    all_users = graphene.List(UserInfoType)
-    
-    @login_required
-    def resolve_all_users(self, info, **kwargs):
-        """
-        Retrieves all users with enhanced user information (V2).
-        
-        Returns a limited list of users with extended user information
-        for administrative and discovery purposes.
-        
-        Args:
-            info: GraphQL resolve info context
-            **kwargs: Additional keyword arguments
-        
-        Returns:
-            List[UserInfoType]: List of enhanced user info objects (limited to 50)
-        
-        Raises:
-            GraphQLError: If user not authenticated
-        
-        Note:
-            - Requires login authentication
-            - Returns enhanced UserInfoType instead of basic UserType
-            - Limited to first 50 users for performance
-        """
-        # print(info.context.user)
-        return [UserInfoType.from_neomodel(user) for user in Users.nodes.all()[:50]]
-
-    get_invitee_details = graphene.Field(GetInviteDetails, invite_token=graphene.String(required=True))
-
-    def resolve_get_invitee_details(self, info, invite_token):
-        """
-        Retrieves invite details using an invite token.
-        
-        Validates and returns information about an invitation,
-        including expiry status and invite validity.
-        
-        Args:
-            info: GraphQL resolve info context
-            invite_token (str): Invitation token to validate (required)
-        
-        Returns:
-            GetInviteDetails: Object containing invite info, success status, and message
-        
-        Raises:
-            GraphQLError: If invite token is invalid
-        
-        Note:
-            - No authentication required (public invite validation)
-            - Checks invite existence, deletion status, and expiry
-            - Returns structured response with success/error information
-        """
-        try:
-            # Check if the invite exists
-            invite = Invite.objects.filter(invite_token=invite_token, is_deleted=False).first()
-
-            if not invite:
-                raise GraphQLError("Invalid invite token")
-
-            # Check if the invite is expired
-            if invite.expiry_date < timezone.now():
-                return GetInviteDetails(
-                    invite=None,
-                    success=False,
-                    message="This invite link has expired."
-                )
-
-            # Return invite details if valid
-            return GetInviteDetails(
-                invite=invite,
-                success=True,
-                message="Invite details retrieved successfully."
-            )
-
-        except Exception as error:
-            return GetInviteDetails(
-                invite=None,
-                success=False,
-                message=str(error)
-            )
-        
-
-    search_matrix_username = Query.search_matrix_username
-    resolve_search_matrix_username = Query.resolve_search_matrix_username
-
-    welcome_messages = Query.welcome_messages
-    resolve_welcome_messages = Query.resolve_welcome_messages
-
-    back_profile_vibe_list_by_user_uid = Query.back_profile_vibe_list_by_user_uid
-    resolve_back_profile_vibe_list_by_user_uid = Query.resolve_back_profile_vibe_list_by_user_uid
-
-    interest_lists = Query.interest_lists
-    resolve_interest_lists = Query.resolve_interest_lists
-
-    
-    my_onboarding = Query.my_onboarding
-    resolve_my_onboarding = Query.resolve_my_onboarding
-
-
-
-    profile_data_comment_by_uid = graphene.List(
-        ProfileDataCommentTypeV2, 
-        profiledata_type=ProfiledataTypeEnum(required=True), 
-        uid=graphene.String(required=True)
-    )
-
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_profile_data_comment_by_uid(self, info, profiledata_type, uid):
-        category_mapping = {
-            ProfiledataTypeEnum.SKILL: "Skill",
-            ProfiledataTypeEnum.EXPERIENCE: "Experience",
-            ProfiledataTypeEnum.EDUCATION: "Education",
-            ProfiledataTypeEnum.ACHIEVEMENT: "Achievement",
-        }
-
-        relationship_mapping = {
-            ProfiledataTypeEnum.SKILL: "HAS_SKILL",
-            ProfiledataTypeEnum.EXPERIENCE: "HAS_EXPERIENCE",
-            ProfiledataTypeEnum.EDUCATION: "HAS_EDUCATION",
-            ProfiledataTypeEnum.ACHIEVEMENT: "HAS_ACHIEVEMENT",
-        }
-
-        category = category_mapping.get(profiledata_type)
-        relationship = relationship_mapping.get(profiledata_type)
-        
-        if not category or not relationship:
-            raise GraphQLError("Invalid profiledata_type", extensions={"code": "NOT_FOUND", "status_code": 400}, path=["profile_data_comment_by_uid"])
-
-        # Use the query from profile_details_query module
-        query = profile_details_query.get_profile_data_comments_query(relationship, category)
-        
-        results, _ = db.cypher_query(query, {"uid": uid})
-        
-        if not results:
-            raise GraphQLError(f"No data found for the provided UID: {uid}", extensions={"code": "NOT_FOUND", "status_code": 400}, path=["profile_data_comment_by_uid"])
-        
-        return [
-            ProfileDataCommentTypeV2.from_neomodel(row[0], row[1], row[2])
-            for row in results if row
-        ]
-        
-
-    profile_data_vibes_by_uid = graphene.List(
-        ProfileDataReactionType, 
-        profiledata_type=ProfiledataTypeEnum(required=True), 
-        uid=graphene.String(required=True)
-    )
-
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_profile_data_vibes_by_uid(self, info, profiledata_type, uid):
-        model_mapping = {
-            ProfiledataTypeEnum.SKILL: Skill,
-            ProfiledataTypeEnum.EXPERIENCE: Experience,
-            ProfiledataTypeEnum.EDUCATION: Education,  # Assuming you have an EducationV2 model
-            ProfiledataTypeEnum.ACHIEVEMENT: Achievement,  # Assuming you have an AchievementV2 model
-        }
-
-        model = model_mapping.get(profiledata_type)
-        if not model:
-            raise ValueError("Invalid profiledata_type")
-
-        profile_data = model.nodes.get(uid=uid)
-        vibe_node = profile_data.like.all()
-        vibe_detail = vibe_node[:10]
-        vibes = list(vibe_detail)
-
-        return [ProfileDataReactionType.from_neomodel(vibe) for vibe in vibes]
-    
-    
-    profile_data_vibes_analytics_by_uid = graphene.List(
-        ProfileDataVibeListType, 
-        profiledata_type=ProfiledataTypeEnum(required=True), 
-        uid=graphene.String(required=True)
-    )
-
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_profile_data_vibes_analytics_by_uid(self, info, profiledata_type, uid):
-        category_mapping = {
-            ProfiledataTypeEnum.SKILL: "skill" ,
-            ProfiledataTypeEnum.EXPERIENCE: "experience",
-            ProfiledataTypeEnum.EDUCATION: "education",  
-            ProfiledataTypeEnum.ACHIEVEMENT: "achievement",  
-        }
-
-        category = category_mapping.get(profiledata_type)
-        if not category:
-            raise GraphQLError("Invalid profiledata_type")
-        
-        model_mapping = {
-            ProfiledataTypeEnum.SKILL: Skill,
-            ProfiledataTypeEnum.EXPERIENCE: Experience,
-            ProfiledataTypeEnum.EDUCATION: Education,  # Assuming you have an EducationV2 model
-            ProfiledataTypeEnum.ACHIEVEMENT: Achievement,  # Assuming you have an AchievementV2 model
-        }
-
-        model = model_mapping.get(profiledata_type)
-        if not model:
-            raise ValueError("Invalid profiledata_type")
-
-        profile_data = model.nodes.get(uid=uid)
-        
-        return ProfileDataVibeListType.from_neomodel(uid,category)
-    
-    
-
-    profile_by_user_id = graphene.Field(UserProfileDataType, user_id=graphene.String(required=True))
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_profile_by_user_id(self, info, user_id):
-            
-            profile = Profile.nodes.get(user_id=user_id)
-            payload = info.context.payload
-            # print(info.context)
-            user_id = payload.get('user_id')
-            user_node=Users.nodes.get(user_id=user_id)
-            return UserProfileDataType.from_neomodel(profile)
-
-    my_profile = graphene.Field(UserProfileDataType)
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_my_profile(self, info):
-            payload = info.context.payload
-            user_id = payload.get('user_id')
-        
-            profile = Profile.nodes.get(user_id=user_id)
-            user_node=Users.nodes.get(user_id=user_id)
-            
-            return UserProfileDataType.from_neomodel(profile)
-    
-
-    get_states_by_country = graphene.List(StateType, country_id=graphene.Int(required=True))
-    get_all_states = graphene.List(StateType)
-    get_cities_by_state = graphene.List(CityType, state_id=graphene.Int(required=True))
-
-    def resolve_get_states_by_country(self, info, country_id):
-        return StateInfo.objects.filter(country_id=country_id)
-
-    def resolve_get_all_states(self, info):
-        return StateInfo.objects.all()
-
-    def resolve_get_cities_by_state(self, info, state_id):
-        return CityInfo.objects.filter(state_id=state_id)
-    
-    get_mutual_connections = graphene.List(UserType, user_id=graphene.String(required=True))
-    @handle_graphql_auth_manager_errors
-    @login_required
-    def resolve_get_mutual_connections(self, info, user_id):
-        payload = info.context.payload
-        logged_in_user_id = payload.get('user_id')
-
-        # Corrected Cypher query to find mutual connections
-        query = """
-        MATCH (u1:Users {user_id: $user_id1})-[:HAS_CONNECTION]->(c1:ConnectionV2)-[:HAS_RECIEVED_CONNECTION]->(mutual:Users)
-        MATCH (u2:Users {user_id: $user_id2})-[:HAS_CONNECTION]->(c2:ConnectionV2)-[:HAS_RECIEVED_CONNECTION]->(mutual)
-        WHERE c1.connection_status = 'Accepted' AND c2.connection_status = 'Accepted'
-        RETURN mutual
-        """
-        params = {
-            "user_id1": logged_in_user_id,
-            "user_id2": user_id
-        }
-
-        results, _ = db.cypher_query(query, params)
-        mutual_connections = [Users.inflate(row[0]) for row in results]
-        
-        return [UserType.from_neomodel(user) for user in mutual_connections]
-        
-        
-    

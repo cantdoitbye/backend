@@ -4,7 +4,7 @@ from auth_manager.validators import custom_graphql_validator
 
 class CreateConnectionInput(graphene.InputObjectType):
     receiver_uid = graphene.String(required=True)
-    circle=CircleTypeEnum(required=True)
+    circle=CircleTypeEnum()
     relation=graphene.String(description="⚠️ Deprecated! Use sub_relation instead.")
     sub_relation=custom_graphql_validator.String.add_option("subRelation", "CreateConnection")()
 
