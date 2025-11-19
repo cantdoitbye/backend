@@ -21,6 +21,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG') == 'True'
 IS_LOCAL_STATIC_STORAGE = os.getenv('IS_LOCAL_STATIC_STORAGE') == 'True'
 ENV = os.getenv('ENV')
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
 
 
 ALLOWED_HOSTS = ["*"]
@@ -58,7 +59,6 @@ INSTALLED_APPS = [
     'agentic',
     'user_activity',
     'analytics',
-    'truststream',
     'notification',
 
 

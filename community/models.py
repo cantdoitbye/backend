@@ -60,9 +60,23 @@ class Community(DjangoNode, StructuredNode):
     # Core identification and metadata fields
     uid = UniqueIdProperty()                    # Unique identifier for the community across the platform
     name = StringProperty(required=True)        # Display name of the community (user-facing)
+    username = StringProperty(unique_index=True)  # Unique handle/username for the community (V2)
     description = StringProperty()              # Detailed description of community purpose and guidelines
     community_type = StringProperty()           # Additional type classification beyond GROUP_CHOICES
     community_circle = StringProperty(choices=CIRCLE_CHOICES.items())  # Privacy/visibility level
+    
+    # Location fields (V2)
+    city = StringProperty()                     # City where community is based
+    state = StringProperty()                    # State/province where community is based
+    country = StringProperty()                  # Country where community is based
+    address = StringProperty()                  # Full address of the community
+    
+    # Contact information (V2)
+    website_url = StringProperty()              # Community website URL
+    contact_email = StringProperty()            # Contact email for the community
+    
+    # Community settings (V2)
+    enable_comments = BooleanProperty(default=True)  # Allow members to comment on posts
     
     # External system integration
     room_id = StringProperty()                  # Matrix chat room ID for real-time messaging integration
@@ -891,6 +905,7 @@ class CommunityGoal(DjangoNode,StructuredNode):
     created_by = RelationshipTo('Users', 'CREATED_BY')             # User who created this goal
     community = RelationshipTo('Community', 'GOAL_FOR')           # Community this goal belongs to (optional)
     subcommunity = RelationshipTo('SubCommunity', 'GOAL_FOR')     # Subcommunity this goal belongs to (optional)
+    vibe_reactions = RelationshipTo('CommunityContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     timestamp = DateTimeProperty(default_now=True)                # When the goal was created
     is_deleted = BooleanProperty(default=False)                   # Soft deletion flag
 
@@ -947,6 +962,7 @@ class CommunityActivity(DjangoNode, StructuredNode):
     created_by = RelationshipTo('Users', 'CREATED_BY')             # User who created this activity
     community = RelationshipTo('Community', 'ACTIVITY_FOR')       # Community this activity belongs to (optional)
     subcommunity = RelationshipTo('SubCommunity', 'ACTIVITY_FOR') # Subcommunity this activity belongs to (optional)
+    vibe_reactions = RelationshipTo('CommunityContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     date = DateTimeProperty()                                      # Scheduled date and time for the activity
     is_deleted = BooleanProperty(default=False)                   # Soft deletion flag
 
@@ -1003,6 +1019,7 @@ class CommunityAffiliation(DjangoNode, StructuredNode):
     created_by = RelationshipTo('Users', 'CREATED_BY')             # User who recorded this affiliation
     community = RelationshipTo('Community', 'AFFILIATION_FOR')    # Community this affiliation belongs to (optional)
     subcommunity = RelationshipTo('SubCommunity', 'AFFILIATION_FOR') # Subcommunity this affiliation belongs to (optional)
+    vibe_reactions = RelationshipTo('CommunityContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     timestamp = DateTimeProperty(default_now=True)                # When the affiliation record was created
     is_deleted = BooleanProperty(default=False)                   # Soft deletion flag
 
@@ -1058,6 +1075,7 @@ class CommunityAchievement(DjangoNode, StructuredNode):
     created_by = RelationshipTo('Users', 'CREATED_BY')             # User who recorded this achievement
     community = RelationshipTo('Community', 'ACHIEVEMENT_FOR')    # Community this achievement belongs to (optional)
     subcommunity = RelationshipTo('SubCommunity', 'ACHIEVEMENT_FOR') # Subcommunity this achievement belongs to (optional)
+    vibe_reactions = RelationshipTo('CommunityContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     timestamp = DateTimeProperty(default_now=True)                # When the achievement record was created
     is_deleted = BooleanProperty(default=False)                   # Soft deletion flag
 
@@ -1072,6 +1090,63 @@ class CommunityAchievement(DjangoNode, StructuredNode):
             str: The achievement entity name
         """
         return self.entity
+
+
+class CommunityContentVibe(DjangoNode, StructuredNode):
+    """
+    Neo4j-based model for storing vibe reactions to community content.
+    
+    This model represents vibe reactions using Neo4j graph database,
+    similar to ProfileContentVibe but for community content (achievements, activities, goals, affiliations).
+    Integrates with the IndividualVibe system from PostgreSQL for standardized vibe metadata.
+    
+    Business Logic:
+    - Stores vibe reaction data in Neo4j graph structure
+    - Each reaction references an IndividualVibe for metadata (weightages, name)
+    - Supports relationships to multiple community content types
+    - Intensity range: 1.0 to 5.0 for granular reactions
+    - Only one active vibe per user per content item (updates replace)
+    - Used for user score calculations via VibeUtils
+    
+    Use Cases:
+    - User engagement and endorsement of community content
+    - Community content validation and credibility
+    - Vibe-based scoring and reputation systems
+    - Community content popularity tracking
+    - Analytics and recommendation algorithms
+    """
+    uid = UniqueIdProperty()  # Unique identifier
+    
+    # Content relationships (one will be active per vibe)
+    community_achievement = RelationshipFrom('CommunityAchievement', 'HAS_VIBE_REACTION')  # Related achievement
+    community_activity = RelationshipFrom('CommunityActivity', 'HAS_VIBE_REACTION')  # Related activity
+    community_goal = RelationshipFrom('CommunityGoal', 'HAS_VIBE_REACTION')  # Related goal
+    community_affiliation = RelationshipFrom('CommunityAffiliation', 'HAS_VIBE_REACTION')  # Related affiliation
+    
+    # User relationship
+    reacted_by = RelationshipTo('Users', 'REACTED_BY')  # User who sent the vibe
+    
+    # Vibe data from PostgreSQL IndividualVibe model
+    individual_vibe_id = IntegerProperty()  # References IndividualVibe.id
+    vibe_name = StringProperty(required=True)  # From IndividualVibe.name_of_vibe
+    vibe_intensity = FloatProperty(required=True)  # User's intensity selection (1.0-5.0)
+    
+    # Metadata
+    reaction_type = StringProperty(default="vibe")  # Type of reaction
+    timestamp = DateTimeProperty(default_now=True)  # Reaction timestamp
+    is_active = BooleanProperty(default=True)  # Active status flag
+    
+    def save(self, *args, **kwargs):
+        """Override save to ensure timestamp is updated."""
+        self.timestamp = datetime.now()
+        super().save(*args, **kwargs)
+    
+    class Meta:
+        app_label = 'community'
+    
+    def __str__(self):
+        """Return vibe name and intensity for string representation."""
+        return f"{self.vibe_name} - {self.vibe_intensity}"
     
 
 class CommunityRoleManager(models.Model):
@@ -1239,10 +1314,25 @@ class SubCommunity(DjangoNode, StructuredNode):
 
     uid = UniqueIdProperty()  # Unique identifier for the sub-community
     name = StringProperty(required=True)  # Name of the sub-community
+    username = StringProperty(unique_index=True)  # Unique handle/username for the sub-community (V2)
     description = StringProperty()  # Detailed description of the sub-community's purpose
     sub_community_type = StringProperty()  # Type classification of the sub-community
     sub_community_group_type = StringProperty()  # Group type for organizational purposes
     sub_community_circle = StringProperty(choices=CIRCLE_CHOICES.items())  # Access level circle
+    
+    # Location fields (V2)
+    city = StringProperty()  # City where sub-community is based
+    state = StringProperty()  # State/province where sub-community is based
+    country = StringProperty()  # Country where sub-community is based
+    address = StringProperty()  # Full address of the sub-community
+    
+    # Contact information (V2)
+    website_url = StringProperty()  # Sub-community website URL
+    contact_email = StringProperty()  # Contact email for the sub-community
+    
+    # Sub-community settings (V2)
+    enable_comments = BooleanProperty(default=True)  # Allow members to comment on posts
+    
     room_id = StringProperty()  # Associated chat room identifier
     created_date = DateTimeProperty(default_now=True)  # Timestamp of sub-community creation
     updated_date = DateTimeProperty(default_now=True)  # Timestamp of last update

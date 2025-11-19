@@ -1117,6 +1117,7 @@ class Achievement(DjangoNode,StructuredNode):
     profile = RelationshipTo('Profile', 'HAS_PROFILE')  # Associated user profile
     like= RelationshipTo('ProfileDataReaction', 'HAS_LIKE')  # Achievement reactions
     comment= RelationshipTo('ProfileDataComment', 'HAS_COMMENT')  # Achievement comments
+    vibe_reactions = RelationshipTo('ProfileContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     what = StringProperty(required=True)  # Achievement title/name
     description = StringProperty(required=True)  # Achievement description
     from_source = StringProperty(required=True)  # Achievement source/issuer
@@ -1162,6 +1163,7 @@ class Education(DjangoNode,StructuredNode):
     profile = RelationshipTo('Profile', 'HAS_PROFILE')  # Associated user profile
     like= RelationshipTo('ProfileDataReaction', 'HAS_LIKE')  # Education reactions
     comment= RelationshipTo('ProfileDataComment', 'HAS_COMMENT')  # Education comments
+    vibe_reactions = RelationshipTo('ProfileContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     what = StringProperty(required=True)  # Degree/qualification name
     field_of_study = StringProperty(required=True)  # Academic field/major
     from_source = StringProperty(required=True)  # Institution/school name
@@ -1207,6 +1209,7 @@ class Experience(DjangoNode,StructuredNode):
     profile = RelationshipTo('Profile', 'HAS_PROFILE')  # Associated user profile
     like= RelationshipTo('ProfileDataReaction', 'HAS_LIKE')  # Experience reactions
     comment= RelationshipTo('ProfileDataComment', 'HAS_COMMENT')  # Experience comments
+    vibe_reactions = RelationshipTo('ProfileContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     what =StringProperty(required=True)  # Job title/position name
     from_source = StringProperty(required=True)  # Company/organization name
     from_date=DateTimeProperty()  # Experience start date
@@ -1252,6 +1255,7 @@ class Skill(DjangoNode,StructuredNode):
     profile = RelationshipTo('Profile', 'HAS_PROFILE')  # Associated user profile
     like= RelationshipTo('ProfileDataReaction', 'HAS_LIKE')  # Skill reactions
     comment= RelationshipTo('ProfileDataComment', 'HAS_COMMENT')  # Skill comments
+    vibe_reactions = RelationshipTo('ProfileContentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions
     what = StringProperty(required=True)  # Skill name/title
     from_source = StringProperty(required=True)  # Skill source/validation authority
     from_date=DateTimeProperty()  # Skill acquisition start date
@@ -1636,3 +1640,60 @@ class ProfileDataComment(DjangoNode,StructuredNode):
     def __str__(self):
         """Return comment content preview for string representation."""
         return self.content[:50] + "..." if len(self.content) > 50 else self.content
+
+
+class ProfileContentVibe(DjangoNode, StructuredNode):
+    """
+    Neo4j-based model for storing vibe reactions to profile content.
+    
+    This model represents vibe reactions using Neo4j graph database,
+    similar to CommentVibe but for profile content (achievements, education, skills, experience).
+    Integrates with the IndividualVibe system from PostgreSQL for standardized vibe metadata.
+    
+    Business Logic:
+    - Stores vibe reaction data in Neo4j graph structure
+    - Each reaction references an IndividualVibe for metadata (weightages, name)
+    - Supports relationships to multiple profile content types
+    - Intensity range: 1.0 to 5.0 for granular reactions
+    - Only one active vibe per user per content item (updates replace)
+    - Used for user score calculations via VibeUtils
+    
+    Use Cases:
+    - User engagement and endorsement of profile content
+    - Social validation and credibility building
+    - Vibe-based scoring and reputation systems
+    - Profile content popularity tracking
+    - Analytics and recommendation algorithms
+    """
+    uid = UniqueIdProperty()  # Unique identifier
+    
+    # Content relationships (one will be active per vibe)
+    achievement = RelationshipFrom('Achievement', 'HAS_VIBE_REACTION')  # Related achievement
+    education = RelationshipFrom('Education', 'HAS_VIBE_REACTION')  # Related education
+    skill = RelationshipFrom('Skill', 'HAS_VIBE_REACTION')  # Related skill
+    experience = RelationshipFrom('Experience', 'HAS_VIBE_REACTION')  # Related experience
+    
+    # User relationship
+    reacted_by = RelationshipTo('Users', 'REACTED_BY')  # User who sent the vibe
+    
+    # Vibe data from PostgreSQL IndividualVibe model
+    individual_vibe_id = IntegerProperty()  # References IndividualVibe.id
+    vibe_name = StringProperty(required=True)  # From IndividualVibe.name_of_vibe
+    vibe_intensity = FloatProperty(required=True)  # User's intensity selection (1.0-5.0)
+    
+    # Metadata
+    reaction_type = StringProperty(default="vibe")  # Type of reaction
+    timestamp = DateTimeProperty(default_now=True)  # Reaction timestamp
+    is_active = BooleanProperty(default=True)  # Active status flag
+    
+    def save(self, *args, **kwargs):
+        """Override save to ensure timestamp is updated."""
+        self.timestamp = datetime.now()
+        super().save(*args, **kwargs)
+    
+    class Meta:
+        app_label = 'auth_manager'
+    
+    def __str__(self):
+        """Return vibe name and intensity for string representation."""
+        return f"{self.vibe_name} - {self.vibe_intensity}"

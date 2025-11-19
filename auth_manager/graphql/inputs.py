@@ -4,6 +4,7 @@ from .types import DeleteTypeEnum
 # from auth_manager.Utils.auth_manager_validation import NonSpecialCharacterString
 from auth_manager.validators import custom_graphql_validator
 from auth_manager.validators.custom_graphql_validator import CreateAchievementWhatValidator, CreateAchievementFromSourceValidator
+from auth_manager.graphql.enums.profile_content_category_enum import ProfileContentCategoryEnum
 
 class InviteTypeEnum(graphene.Enum):
     MENU = "menu"
@@ -296,6 +297,7 @@ class CreateEducationInput(graphene.InputObjectType):
     field_of_study=custom_graphql_validator.SpecialCharacterString2_50.add_option("fieldOfStudy", "CreateEducation")()
     created_on = graphene.DateTime()
     description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "CreateEducation")()
+    file_id=custom_graphql_validator.ListString.add_option("fileId", "CreateEducation")()
 
 
 class UpdateEducationInput(graphene.InputObjectType):
@@ -306,6 +308,7 @@ class UpdateEducationInput(graphene.InputObjectType):
     from_source = custom_graphql_validator.SpecialCharacterString2_100.add_option("fromSource", "UpdateEducation")()
     field_of_study=custom_graphql_validator.SpecialCharacterString2_50.add_option("fieldOfStudy", "UpdateEducation")()
     description = custom_graphql_validator.SpecialCharacterString5_200.add_option("description", "UpdateEducation")()
+    file_id=custom_graphql_validator.ListString.add_option("fileId", "UpdateEducation")()
 
 
 class CreateExperienceInput(graphene.InputObjectType):
@@ -353,3 +356,29 @@ class UpdateStoryInput(graphene.InputObjectType):
     title = custom_graphql_validator.SpecialCharacterString1_50.add_option("title", "UpdateStory")()
     content = custom_graphql_validator.SpecialCharacterString1_50.add_option("content", "UpdateStory")()
     captions = custom_graphql_validator.SpecialCharacterString1_100.add_option("captions", "UpdateStory")()
+
+class SendVibeToProfileContentInput(graphene.InputObjectType):
+    """
+    Input type for sending vibe reactions to profile content.
+    
+    This input defines the required parameters for sending a vibe reaction
+    to profile content (achievements, education, skills, experience).
+    
+    Fields:
+        content_uid: UID of the content item (achievement, education, skill, experience)
+        content_category: Category of content - DROPDOWN with options:
+            - ACHIEVEMENT: User achievements and accomplishments
+            - EDUCATION: Educational background and qualifications
+            - SKILL: User skills and competencies
+            - EXPERIENCE: Professional work experience
+        individual_vibe_id: ID of the IndividualVibe from PostgreSQL
+        vibe_intensity: Intensity of the vibe (1.0 to 5.0)
+    
+    Usage:
+        Used in SendVibeToProfileContent mutation to specify which content
+        to react to and the vibe details.
+    """
+    content_uid = custom_graphql_validator.String.add_option("contentUid", "SendVibeToProfileContent")(required=True, description="UID of the content item")
+    content_category = graphene.Field(ProfileContentCategoryEnum, required=True, description="Category of profile content (dropdown: ACHIEVEMENT, EDUCATION, SKILL, EXPERIENCE)")
+    individual_vibe_id = custom_graphql_validator.Int.add_option("individualVibeId", "SendVibeToProfileContent")(required=True, description="ID of the vibe from IndividualVibe table")
+    vibe_intensity = custom_graphql_validator.Float.add_option("vibeIntensity", "SendVibeToProfileContent")(required=True, description="Intensity of the vibe (range: 1.0 to 5.0)")

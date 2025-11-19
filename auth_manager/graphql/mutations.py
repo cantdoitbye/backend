@@ -34,6 +34,7 @@ from .messages import UserMessages,ErrorMessages
 
 from django.utils import timezone
 from django.contrib.auth.models import update_last_login,User
+from datetime import datetime
 
 from auth_manager.Utils.generate_username_suggestions import generate_username_suggestions
 from auth_manager.enums.otp_purpose_enum import OtpPurposeEnum
@@ -47,6 +48,7 @@ from msg.utils import login_user_on_matrix,update_matrix_profile
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 from auth_manager.Utils.auth_manager_decorator import handle_graphql_auth_manager_errors
 from connection.models import ConnectionV2,CircleV2
+from vibe_manager.utils import VibeUtils
 from auth_manager.services.email_template import generate_payload 
 from auth_manager.Utils.matrix_avatar_manager import set_user_avatar_and_score
 from auth_manager.redis import *
@@ -55,6 +57,39 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _parse_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        v = value.strip()
+        # Handle ISO 8601 with Z for UTC
+        if v.endswith('Z'):
+            v = v[:-1] + '+00:00'
+        
+        # Try parsing YYYY-MM-DD format first
+        if len(v) == 10 and v.count('-') == 2:
+            try:
+                return datetime.strptime(v, '%Y-%m-%d')
+            except ValueError:
+                pass # Fall through to other parsing attempts
+
+        # Try parsing full ISO 8601 format
+        try:
+            return datetime.fromisoformat(v)
+        except ValueError:
+            pass
+        
+        # Try parsing ISO 8601 without seconds but with timezone offset (e.g., YYYY-MM-DDTHH:MM+HH:MM)
+        try:
+            return datetime.fromisoformat(v + ':00')
+        except ValueError:
+            pass
+            
+        # If all attempts fail, raise an error
+        raise GraphQLError("Invalid datetime format. Must be YYYY-MM-DD or ISO 8601 (YYYY-MM-DDThh:mm:ss).")
+    raise GraphQLError("Invalid datetime value for datetime field")
 
 class UploadContactType(DjangoObjectType):
     """
@@ -3744,18 +3779,25 @@ class CreateAchievement(Mutation):
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
 
+            # Normalize/validate datetime inputs
+            
+            
+
+            created_on_val = _parse_datetime(input.get('created_on'))
+            from_date_val = _parse_datetime(input.get('from_date'))
+            to_date_val = _parse_datetime(input.get('to_date'))
+
             achievement = Achievement(
                 what=input.get('what', ''),
-                description=input.get('description', None),
+                description=input.get('description') if input.get('description') is not None else '',
                 from_source=input.get('from_source', ''),
-                created_on =input.get('created_on', ''),
+                created_on=created_on_val or datetime.now(),
                 file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
             )
-            if 'from_date' in input and input['from_date'] is not None:
-                achievement.from_date = input['from_date']
-                
-            if 'to_date' in input and input['to_date'] is not None:
-                achievement.to_date = input['to_date']
+            if from_date_val is not None:
+                achievement.from_date = from_date_val
+            if to_date_val is not None:
+                achievement.to_date = to_date_val
             achievement.save()
             achievement.profile.connect(profile)
             profile.achievement.connect(achievement)
@@ -3814,6 +3856,9 @@ class UpdateAchievement(Mutation):
             achievement = Achievement.nodes.get(uid=input.uid)
 
             for key, value in input.items():
+                # Parse datetime fields using _parse_datetime
+                if key in ['from_date', 'to_date', 'created_on'] and value is not None:
+                    value = _parse_datetime(value)
                 setattr(achievement, key, value)
 
             achievement.save()
@@ -3894,20 +3939,24 @@ class CreateEducation(Mutation):
                     valid_id=get_valid_image(id)
 
             
+            created_on_val = _parse_datetime(input.get('created_on'))
+            from_date_val = _parse_datetime(input.get('from_date'))
+            to_date_val = _parse_datetime(input.get('to_date'))
+            
             education = Education(
                     what=degree,
                     field_of_study=field_of_study,
                     from_source=school_name,
                     description=input.get('description', ''),
-                    created_on =input.get('created_on', ''),
+                    created_on = created_on_val or datetime.now(),
                     file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
                 )
             
-            if 'from_date' in input and input['from_date'] is not None:
-                education.from_date = input['from_date']
+            if from_date_val is not None:
+                education.from_date = from_date_val
                 
-            if 'to_date' in input and input['to_date'] is not None:
-                education.to_date = input['to_date']
+            if to_date_val is not None:
+                education.to_date = to_date_val
             education.save()
             education.profile.connect(profile)
             profile.education.connect(education)
@@ -3970,6 +4019,9 @@ class UpdateEducation(Mutation):
                     raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
+                # Parse datetime fields using _parse_datetime
+                if key in ['from_date', 'to_date', 'created_on'] and value is not None:
+                    value = _parse_datetime(value)
                 setattr(education, key, value)
 
             education.save()
@@ -4051,18 +4103,22 @@ class CreateExperience(Mutation):
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
 
+            created_on_val = _parse_datetime(input.get('created_on'))
+            from_date_val = _parse_datetime(input.get('from_date'))
+            to_date_val = _parse_datetime(input.get('to_date'))
+
             experience = Experience(
                 what=title,
                 description=description,
-                created_on=input.get('created_on', ''),
+                created_on=created_on_val or datetime.now(),
                 from_source=company_name,
                 file_id=input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
             )
-            if 'from_date' in input and input['from_date'] is not None:
-                experience.from_date = input['from_date']
+            if from_date_val is not None:
+                experience.from_date = from_date_val
                 
-            if 'to_date' in input and input['to_date'] is not None:
-                experience.to_date = input['to_date']
+            if to_date_val is not None:
+                experience.to_date = to_date_val
             experience.save()
             experience.profile.connect(profile)
             profile.experience.connect(experience)
@@ -4124,6 +4180,9 @@ class UpdateExperience(Mutation):
                     raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
+                # Parse datetime fields using _parse_datetime
+                if key in ['from_date', 'to_date', 'created_on'] and value is not None:
+                    value = _parse_datetime(value)
                 setattr(experience, key, value)
 
             experience.save()
@@ -4206,12 +4265,12 @@ class CreateSkill(Mutation):
                 'file_id': input.get('file_id', []) if isinstance(input.get('file_id'), list) else None,
             }
             
-            # Only add from_date and to_date if they are provided
+            # Only add from_date and to_date if they are provided, and parse them
             if 'from_date' in input and input['from_date'] is not None:
-                skill_data['from_date'] = input['from_date']
+                skill_data['from_date'] = _parse_datetime(input['from_date'])
                 
             if 'to_date' in input and input['to_date'] is not None:
-                skill_data['to_date'] = input['to_date']
+                skill_data['to_date'] = _parse_datetime(input['to_date'])
                 
             skill = Skill(**skill_data)
             skill.save()
@@ -4274,6 +4333,9 @@ class UpdateSkill(Mutation):
                     raise GraphQLError(validation_result.get('error'))
 
             for key, value in input.items():
+                # Parse datetime fields using _parse_datetime
+                if key in ['from_date', 'to_date'] and value is not None:
+                    value = _parse_datetime(value)
                 setattr(skill, key, value)
 
             skill.save()
@@ -4587,6 +4649,221 @@ class CreateVerifiedUser(Mutation):
             )
 
 
+class SendVibeToProfileContent(Mutation):
+    """
+    Sends a vibe reaction to profile content (achievement, education, skill, experience).
+    
+    This mutation allows authenticated users to send vibe reactions to profile content
+    using the IndividualVibe system for standardized vibe metadata and scoring.
+    
+    Features:
+    - Validates vibe intensity (1.0 to 5.0)
+    - Gets IndividualVibe from PostgreSQL for metadata
+    - Checks for existing vibe and updates if found (one vibe per user per content)
+    - Creates ProfileContentVibe node in Neo4j
+    - Updates reaction managers for analytics
+    - Updates user scores via VibeUtils
+    - Tracks vibe activity for analytics
+    
+    Returns:
+        success: Boolean indicating if vibe was sent successfully
+        message: Status message or error description
+        profile_content_vibe: The created or updated vibe reaction
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    profile_content_vibe = graphene.Field(ProfileContentVibeType)
+    
+    class Arguments:
+        input = SendVibeToProfileContentInput()
+    
+    @handle_graphql_auth_manager_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            # Get authenticated user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Validate vibe intensity (1.0 to 5.0)
+            if not (1.0 <= input.vibe_intensity <= 5.0):
+                return SendVibeToProfileContent(
+                    success=False,
+                    message="Vibe intensity must be between 1.0 and 5.0",
+                    profile_content_vibe=None
+                )
+            
+            try:
+                clean_intensity = round(float(input.vibe_intensity), 2)
+            except (ValueError, TypeError):
+                return SendVibeToProfileContent(
+                    success=False,
+                    message="Invalid vibe intensity format",
+                    profile_content_vibe=None
+                )
+            
+            if not (1.0 <= clean_intensity <= 5.0):
+                return SendVibeToProfileContent(
+                    success=False,
+                    message="Vibe intensity must be between 1.0 and 5.0",
+                    profile_content_vibe=None
+                )
+            
+            # Get the individual vibe from PostgreSQL
+            try:
+                individual_vibe = IndividualVibe.objects.get(id=input.individual_vibe_id)
+            except IndividualVibe.DoesNotExist:
+                return SendVibeToProfileContent(
+                    success=False,
+                    message="Invalid vibe selected",
+                    profile_content_vibe=None
+                )
+            
+            # Get the content node based on category
+            content_node = None
+            # Enum value is already a string (e.g., 'achievement', 'education')
+            category = input.content_category
+            
+            try:
+                if category == 'achievement':
+                    content_node = Achievement.nodes.get(uid=input.content_uid)
+                elif category == 'education':
+                    content_node = Education.nodes.get(uid=input.content_uid)
+                elif category == 'skill':
+                    content_node = Skill.nodes.get(uid=input.content_uid)
+                elif category == 'experience':
+                    content_node = Experience.nodes.get(uid=input.content_uid)
+                else:
+                    return SendVibeToProfileContent(
+                        success=False,
+                        message="Invalid content category. Must be achievement, education, skill, or experience.",
+                        profile_content_vibe=None
+                    )
+            except Exception as e:
+                return SendVibeToProfileContent(
+                    success=False,
+                    message=f"Content not found: {str(e)}",
+                    profile_content_vibe=None
+                )
+            
+            # Check if user has already reacted to this content with a vibe
+            existing_vibe = None
+            try:
+                query = f"""
+                MATCH (u:Users {{uid: $user_uid}})-[:REACTED_BY]-(pcv:ProfileContentVibe)<-[:HAS_VIBE_REACTION]-(content {{uid: $content_uid}})
+                WHERE pcv.is_active = true
+                RETURN pcv
+                """
+                results, _ = db.cypher_query(query, {
+                    'user_uid': user_node.uid,
+                    'content_uid': input.content_uid
+                })
+                
+                if results:
+                    # Update existing vibe instead of creating new one
+                    from auth_manager.models import ProfileContentVibe
+                    existing_vibe_node = ProfileContentVibe.inflate(results[0][0])
+                    existing_vibe_node.individual_vibe_id = input.individual_vibe_id
+                    existing_vibe_node.vibe_name = individual_vibe.name_of_vibe
+                    existing_vibe_node.vibe_intensity = clean_intensity
+                    existing_vibe_node.reaction_type = "vibe"
+                    existing_vibe_node.timestamp = timezone.now()
+                    existing_vibe_node.is_active = True
+                    existing_vibe_node.save()
+                    
+                    # Update reaction manager
+                    _update_reaction_manager(category, input.content_uid, individual_vibe.name_of_vibe, clean_intensity)
+                    
+                    return SendVibeToProfileContent(
+                        success=True,
+                        message="Vibe updated successfully",
+                        profile_content_vibe=ProfileContentVibeType.from_neomodel(existing_vibe_node)
+                    )
+            except Exception as e:
+                # Continue if query fails - better to allow than block valid reactions
+                pass
+            
+            # Create new vibe reaction in Neo4j
+            from auth_manager.models import ProfileContentVibe
+            profile_content_vibe = ProfileContentVibe(
+                individual_vibe_id=input.individual_vibe_id,
+                vibe_name=individual_vibe.name_of_vibe,
+                vibe_intensity=clean_intensity,
+                reaction_type="vibe"
+            )
+            profile_content_vibe.save()
+            
+            # Connect to user
+            profile_content_vibe.reacted_by.connect(user_node)
+            
+            # Connect to content
+            content_node.vibe_reactions.connect(profile_content_vibe)
+            
+            # Update reaction manager for analytics
+            _update_reaction_manager(category, input.content_uid, individual_vibe.name_of_vibe, clean_intensity)
+            
+            # Update user's vibe score using existing system
+            vibe_score_multiplier = clean_intensity / 5.0  # Convert to 0.0-1.0 multiplier
+            
+            # Apply weightages from IndividualVibe
+            adjusted_score = (
+                individual_vibe.weightage_iaq + 
+                individual_vibe.weightage_iiq + 
+                individual_vibe.weightage_ihq + 
+                individual_vibe.weightage_isq
+            ) / 4.0 * vibe_score_multiplier
+            
+            VibeUtils.onVibeCreated(user_node, individual_vibe.name_of_vibe, adjusted_score)
+            
+            return SendVibeToProfileContent(
+                success=True,
+                message="Vibe sent to profile content successfully!",
+                profile_content_vibe=ProfileContentVibeType.from_neomodel(profile_content_vibe)
+            )
+            
+        except Exception as e:
+            return SendVibeToProfileContent(
+                success=False,
+                message=f"Error sending vibe: {str(e)}",
+                profile_content_vibe=None
+            )
+
+
+def _update_reaction_manager(category, content_uid, vibe_name, vibe_score):
+    """Helper function to update reaction managers for profile content vibes."""
+    try:
+        category_manager_map = {
+            'achievement': AchievementReactionManager,
+            'education': EducationReactionManager,
+            'skill': SkillReactionManager,
+            'experience': ExperienceReactionManager
+        }
+        
+        if category not in category_manager_map:
+            return
+        
+        manager_model = category_manager_map[category]
+        uid_field = f"{category}_uid"
+        
+        # Get or create reaction manager
+        reaction_manager = manager_model.objects.filter(**{uid_field: content_uid}).first()
+        
+        if not reaction_manager:
+            reaction_manager = manager_model(**{uid_field: content_uid})
+            reaction_manager.save()
+            reaction_manager.initialize_reactions()
+            reaction_manager.save()
+        
+        # Add the reaction
+        reaction_manager.add_reaction(vibe_name, vibe_score)
+        reaction_manager.save()
+        
+    except Exception as e:
+        # Log but don't fail the mutation
+        print(f"Error updating reaction manager: {e}")
+
+
 class Mutation(graphene.ObjectType):
     register_user = CreateUser.Field()
     register_userV2 = CreateUserV2.Field()
@@ -4665,5 +4942,7 @@ class Mutation(graphene.ObjectType):
     create_profile_data_comment=CreateProfileDataCommentV2.Field()
     
     create_verified_user=CreateVerifiedUser.Field()
+    
+    send_vibe_to_profile_content=SendVibeToProfileContent.Field()
 
 

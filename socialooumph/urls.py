@@ -21,5 +21,6 @@ urlpatterns = [
 
 
     path('', include('upload.urls')),
+    path('service/', include('service.urls')),
 
 ]

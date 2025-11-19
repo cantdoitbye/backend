@@ -247,9 +247,11 @@ class Query(graphene.ObjectType):
                 # Apply email-based filtering (for sent/received logic)
                 if email_check and email_check(connection, email):
                     continue
-                # Filter by circle type if specified
-                if circle_type and connection.circle.single().circle_type != circle_type.value:
-                    continue
+                # Filter by circle type if specified with null safety
+                if circle_type:
+                    circle = connection.circle.single()
+                    if not circle or circle.circle_type != circle_type.value:
+                        continue
 
                 my_connections.append(connection)
 
@@ -271,10 +273,14 @@ class Query(graphene.ObjectType):
                 return filter_connections("Cancelled")
         else:
             # No status filter - apply only circle_type filter if provided
-            my_connections = [
-                connection for connection in connected_user
-                if not circle_type or connection.circle.single().circle_type == circle_type.value
-            ]
+            my_connections = []
+            for connection in connected_user:
+                if circle_type:
+                    circle = connection.circle.single()
+                    if circle and circle.circle_type == circle_type.value:
+                        my_connections.append(connection)
+                else:
+                    my_connections.append(connection)
             return [ConnectionType.from_neomodel(x) for x in my_connections]
 
         
@@ -380,8 +386,13 @@ class Query(graphene.ObjectType):
         results, meta = db.cypher_query(query, params)
 
         # Process and return connection results
+        # connection_node = [Connection.inflate(row[0]) for row in results]
+        # return [ConnectionIsConnectedType.from_neomodel(x) for x in connection_node]
+
         connection_node = [Connection.inflate(row[0]) for row in results]
-        return [ConnectionIsConnectedType.from_neomodel(x) for x in connection_node]
+
+        # Pass auth_user_id to from_neomodel so it can calculate the correct status
+        return [ConnectionIsConnectedType.from_neomodel(x, auth_user_id=user2_id) for x in connection_node]
         
 
     # Sent connection queries
@@ -722,8 +733,12 @@ class Query(graphene.ObjectType):
                     continue
                 if email_check and not email_check(connection, email):
                     continue
-                if circle_type and connection.circle.single().circle_type != circle_type.value:
-                    continue
+                
+                # Check circle_type with null safety
+                if circle_type:
+                    circle = connection.circle.single()
+                    if not circle or circle.circle_type != circle_type.value:
+                        continue
 
                 my_connections.append(connection)
 
@@ -747,10 +762,14 @@ class Query(graphene.ObjectType):
                 return [UserConnectedUserType.from_neomodel(user) for user in filter_connections("Cancelled")]
         else:
             # If no status is provided, filter by circle_type if given
-            my_connections = [
-                connection for connection in connected_user
-                if not circle_type or connection.circle.single().circle_type == circle_type.value
-            ]
+            my_connections = []
+            for connection in connected_user:
+                if circle_type:
+                    circle = connection.circle.single()
+                    if circle and circle.circle_type == circle_type.value:
+                        my_connections.append(connection)
+                else:
+                    my_connections.append(connection)
 
             all_users = []
             for connection in my_connections:
@@ -820,8 +839,12 @@ class Query(graphene.ObjectType):
                     continue
                 if email_check and not email_check(connection, email):
                     continue
-                if circle_type and connection.circle.single().circle_type != circle_type.value:
-                    continue
+                
+                # Check circle_type with null safety
+                if circle_type:
+                    circle = connection.circle.single()
+                    if not circle or circle.circle_type != circle_type.value:
+                        continue
 
                 my_connections.append(connection)
 
@@ -840,10 +863,14 @@ class Query(graphene.ObjectType):
 
         else:
             # If no status is provided, filter by circle_type if given
-            my_connections = [
-                connection for connection in connected_user
-                if not circle_type or connection.circle.single().circle_type == circle_type.value
-            ]
+            my_connections = []
+            for connection in connected_user:
+                if circle_type:
+                    circle = connection.circle.single()
+                    if circle and circle.circle_type == circle_type.value:
+                        my_connections.append(connection)
+                else:
+                    my_connections.append(connection)
 
             all_users = []
             for connection in my_connections:
@@ -1107,7 +1134,7 @@ class Query(graphene.ObjectType):
 
         return content_data
 
-    # Connection grouping and categorization queries
+   # Connection grouping and categorization queries
     grouped_connections_by_relation = graphene.List(ConnectionV2CategoryType)
 
     @handle_graphql_connection_errors
@@ -1127,7 +1154,7 @@ class Query(graphene.ObjectType):
             List[ConnectionV2CategoryType]: Connections grouped by circle type
             
         Business Logic:
-            - Retrieves all ConnectionV2 connections for the authenticated user
+            - Retrieves all connections for the authenticated user
             - Groups connections into predefined circles (Inner, Outer, Universe)
             - Determines the connected user (receiver or creator) for each connection
             - Filters out empty circle groups
@@ -1147,9 +1174,7 @@ class Query(graphene.ObjectType):
         payload = info.context.payload
         user_id = payload.get('user_id')
         user_node = Users.nodes.get(user_id=user_id)
-        
-        # Use ConnectionV2 instead of legacy Connection
-        connections = user_node.connectionv2.all() 
+        connections = user_node.connection.all() 
 
         circles = ['Inner', 'Outer', 'Universe']
         result = []
@@ -1158,27 +1183,18 @@ class Query(graphene.ObjectType):
                 "title": circle,
                 "data": []
             })
-        
         for connection in connections:
-            # Only process accepted connections
-            if connection.connection_status != 'Accepted':
-                continue
-                
-            circle_node = connection.circle.single()
-            if circle_node:
-                # Get user-specific circle type from CircleV2 user_relations JSON
-                user_data = circle_node.user_relations.get(user_node.uid, {})
-                circle_type = user_data.get('circle_type')
-                
-                if circle_type:
-                    for circle_group in result:
-                        if circle_group['title'] == circle_type:
-                            # Determine the connected user (not the logged-in user)
-                            connected_user = connection.receiver.single() if str(connection.receiver.single().uid) != user_node.uid else connection.created_by.single()
-                            connection_data = ConnectionV2Type.from_neomodel(connection, user_uid=connected_user.uid)
-                            if connection_data:  # Only add if connection_data is not None
-                                circle_group['data'].append(connection_data)
-                            break
+            circle = connection.circle.single()
+            if circle:
+                circle_type = circle.circle_type
+                for circle_group in result:
+                    if circle_group['title'] == circle_type:
+                     
+                        connected_user = connection.receiver.single() if str(connection.receiver.single().uid) != user_node.uid else connection.created_by.single()
+                        connection_data = ConnectionV2Type.from_neomodel(connection, user_uid=connected_user.uid)
+                        if connection_data:  # Only add if connection_data is not None
+                            circle_group['data'].append(connection_data)
+                        break
         
         # Filter out circle groups with empty data arrays
         return [circle_group for circle_group in result if circle_group['data']]

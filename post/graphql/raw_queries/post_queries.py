@@ -676,8 +676,8 @@ MATCH (reply:Comment)-[:REPLIED_TO]->(parent_comment:Comment {uid: $parent_comme
 WHERE NOT reply.is_deleted
 
 // Get metrics for each reply
-OPTIONAL MATCH (reply)-[:HAS_REACTION]->(reaction)
-WHERE NOT reaction.is_deleted
+OPTIONAL MATCH (reply)-[:HAS_VIBE_REACTION]->(vibe_reaction:CommentVibe)
+WHERE vibe_reaction.is_active = true
 
 OPTIONAL MATCH (reply)-[:HAS_POST]->(related_post)
 OPTIONAL MATCH (related_post)-[:HAS_VIEW]->(view)
@@ -698,7 +698,7 @@ WHERE NOT nested_reply.is_deleted
 
 // Make sure we return primitive values, not Node objects
 WITH reply, related_post,
-     COUNT(DISTINCT reaction) as vibes_count,
+     COUNT(DISTINCT vibe_reaction) as vibes_count,
      COUNT(DISTINCT view) as views_count,
      COUNT(DISTINCT all_comments) as comments_count,
      COUNT(DISTINCT share) as shares_count,

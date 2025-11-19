@@ -197,9 +197,10 @@ class CreatePost(Mutation):
                     # Log the error but don't fail the post creation
                     print(f"Error adding vibe to user post: {str(vibe_error)}")
 
+            # ============= NOTIFICATION CODE START =============
             # Get all connections of the post creator for notification delivery
             connections = created_by.connection.all()
-            followers = []
+            recipients = []
             
             for connection in connections:
                 # Get the other user in the connection (not the post creator)
@@ -207,26 +208,43 @@ class CreatePost(Mutation):
                 if other_user:
                     profile = other_user.profile.single()
                     if profile and profile.device_id:
-                        followers.append({
+                        recipients.append({
                             'device_id': profile.device_id,
                             'uid': other_user.uid
                         })
             
-            # Send notifications asynchronously to avoid blocking the response
-            if followers:
-                notification_service = NotificationService()
-                # Create a new event loop for this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if followers:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyNewPost(
+            #             post_creator_name=created_by.username,
+            #             followers=followers,
+            #             post_id=post.uid,
+            #             post_image_url=FileDetailType(**generate_presigned_url.generate_file_info(post_file_id[0])).url if post_file_id else None
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            if recipients:
                 try:
-                    loop.run_until_complete(notification_service.notifyNewPost(
-                        post_creator_name=created_by.username,
-                        followers=followers,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_post_from_connection",
+                        recipients=recipients,
+                        username=created_by.username,
+                        post_title=post_title[:50] if post_title else "New post",
                         post_id=post.uid,
                         post_image_url=FileDetailType(**generate_presigned_url.generate_file_info(post_file_id[0])).url if post_file_id else None
-                    ))
-                finally:
-                    loop.close()
+                    )
+                except Exception as e:
+                    print(f"Failed to send post notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             return CreatePost(success=True, message=PostMessages.POST_CREATED)
         except Exception as error:
@@ -901,6 +919,30 @@ class CreateLike(Mutation):
                 post.like.connect(like)
                 increment_post_like_count(post.uid)
                 message = PostMessages.POST_REACTION_CREATED
+                
+                # ============= NOTIFICATION CODE START =============
+                # Notify post creator about new vibe reaction (only for new likes, not updates)
+                try:
+                    from notification.global_service import GlobalNotificationService
+                    
+                    post_creator = post.created_by.single()
+                    if post_creator and post_creator.uid != user_node.uid:
+                        creator_profile = post_creator.profile.single()
+                        if creator_profile and creator_profile.device_id:
+                            service = GlobalNotificationService()
+                            service.send(
+                                event_type="vibe_reaction_on_post",
+                                recipients=[{
+                                    'device_id': creator_profile.device_id,
+                                    'uid': post_creator.uid
+                                }],
+                                username=user_node.username,
+                                vibe_type=input.reaction,
+                                post_id=post.uid
+                            )
+                except Exception as e:
+                    print(f"Failed to send vibe reaction notification: {e}")
+                # ============= NOTIFICATION CODE END =============
 
             post_reaction_manager.save()
 

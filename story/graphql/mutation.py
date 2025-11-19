@@ -144,23 +144,38 @@ class CreateStory(Mutation):
                             'uid': other_user.uid
                         })
 
-            # Send asynchronous push notifications to followers
-            # Uses separate event loop to avoid blocking main request
+            # ============= NOTIFICATION CODE START =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if followers:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyNewStory(
+            #             story_creator_name=created_by.username,
+            #             followers=followers,
+            #             story_id=story.uid,
+            #             story_image_url=story.story_image_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             if followers:
-                notification_service = NotificationService()
-                # Create isolated event loop for this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    # Send new story notifications to all followers
-                    loop.run_until_complete(notification_service.notifyNewStory(
-                        story_creator_name=created_by.username,
-                        followers=followers,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_story_from_connection",
+                        recipients=followers,
+                        username=created_by.username,
                         story_id=story.uid,
-                        story_image_url=story.story_image_id
-                    ))
-                finally:
-                    loop.close()
+                        story_thumbnail_url=story.story_image_id
+                    )
+                except Exception as e:
+                    print(f"Failed to send story notification: {e}")
+            # ============= NOTIFICATION CODE END =============
             
             return CreateStory(success=True, message=StoryMessages.STORY_CREATED)
             

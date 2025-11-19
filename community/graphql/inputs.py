@@ -2,6 +2,7 @@ import graphene
 from .enums.circle_type_enum import CircleTypeEnum
 from.enums.group_type_enum import GroupTypeEnum
 from.enums.sub_community_type_enum import SubCommunityTypeEnum
+from community.graphql.enums.community_content_category_enum import CommunityContentCategoryEnum
 from auth_manager.validators import custom_graphql_validator
 
 
@@ -18,6 +19,40 @@ class CreateCommunityInput(graphene.InputObjectType):
     ai_generated = custom_graphql_validator.Boolean.add_option("aiGenerated", "CreateCommunity")(default_value=False, description="Indicates if this community is AI-generated")
     tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
     mentioned_user_uids = graphene.List(graphene.String)
+
+class CreateCommunityInputV2(graphene.InputObjectType):
+    """V2 input for community creation with enhanced fields"""
+    name = custom_graphql_validator.NonSpecialCharacterString5_100.add_option("name", "CreateCommunityV2")(required=True, description="Community display name")
+    username = custom_graphql_validator.UsernameString3_30.add_option("username", "CreateCommunityV2")(required=True, description="Unique community handle/username (3-30 chars, letters/numbers/underscores)")
+    description = custom_graphql_validator.NonSpecialCharacterString10_200.add_option("description", "CreateCommunityV2")(description="Community description (max 200 chars)")
+    community_type = GroupTypeEnum(required=True, description="Type: Personal, Interest, Official, or Business")
+    community_circle = CircleTypeEnum(required=True, description="Privacy level: Outer, Inner, or Universal")
+    category = custom_graphql_validator.String.add_option("category", "CreateCommunityV2")(description="Community category")
+    
+    # Location fields
+    city = custom_graphql_validator.String.add_option("city", "CreateCommunityV2")(description="City where community is based")
+    state = custom_graphql_validator.String.add_option("state", "CreateCommunityV2")(description="State/province where community is based")
+    country = custom_graphql_validator.String.add_option("country", "CreateCommunityV2")(description="Country where community is based")
+    address = custom_graphql_validator.String.add_option("address", "CreateCommunityV2")(description="Full address of the community")
+    
+    # Contact information
+    website_url = custom_graphql_validator.String.add_option("websiteUrl", "CreateCommunityV2")(description="Community website URL")
+    contact_email = custom_graphql_validator.String.add_option("contactEmail", "CreateCommunityV2")(description="Contact email (optional)")
+    
+    # Visual elements
+    group_icon_id = custom_graphql_validator.String.add_option("groupIconId", "CreateCommunityV2")(description="Group icon/avatar image ID")
+    cover_image_id = custom_graphql_validator.String.add_option("coverImageId", "CreateCommunityV2")(description="Cover/banner image ID")
+    
+    # Settings
+    enable_comments = custom_graphql_validator.Boolean.add_option("enableComments", "CreateCommunityV2")(default_value=True, description="Allow members to comment on posts")
+    
+    # Members
+    member_uid = custom_graphql_validator.ListString.add_option("memberUid", "CreateCommunityV2")(description="List of initial member UIDs")
+    
+    # Optional fields
+    ai_generated = custom_graphql_validator.Boolean.add_option("aiGenerated", "CreateCommunityV2")(default_value=False, description="Indicates if this community is AI-generated")
+    tags = graphene.List(graphene.String, description="List of tags/keywords for community search and categorization")
+    mentioned_user_uids = graphene.List(graphene.String, description="List of mentioned user UIDs")
 
 class UpdateCommunityInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateCommunity")(required=True)
@@ -197,6 +232,37 @@ class CreateSubCommunityInput(graphene.InputObjectType):
     category = custom_graphql_validator.String.add_option("category", "CreateSubCommunity")(desc="The category under which the sub-community falls.")
     group_icon_id = custom_graphql_validator.String.add_option("groupIconId", "CreateSubCommunity")(desc="The ID of the group icon for the sub-community.")
     cover_image_id=custom_graphql_validator.String.add_option("coverImageId", "CreateSubCommunity")(desc="The ID of the cover image for the sub-community.")
+    member_uid = graphene.List(graphene.String, desc="A list of member unique identifiers.")
+
+class CreateSubCommunityInputV2(graphene.InputObjectType):
+    """V2 input for sub-community creation with enhanced fields"""
+    parent_community_uid = custom_graphql_validator.String.add_option("parentCommunityUid", "CreateSubCommunityV2")(required=True, desc="The unique identifier of the parent community.")
+    name = custom_graphql_validator.NonSpecialCharacterString2_100.add_option("name", "CreateSubCommunityV2")(required=True, desc="The name of the sub-community.")
+    username = custom_graphql_validator.UsernameString3_30.add_option("username", "CreateSubCommunityV2")(required=True, description="Unique sub-community handle/username (3-30 chars, letters/numbers/underscores)")
+    description = custom_graphql_validator.NonSpecialCharacterString5_200.add_option("description", "CreateSubCommunityV2")(required=True, desc="The description of the sub-community (max 200 chars).")
+    sub_community_type = SubCommunityTypeEnum(required=True, desc="The type: child or sibling community.")
+    sub_community_group_type = GroupTypeEnum(required=True, desc="The group type: Personal, Interest, Official, or Business.")
+    sub_community_circle = CircleTypeEnum(required=True, desc="Privacy level: Outer, Inner, or Universal.")
+    category = custom_graphql_validator.String.add_option("category", "CreateSubCommunityV2")(desc="The category under which the sub-community falls.")
+    
+    # Location fields
+    city = custom_graphql_validator.String.add_option("city", "CreateSubCommunityV2")(description="City where sub-community is based")
+    state = custom_graphql_validator.String.add_option("state", "CreateSubCommunityV2")(description="State/province where sub-community is based")
+    country = custom_graphql_validator.String.add_option("country", "CreateSubCommunityV2")(description="Country where sub-community is based")
+    address = custom_graphql_validator.String.add_option("address", "CreateSubCommunityV2")(description="Full address of the sub-community")
+    
+    # Contact information
+    website_url = custom_graphql_validator.String.add_option("websiteUrl", "CreateSubCommunityV2")(description="Sub-community website URL")
+    contact_email = custom_graphql_validator.String.add_option("contactEmail", "CreateSubCommunityV2")(description="Contact email (optional)")
+    
+    # Visual elements
+    group_icon_id = custom_graphql_validator.String.add_option("groupIconId", "CreateSubCommunityV2")(desc="The ID of the group icon for the sub-community.")
+    cover_image_id = custom_graphql_validator.String.add_option("coverImageId", "CreateSubCommunityV2")(desc="The ID of the cover image for the sub-community.")
+    
+    # Settings
+    enable_comments = custom_graphql_validator.Boolean.add_option("enableComments", "CreateSubCommunityV2")(default_value=True, description="Allow members to comment on posts")
+    
+    # Members
     member_uid = graphene.List(graphene.String, desc="A list of member unique identifiers.")    
 
 
@@ -262,3 +328,29 @@ class CreateCommunityPostInput(graphene.InputObjectType):
     reaction = custom_graphql_validator.String.add_option("reaction", "CreateCommunityPost")()
     vibe = custom_graphql_validator.Float.add_option("vibe", "CreateCommunityPost")()
     mentioned_user_uids = graphene.List(graphene.String)
+
+class SendVibeToCommunityContentInput(graphene.InputObjectType):
+    """
+    Input type for sending vibe reactions to community content.
+    
+    This input defines the required parameters for sending a vibe reaction
+    to community content (achievements, activities, goals, affiliations).
+    
+    Fields:
+        content_uid: UID of the content item (achievement, activity, goal, affiliation)
+        content_category: Category of community content - DROPDOWN with options:
+            - ACHIEVEMENT: Community achievements and milestones
+            - ACTIVITY: Community activities and events
+            - GOAL: Community goals and objectives
+            - AFFILIATION: Community affiliations and partnerships
+        individual_vibe_id: ID of the IndividualVibe from PostgreSQL
+        vibe_intensity: Intensity of the vibe (1.0 to 5.0)
+    
+    Usage:
+        Used in SendVibeToCommunityContent mutation to specify which content
+        to react to and the vibe details.
+    """
+    content_uid = custom_graphql_validator.String.add_option("contentUid", "SendVibeToCommunityContent")(required=True, description="UID of the community content item")
+    content_category = graphene.Field(CommunityContentCategoryEnum, required=True, description="Category of community content (dropdown: ACHIEVEMENT, ACTIVITY, GOAL, AFFILIATION)")
+    individual_vibe_id = custom_graphql_validator.Int.add_option("individualVibeId", "SendVibeToCommunityContent")(required=True, description="ID of the vibe from IndividualVibe table")
+    vibe_intensity = custom_graphql_validator.Float.add_option("vibeIntensity", "SendVibeToCommunityContent")(required=True, description="Intensity of the vibe (range: 1.0 to 5.0)")

@@ -110,7 +110,6 @@ class ConnectionV2Type(ObjectType):
     email=graphene.String()
     first_name=graphene.String()
     last_name=graphene.String()
-    name=graphene.String()  # Combined first_name and last_name
     user_type=graphene.String()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
     connection = graphene.Field(lambda: ConnectionConnectedUserType)
@@ -124,12 +123,7 @@ class ConnectionV2Type(ObjectType):
             return None
             
         user = Users.nodes.get(uid=user_uid)
-        
-        # Combine first_name and last_name to create full name
-        first_name = user.first_name or ""
-        last_name = user.last_name or ""
-        full_name = f"{first_name} {last_name}".strip() or user.username
-        
+                
         return cls(
             uid=user.uid,
             user_id=user.user_id,
@@ -137,12 +131,12 @@ class ConnectionV2Type(ObjectType):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
-            name=full_name,
             user_type=user.user_type,
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,
             connection=ConnectionConnectedUserType.from_neomodel(user.connection.single()) if user.connection.single() else None,
             score=generate_connection_score(),
         )
+
 class GroupedCommunityMemberType(ObjectType):
     uid=graphene.String()
     user_id=graphene.String()
@@ -150,7 +144,6 @@ class GroupedCommunityMemberType(ObjectType):
     email=graphene.String()
     first_name=graphene.String()
     last_name=graphene.String()
-    name=graphene.String()  # Combined first_name and last_name
     user_type=graphene.String()
     score=graphene.Float()
     profile=graphene.Field(lambda:ProfileForConnectedUserTypeV2)
@@ -162,12 +155,6 @@ class GroupedCommunityMemberType(ObjectType):
         
             
         user = Users.nodes.get(uid=user_uid)
-        
-        # Combine first_name and last_name to create full name
-        first_name = user.first_name or ""
-        last_name = user.last_name or ""
-        full_name = f"{first_name} {last_name}".strip() or user.username
-        
         return cls(
             uid=user.uid,
             user_id=user.user_id,
@@ -175,11 +162,14 @@ class GroupedCommunityMemberType(ObjectType):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
-            name=full_name,
             user_type=user.user_type,
             score=generate_connection_score(),
             profile=ProfileForConnectedUserTypeV2.from_neomodel(user.profile.single()) if user.profile.single() else None,
         )
+
+class ConnectionCategoryType(graphene.ObjectType):
+    title = graphene.String()
+    data = graphene.List(ConnectionType)
 
 class ConnectionV2CategoryType(graphene.ObjectType):
     title = graphene.String()
@@ -254,16 +244,37 @@ class ConnectionIsConnectedType(ObjectType):
     circle= graphene.Field(lambda:CircleType)
     
     @classmethod
-    def from_neomodel(cls, connection):
-            return cls(
-                uid=connection.uid,
-                receiver=UserType.from_neomodel(connection.receiver.single()) if connection.receiver.single() else None,
-                created_by=UserType.from_neomodel(connection.created_by.single()) if connection.created_by.single() else None,
-                circle=CircleType.from_neomodel(connection.circle.single()) if connection.circle.single() else None,
-                connection_status=connection.connection_status,
-                timestamp=connection.timestamp,
+    # def from_neomodel(cls, connection):
+    #         return cls(
+    #             uid=connection.uid,
+    #             receiver=UserType.from_neomodel(connection.receiver.single()) if connection.receiver.single() else None,
+    #             created_by=UserType.from_neomodel(connection.created_by.single()) if connection.created_by.single() else None,
+    #             circle=CircleType.from_neomodel(connection.circle.single()) if connection.circle.single() else None,
+    #             connection_status=connection.connection_status,
+    #             timestamp=connection.timestamp,
                 
-            )
+    #         )
+
+    def from_neomodel(cls, connection, auth_user_id=None):
+        # Get the receiver and creator
+        receiver = connection.receiver.single()
+        created_by = connection.created_by.single()
+        display_status = connection.connection_status
+        
+        if connection.connection_status == "Received" and auth_user_id:
+            if created_by and created_by.user_id == str(auth_user_id):
+                display_status = "Sent"
+            elif receiver and receiver.user_id == str(auth_user_id):
+                display_status = "Received"
+        
+        return cls(
+            uid=connection.uid,
+            receiver=UserType.from_neomodel(receiver) if receiver else None,
+            created_by=UserType.from_neomodel(created_by) if created_by else None,
+            circle=CircleType.from_neomodel(connection.circle.single()) if connection.circle.single() else None,
+            connection_status=display_status,
+            timestamp=connection.timestamp,
+        )
         
 
 class RecommendedUserForCommunityType(graphene.ObjectType):

@@ -626,9 +626,9 @@ class SecondaryStoryType(ObjectType):
         # Each query returns stories from specific user connection types
         # Using V2 queries for improved circle type handling
         query_mapping = {
-            "Inner": get_inner_storyV2,      # Close connections
-            "Outer": get_outer_storyV2,      # Extended connections  
-            "Universe": get_universe_storyV2, # All connections
+            "Inner": get_inner_story,      # Close connections
+            "Outer": get_outer_story,      # Extended connections  
+            "Universe": get_universe_story, # All connections
         }
 
         # Execute appropriate Cypher query based on category

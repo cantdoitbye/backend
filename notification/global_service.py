@@ -3,14 +3,15 @@ Global Unified Notification Service
 Simple, template-driven notification service
 """
 
-import aiohttp
-import asyncio
+import requests
 import logging
+import time
+import threading
 from typing import List, Dict, Any, Optional
 from django.utils import timezone
 
 from settings.base import NOTIFICATION_SERVICE_URL
-from .notification_templates import NotificationEventType, format_notification
+from .notification_templates import NOTIFICATION_TEMPLATES, format_notification
 from .models import UserNotification, NotificationLog
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class GlobalNotificationService:
     def __init__(self):
         self.notification_service_url = NOTIFICATION_SERVICE_URL
         self.max_retries = 3
-        self.timeout = aiohttp.ClientTimeout(total=30)
+        self.timeout = 30  # seconds
     
     def send(
         self,
@@ -42,7 +43,8 @@ class GlobalNotificationService:
         **template_vars
     ):
         """
-        Send notification (sync wrapper for async send)
+        Send notification in BACKGROUND THREAD (non-blocking!)
+        Returns immediately without waiting for notifications to complete.
         
         Args:
             event_type: Notification event type (e.g., "new_post_from_connection")
@@ -50,52 +52,53 @@ class GlobalNotificationService:
             **template_vars: Variables to fill in the template (username, post_id, etc.)
         
         Returns:
-            List of send results
+            None (notifications sent in background)
         """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                self.send_async(event_type, recipients, **template_vars)
-            )
-        finally:
-            loop.close()
+        # Start background thread for sending
+        thread = threading.Thread(
+            target=self._send_all,
+            args=(event_type, recipients),
+            kwargs=template_vars,
+            daemon=True  # Thread dies when main program exits
+        )
+        thread.start()
+        print(f"🚀 Notification thread started for {event_type}")
+        # Return immediately - don't wait for thread!
     
-    async def send_async(
+    def _send_all(
         self,
         event_type: str,
         recipients: List[Dict[str, str]],
         **template_vars
-    ) -> List[Dict[str, Any]]:
+    ):
         """
-        Send notification asynchronously
+        Internal method that does the actual sending (runs in background thread)
         
         Args:
             event_type: Notification event type
             recipients: List of dicts with 'device_id' and 'uid'
-            **template_vars: Variables to fill template
-            
-        Returns:
-            List of send results
+            **template_vars: Variables to fill in the template
         """
         # Validate event type
-        try:
-            event = NotificationEventType(event_type)
-        except ValueError:
-            logger.error(f"Invalid notification event type: {event_type}")
-            return []
+        if event_type not in NOTIFICATION_TEMPLATES:
+            print(f"Invalid notification event type: {event_type}")
+            return
         
         # Filter valid recipients
         valid_recipients = [r for r in recipients if r.get('device_id') and r.get('uid')]
         
         if not valid_recipients:
-            logger.warning(f"No valid recipients for {event_type}")
-            return []
+            print(f"No valid recipients for {event_type}")
+            return
         
         # Format notification from template
-        notification_data = format_notification(event, **template_vars)
+        try:
+            notification_data = format_notification(event_type, **template_vars)
+        except Exception as e:
+            print(f"Error formatting notification: {e}")
+            return
         
-        logger.info(f"📨 Sending {event_type} notification to {len(valid_recipients)} recipients")
+        print(f"📨 Sending {event_type} notification to {len(valid_recipients)} recipients")
         
         # Create batch log
         log = NotificationLog.objects.create(
@@ -105,25 +108,21 @@ class GlobalNotificationService:
             metadata={**template_vars, 'event_type': event_type}
         )
         
-        # Send to all recipients
-        results = []
+        # Send to all recipients synchronously (but in background)
         successful = 0
         failed = 0
         
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            for recipient in valid_recipients:
-                result = await self._send_to_recipient(
-                    session,
-                    recipient,
-                    notification_data,
-                    event_type
-                )
-                results.append(result)
-                
-                if result.get('success'):
-                    successful += 1
-                else:
-                    failed += 1
+        for recipient in valid_recipients:
+            result = self._send_to_recipient(
+                recipient,
+                notification_data,
+                event_type
+            )
+            
+            if result.get('success'):
+                successful += 1
+            else:
+                failed += 1
         
         # Update batch log
         log.successful_count = successful
@@ -131,22 +130,18 @@ class GlobalNotificationService:
         log.status = 'sent' if failed == 0 else ('partial' if successful > 0 else 'failed')
         log.save()
         
-        logger.info(f"✅ Batch complete: {successful}/{len(valid_recipients)} successful")
-        
-        return results
+        print(f"✅ Batch complete: {successful}/{len(valid_recipients)} successful")
     
-    async def _send_to_recipient(
+    def _send_to_recipient(
         self,
-        session: aiohttp.ClientSession,
         recipient: Dict[str, str],
         notification_data: Dict[str, Any],
         event_type: str
     ) -> Dict[str, Any]:
         """
-        Send notification to a single recipient
+        Send notification to a single recipient using synchronous HTTP request
         
         Args:
-            session: aiohttp session
             recipient: Dict with device_id and uid
             notification_data: Formatted notification data
             event_type: Notification event type
@@ -182,6 +177,7 @@ class GlobalNotificationService:
             "token": device_id,
             "priority": notification_data.get('priority', 'normal'),
             "click_action": notification_data.get('click_action', '/'),
+            "event_type": event_type,
             "data": {
                 "type": event_type,
                 **notification_data.get('data', {})
@@ -191,50 +187,50 @@ class GlobalNotificationService:
         if notification_data.get('image_url'):
             payload['image_url'] = notification_data['image_url']
         
-        # Send with retries
+        # Send with retries using requests library (synchronous)
         for attempt in range(self.max_retries):
             try:
-                async with session.post(
+                response = requests.post(
                     f"{self.notification_service_url}/notifications",
                     json=payload,
-                    headers=headers
-                ) as response:
-                    response_text = await response.text()
+                    headers=headers,
+                    timeout=self.timeout
+                )
+                
+                if response.status_code == 200:
+                    # Update notification record
+                    notification.status = 'sent'
+                    notification.sent_at = timezone.now()
+                    notification.save()
                     
-                    if response.status == 200:
-                        # Update notification record
-                        notification.status = 'sent'
-                        notification.sent_at = timezone.now()
+                    print(f"✅ Sent to {user_uid}")
+                    
+                    return {
+                        'success': True,
+                        'user_uid': user_uid,
+                        'notification_id': notification.id
+                    }
+                else:
+                    if attempt < self.max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    else:
+                        # Update notification record with error
+                        notification.status = 'failed'
+                        notification.error_message = f"Status {response.status_code}: {response.text}"
                         notification.save()
                         
-                        logger.debug(f"✅ Sent to {user_uid}")
+                        print(f"❌ Failed to send to {user_uid}: {response.status_code}")
                         
                         return {
-                            'success': True,
+                            'success': False,
                             'user_uid': user_uid,
-                            'notification_id': notification.id
+                            'error': f"Status {response.status_code}"
                         }
-                    else:
-                        if attempt < self.max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)
-                            continue
-                        else:
-                            # Update notification record with error
-                            notification.status = 'failed'
-                            notification.error_message = f"Status {response.status}: {response_text}"
-                            notification.save()
-                            
-                            logger.warning(f"❌ Failed to send to {user_uid}: {response.status}")
-                            
-                            return {
-                                'success': False,
-                                'user_uid': user_uid,
-                                'error': f"Status {response.status}"
-                            }
             
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
+                    time.sleep(2 ** attempt)  # Exponential backoff
                     continue
                 else:
                     # Update notification record with error
@@ -242,7 +238,7 @@ class GlobalNotificationService:
                     notification.error_message = str(e)
                     notification.save()
                     
-                    logger.error(f"❌ Error sending to {user_uid}: {str(e)}")
+                    print(f"❌ Error sending to {user_uid}: {str(e)}")
                     
                     return {
                         'success': False,

@@ -89,6 +89,131 @@ class Query(graphene.ObjectType):
     - Administrative queries for superusers
     """
     
+    # Username availability check (V2)
+    check_username_availability = graphene.Field(
+        'community.graphql.types.UsernameAvailabilityType',
+        username=graphene.String(required=True),
+        description="Check if username is available across users, communities, and subcommunities"
+    )
+    
+    @handle_graphql_community_errors
+    @login_required
+    def resolve_check_username_availability(self, info, username):
+        """Check if username is available across users, communities, and subcommunities.
+        
+        This resolver checks username uniqueness across three entities:
+        1. Users (auth_manager.models.Users)
+        2. Communities (community.models.Community)
+        3. SubCommunities (community.models.SubCommunity)
+        
+        Args:
+            info: GraphQL resolve info
+            username (str): Username to check for availability
+            
+        Returns:
+            UsernameAvailabilityType: Object containing:
+                - is_available: Boolean indicating if username is free
+                - username: The checked username
+                - conflicts: List of entity types where conflicts exist
+                - message: Human-readable message
+                - suggestions: Alternative username suggestions
+                
+        Example Response:
+            {
+                "isAvailable": false,
+                "username": "john_doe",
+                "conflicts": ["user"],
+                "message": "Username 'john_doe' is already taken by a user",
+                "suggestions": ["john_doe1", "john_doe2", "john_doe_123"]
+            }
+        """
+        from community.graphql.types import UsernameAvailabilityType
+        
+        # Normalize username to lowercase for case-insensitive check
+        username_lower = username.strip().lower()
+        
+        conflicts = []
+        
+        # Check in Users
+        try:
+            user_exists = Users.nodes.get(username=username_lower)
+            if user_exists:
+                conflicts.append("user")
+        except Users.DoesNotExist:
+            pass
+        
+        # Check in Communities
+        try:
+            community_exists = Community.nodes.get(username=username_lower)
+            if community_exists:
+                conflicts.append("community")
+        except Community.DoesNotExist:
+            pass
+        
+        # Check in SubCommunities
+        try:
+            subcommunity_exists = SubCommunity.nodes.get(username=username_lower)
+            if subcommunity_exists:
+                conflicts.append("subcommunity")
+        except SubCommunity.DoesNotExist:
+            pass
+        
+        # Determine availability
+        is_available = len(conflicts) == 0
+        
+        # Generate message
+        if is_available:
+            message = f"Username '{username}' is available!"
+        else:
+            conflict_text = ", ".join(conflicts)
+            if len(conflicts) == 1:
+                message = f"Username '{username}' is already taken by a {conflicts[0]}"
+            else:
+                message = f"Username '{username}' is already taken (conflicts: {conflict_text})"
+        
+        # Generate suggestions if not available
+        suggestions = []
+        if not is_available:
+            # Generate 5 username suggestions
+            import random
+            for i in range(1, 6):
+                if i <= 2:
+                    # Add numbers
+                    suggestions.append(f"{username_lower}{i}")
+                elif i == 3:
+                    # Add random 3-digit number
+                    suggestions.append(f"{username_lower}_{random.randint(100, 999)}")
+                elif i == 4:
+                    # Add underscore and number
+                    suggestions.append(f"{username_lower}_1")
+                else:
+                    # Add year
+                    from datetime import datetime
+                    suggestions.append(f"{username_lower}{datetime.now().year}")
+            
+            # Filter out suggestions that might also be taken
+            available_suggestions = []
+            for suggestion in suggestions:
+                try:
+                    Users.nodes.get(username=suggestion)
+                except Users.DoesNotExist:
+                    try:
+                        Community.nodes.get(username=suggestion)
+                    except Community.DoesNotExist:
+                        try:
+                            SubCommunity.nodes.get(username=suggestion)
+                        except SubCommunity.DoesNotExist:
+                            available_suggestions.append(suggestion)
+            
+            suggestions = available_suggestions[:5] if available_suggestions else suggestions[:5]
+        
+        return UsernameAvailabilityType(
+            is_available=is_available,
+            username=username,
+            conflicts=conflicts,
+            message=message,
+            suggestions=suggestions
+        )
     
     community_messages = graphene.List(
         CommunityMessagesType, community_id=graphene.String(required=True))

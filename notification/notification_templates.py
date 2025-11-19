@@ -26,6 +26,22 @@ All notifications (except onboarding) from Ooumph App Notifications.html
 Total: 128+ notification templates
 """
 
+from enum import Enum
+
+
+class NotificationEventType(str, Enum):
+    """
+    Enum for notification event types.
+    This validates event types at runtime.
+    """
+    def _generate_next_value_(name, start, count, last_values):
+        return name
+    
+    @classmethod
+    def _missing_(cls, value):
+        """Allow string values to be used directly"""
+        return value
+
 NOTIFICATION_TEMPLATES = {
     
     # =========================================================================
@@ -692,3 +708,44 @@ def search_templates(keyword: str) -> dict:
            keyword_lower in template.get('title', '').lower() or
            keyword_lower in template.get('body', '').lower()
     }
+
+
+def format_notification(event_type, **template_vars):
+    """
+    Format a notification template with variables.
+    
+    Args:
+        event_type: Notification event type (string or NotificationEventType)
+        **template_vars: Variables to fill in the template placeholders
+        
+    Returns:
+        dict: Formatted notification with title, body, click_action, priority, etc.
+        
+    Raises:
+        KeyError: If event_type is not found in templates
+    """
+    # Convert to string (handles both string and enum)
+    event_key = str(event_type) if not isinstance(event_type, str) else event_type
+    
+    # Get template
+    template = NOTIFICATION_TEMPLATES.get(event_key)
+    if not template:
+        raise KeyError(f"Notification template '{event_key}' not found")
+    
+    # Format template strings with provided variables
+    formatted = {}
+    for key, value in template.items():
+        if isinstance(value, str) and '{' in value:
+            try:
+                # Replace placeholders with values, keep unfilled ones as is
+                formatted[key] = value.format(**{k: v for k, v in template_vars.items() if v is not None})
+            except KeyError as e:
+                # If a required placeholder is missing, keep the original
+                formatted[key] = value
+        else:
+            formatted[key] = value
+    
+    # Add data payload
+    formatted['data'] = template_vars
+    
+    return formatted

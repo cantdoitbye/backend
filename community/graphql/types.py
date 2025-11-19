@@ -27,6 +27,31 @@ class FileDetailType(graphene.ObjectType):
     file_size = graphene.Int()
 
 
+class UsernameAvailabilityType(graphene.ObjectType):
+    """Response type for username availability check (V2).
+    
+    Checks if a username is available across users, communities, and subcommunities.
+    Returns detailed information about availability and conflicts.
+    """
+    is_available = graphene.Boolean(
+        description="True if username is available across all entities"
+    )
+    username = graphene.String(
+        description="The username that was checked"
+    )
+    conflicts = graphene.List(
+        graphene.String,
+        description="List of entity types where username conflicts exist (user, community, subcommunity)"
+    )
+    message = graphene.String(
+        description="Human-readable message about availability"
+    )
+    suggestions = graphene.List(
+        graphene.String,
+        description="Suggested alternative usernames if not available"
+    )
+
+
 class VibeFeedListType(ObjectType):
     vibe_id = graphene.String()
     vibe_name = graphene.String()
@@ -111,13 +136,21 @@ class ReactionFeedType(ObjectType):
     def from_neomodel(cls, reaction_node):
         try:
             if isinstance(reaction_node, dict):
-                unix_timestamp = reaction_node['timestamp']
+                timestamp_value = reaction_node['timestamp']
+                # Handle both Unix timestamp and datetime object
+                if isinstance(timestamp_value, datetime):
+                    timestamp_dt = timestamp_value
+                elif isinstance(timestamp_value, (int, float)):
+                    timestamp_dt = datetime.fromtimestamp(timestamp_value)
+                else:
+                    timestamp_dt = None
+                
                 return cls(
                     uid=reaction_node['uid'],
                     vibe=reaction_node['vibe'],
                     reaction=reaction_node['reaction'],
                     is_deleted=reaction_node['is_deleted'],
-                    timestamp=datetime.fromtimestamp(unix_timestamp)
+                    timestamp=timestamp_dt
                 )
             else:
                 return cls(
@@ -132,9 +165,61 @@ class ReactionFeedType(ObjectType):
             return None      
 
 
+class CommunityContentVibeType(ObjectType):
+    """
+    GraphQL type for CommunityContentVibe objects.
+    
+    This type represents vibe reactions sent to community content (achievements,
+    activities, goals, affiliations). It provides a standardized structure for
+    returning vibe reaction data through the GraphQL API.
+    
+    Fields:
+        uid: Unique identifier for the vibe reaction
+        individual_vibe_id: ID referencing the IndividualVibe in PostgreSQL
+        vibe_name: Name of the vibe (from IndividualVibe)
+        vibe_intensity: Intensity of the vibe (1.0 to 5.0)
+        reacted_by: User who sent the vibe reaction
+        timestamp: When the vibe was sent
+        is_active: Whether the vibe is currently active
+    
+    Usage:
+        Returned by SendVibeToCommunityContent mutation and community content queries
+        to show vibe reaction details and user engagement.
+    """
+    uid = graphene.String()
+    individual_vibe_id = graphene.Int()
+    vibe_name = graphene.String()
+    vibe_intensity = graphene.Float()
+    reacted_by = graphene.Field(UserType)
+    timestamp = graphene.DateTime()
+    is_active = graphene.Boolean()
+    
+    @classmethod
+    def from_neomodel(cls, vibe):
+        """
+        Convert CommunityContentVibe neomodel instance to GraphQL type.
+        
+        Args:
+            vibe: CommunityContentVibe neomodel instance
+            
+        Returns:
+            CommunityContentVibeType: GraphQL type instance with vibe data
+        """
+        return cls(
+            uid=vibe.uid,
+            individual_vibe_id=vibe.individual_vibe_id,
+            vibe_name=vibe.vibe_name,
+            vibe_intensity=vibe.vibe_intensity,
+            reacted_by=UserType.from_neomodel(vibe.reacted_by.single()) if vibe.reacted_by.single() else None,
+            timestamp=vibe.timestamp,
+            is_active=vibe.is_active
+        )
+
+
 class CommunityType(ObjectType):
     uid = graphene.String()
     name = graphene.String()
+    username = graphene.String()  # V2 field
     description = graphene.String()
     community_type = graphene.String()
     community_circle = graphene.String()
@@ -148,6 +233,20 @@ class CommunityType(ObjectType):
     cover_image_id=graphene.String()
     cover_image_url=graphene.Field(FileDetailType)
     category = graphene.String()
+    
+    # V2 Location fields
+    city = graphene.String()
+    state = graphene.String()
+    country = graphene.String()
+    address = graphene.String()
+    
+    # V2 Contact fields
+    website_url = graphene.String()
+    contact_email = graphene.String()
+    
+    # V2 Settings
+    enable_comments = graphene.Boolean()
+    
     generated_community=graphene.Boolean()
     created_by = graphene.Field(UserType)
     communitymessage = graphene.List(lambda:CommunityMessagesNonCommunityType)
@@ -208,6 +307,7 @@ class CommunityType(ObjectType):
         return cls(
             uid=community.uid,
             name=community.name,
+            username=getattr(community, 'username', None),  # V2 field
             description=community.description,
             community_type=community.community_type,
             community_circle=community.community_circle,
@@ -221,6 +321,14 @@ class CommunityType(ObjectType):
             cover_image_id=community.cover_image_id,
             cover_image_url=cover_image_url,
             category=community.category,
+            # V2 fields
+            city=getattr(community, 'city', None),
+            state=getattr(community, 'state', None),
+            country=getattr(community, 'country', None),
+            address=getattr(community, 'address', None),
+            website_url=getattr(community, 'website_url', None),
+            contact_email=getattr(community, 'contact_email', None),
+            enable_comments=getattr(community, 'enable_comments', True),
             # Fixed: Verify created_by is a Users object before passing to UserType
             created_by=UserType.from_neomodel(community.created_by.single()) if community.created_by.single() and isinstance(community.created_by.single(), Users) else None,
             communitymessage=[CommunityMessagesNonCommunityType.from_neomodel(x) for x in community.communitymessage],
@@ -925,6 +1033,7 @@ class CommunityAchievementType(ObjectType):
 class SubCommunityType(graphene.ObjectType):
     uid = graphene.String()
     name = graphene.String()
+    username = graphene.String()  # V2 field
     description = graphene.String()
     sub_community_type = graphene.String()
     sub_community_group_type=graphene.String()
@@ -939,6 +1048,20 @@ class SubCommunityType(graphene.ObjectType):
     cover_image_id=graphene.String()
     cover_image_url=graphene.Field(FileDetailType)
     category = graphene.String()
+    
+    # V2 Location fields
+    city = graphene.String()
+    state = graphene.String()
+    country = graphene.String()
+    address = graphene.String()
+    
+    # V2 Contact fields
+    website_url = graphene.String()
+    contact_email = graphene.String()
+    
+    # V2 Settings
+    enable_comments = graphene.Boolean()
+    
     created_by = graphene.Field(UserType)  # Assuming UserType is defined similarly
     parent_community = graphene.Field(lambda: CommunityType)  # Assuming you have a CommunityType defined
 
@@ -972,6 +1095,7 @@ class SubCommunityType(graphene.ObjectType):
         return cls(
             uid=sub_community.uid,
             name=sub_community.name,
+            username=getattr(sub_community, 'username', None),  # V2 field
             description=sub_community.description,
             sub_community_type=sub_community.sub_community_type,
             sub_community_group_type=sub_community.sub_community_group_type,
@@ -986,6 +1110,14 @@ class SubCommunityType(graphene.ObjectType):
             cover_image_id=sub_community.cover_image_id,
             cover_image_url=cover_image_url,
             category=sub_community.category,
+            # V2 fields
+            city=getattr(sub_community, 'city', None),
+            state=getattr(sub_community, 'state', None),
+            country=getattr(sub_community, 'country', None),
+            address=getattr(sub_community, 'address', None),
+            website_url=getattr(sub_community, 'website_url', None),
+            contact_email=getattr(sub_community, 'contact_email', None),
+            enable_comments=getattr(sub_community, 'enable_comments', True),
             # Fixed: Verify created_by is a Users object before passing to UserType
             created_by=UserType.from_neomodel(sub_community.created_by.single()) if sub_community.created_by.single() and isinstance(sub_community.created_by.single(), Users) else None,
             parent_community=CommunityType.from_neomodel(sub_community.parent_community.single()) if sub_community.parent_community.single() else None

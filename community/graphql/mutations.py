@@ -29,6 +29,10 @@ from post.redis import increment_post_like_count
 from user_activity.services.activity_service import ActivityService
 from vibe_manager.services.vibe_activity_service import VibeActivityService
 from post.services.mention_service import MentionService
+from vibe_manager.utils import VibeUtils
+from vibe_manager.models import IndividualVibe
+from django.utils import timezone
+from neomodel import db
 
 
 # Common constants
@@ -2306,13 +2310,51 @@ class CreateCommunityAchievement(graphene.Mutation):
             if input.file_id:
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
+            # Normalize/validate date input to accept flexible ISO-8601 strings
+            from datetime import datetime
+            from graphql import GraphQLError
+            def _parse_datetime(value):
+                if not value:
+                    return None
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    v = value.strip()
+                    if v.endswith('Z'):
+                        v = v[:-1] + '+00:00'
+                    if len(v) == 10 and v.count('-') == 2:
+                        return datetime.fromisoformat(v + 'T00:00:00')
+                    try:
+                        return datetime.fromisoformat(v)
+                    except Exception:
+                        try:
+                            return datetime.fromisoformat(v + ':00')
+                        except Exception:
+                            raise GraphQLError("Invalid datetime format. Must be in ISO 8601 format (YYYY-MM-DDThh:mm:ss)")
+                raise GraphQLError("Invalid datetime value for 'date'")
 
-            achievement = CommunityAchievement(
-                entity=input.entity,
-                date=input.date,
-                subject=input.subject,
-                file_id=input.file_id,
-            )
+            # Build payload for CommunityAchievement with safely parsed datetimes
+            achievement_kwargs = {
+                'entity': input.entity,
+                'subject': input.subject,
+                'file_id': input.file_id,
+            }
+
+            # Primary date
+            if hasattr(CommunityAchievement, 'date'):
+                parsed_date = _parse_datetime(input.get('date'))
+                if parsed_date is not None:
+                    achievement_kwargs['date'] = parsed_date
+
+            # Optional range dates (map camelCase to snake_case if properties exist)
+            from_date_value = _parse_datetime(input.get('fromDate'))
+            to_date_value = _parse_datetime(input.get('toDate'))
+            if from_date_value is not None and hasattr(CommunityAchievement, 'from_date'):
+                achievement_kwargs['from_date'] = from_date_value
+            if to_date_value is not None and hasattr(CommunityAchievement, 'to_date'):
+                achievement_kwargs['to_date'] = to_date_value
+
+            achievement = CommunityAchievement(**achievement_kwargs)
             achievement.save()
             achievement.created_by.connect(creator)
 
@@ -2411,8 +2453,43 @@ class UpdateCommunityAchievement(graphene.Mutation):
                 for id in input.file_id:
                     valid_id=get_valid_image(id)
 
+            # Apply updates with proper date parsing
+            from datetime import datetime
+            def _parse_datetime(value):
+                if not value:
+                    return None
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    v = value.strip()
+                    if v.endswith('Z'):
+                        v = v[:-1] + '+00:00'
+                    if len(v) == 10 and v.count('-') == 2:
+                        return datetime.fromisoformat(v + 'T00:00:00')
+                    try:
+                        return datetime.fromisoformat(v)
+                    except Exception:
+                        try:
+                            return datetime.fromisoformat(v + ':00')
+                        except Exception:
+                            raise GraphQLError("Invalid datetime format. Must be in ISO 8601 format (YYYY-MM-DDThh:mm:ss)")
+                raise GraphQLError("Invalid datetime value for 'date'")
+
             for key, value in input.items():
-                setattr(achievement, key, value)
+                if key in ('date', 'fromDate', 'toDate') and value is not None:
+                    parsed = _parse_datetime(value)
+                    # Map camelCase to snake_case if necessary
+                    if key == 'fromDate' and hasattr(achievement, 'from_date'):
+                        setattr(achievement, 'from_date', parsed)
+                    elif key == 'toDate' and hasattr(achievement, 'to_date'):
+                        setattr(achievement, 'to_date', parsed)
+                    elif key == 'date':
+                        setattr(achievement, 'date', parsed)
+                    else:
+                        # If property doesn't exist, ignore silently
+                        pass
+                else:
+                    setattr(achievement, key, value)
 
             achievement.save()
             return UpdateCommunityAchievement(achievement=CommunityAchievementType.from_neomodel(achievement), success=True, message=CommMessages.COMMUNITY_ACHIEVEMENT_UPDATED)
@@ -2882,6 +2959,9 @@ class CreateSubCommunity(Mutation):
             
         member_uid=input.get('member_uid') or []
         member_uid.append(ADMIN_USER_ID)
+
+        if created_by.uid not in member_uid:
+           member_uid.append(created_by.uid)
         if not member_uid:
             return CreateSubCommunity(community=None, success=False,message=f"You have not selected any user")
         unavailable_user=userlist.get_unavailable_list_user(member_uid)
@@ -2955,6 +3035,9 @@ class CreateSubCommunity(Mutation):
 
             members_to_notify = []
             for member in member_uid:
+
+                if member == created_by.uid:
+                    continue
                 user_node = Users.nodes.get(uid=member)
                 
                 # Note:- Review and Optimisations required here(we can store can_message,can_edit_group_info,can_add_new_member,is_notification_muted in postgresql)
@@ -3081,6 +3164,9 @@ class CreateSubCommunity(Mutation):
 
                 members_to_notify = []
                 for member in member_uid:
+
+                    if member == created_by.uid:
+                       continue
                     user_node = Users.nodes.get(uid=member)
                     
                     # Note:- Review and Optimisations required here(we can store can_message,can_edit_group_info,can_add_new_member,is_notification_muted in postgresql)
@@ -3969,22 +4055,42 @@ class CreateCommunityPost(Mutation):
                             'uid': user.uid
                         })
 
-            # Send notifications
+            # ============= NOTIFICATION CODE START =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityPost(
+            #             creator_name=creator.username,
+            #             members=members_to_notify,
+            #             community_name=community_name,
+            #             post_title=post.post_title or "New post",
+            #             post_id=post.uid,
+            #             community_id=community_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityPost(
-                        creator_name=creator.username,
-                        members=members_to_notify,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_community_post",
+                        recipients=members_to_notify,
+                        username=creator.username,
                         community_name=community_name,
-                        post_title=post.post_title or "New post",
+                        post_title=post.post_title[:50] if post.post_title else "New post",
                         post_id=post.uid,
                         community_id=community_id
-                    ))
-                finally:
-                    loop.close()
+                    )
+                except Exception as e:
+                    print(f"Failed to send community post notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             return CreateCommunityPost(success=True, message=CommMessages.POST_CREATED)
         except Exception as error:
@@ -4053,10 +4159,10 @@ class DeleteCommunityPost(Mutation):
 
 class LeaveCommunityChat(Mutation):
     """
-    Allows a user to leave a community's Matrix chat room.
+    Allows a user to leave a community's Matrix chat room and remove community membership.
     
     This mutation enables users to voluntarily leave Matrix chat rooms
-    associated with communities they are members of.
+    associated with communities they are members of and removes their membership.
     
     Args:
         input (LeaveCommunityChatInput): Contains room_id of the Matrix room to leave
@@ -4068,7 +4174,8 @@ class LeaveCommunityChat(Mutation):
         - Requires user authentication
         - User must have Matrix profile with valid credentials
         - User must be a member of the Matrix room
-        - Does not affect community membership, only Matrix chat access
+        - Removes both Matrix chat access and community membership
+        - Community creators cannot leave their own community
     """
     success = graphene.Boolean()
     message = graphene.String()
@@ -4089,6 +4196,124 @@ class LeaveCommunityChat(Mutation):
             payload = info.context.payload
             user_id = payload.get('user_id')
             room_id = input.room_id
+            
+            # Get the user node
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Find the community by room_id
+            try:
+                community = Community.nodes.get(room_id=room_id)
+            except Community.DoesNotExist:
+                # Try to find as sub-community
+                try:
+                    sub_community = SubCommunity.nodes.get(room_id=room_id)
+                    # Check if user is the creator
+                    creator = sub_community.created_by.single()
+                    if creator and creator.user_id == str(user_id):
+                        return LeaveCommunityChat(
+                            success=False,
+                            message="Sub-community creator cannot leave their own sub-community"
+                        )
+                    
+                    # Find and remove membership
+                    membership = None
+                    for mem in sub_community.sub_community_members.all():
+                        if mem.user.is_connected(user_node):
+                            membership = mem
+                            break
+                    
+                    if not membership:
+                        return LeaveCommunityChat(
+                            success=False,
+                            message="You are not a member of this sub-community"
+                        )
+                    
+                    # Get user's Matrix profile
+                    try:
+                        from msg.models import MatrixProfile
+                        matrix_profile = MatrixProfile.objects.get(user=user_id)
+                        if not matrix_profile.access_token or not matrix_profile.matrix_user_id:
+                            return LeaveCommunityChat(
+                                success=False,
+                                message="Matrix profile not available or incomplete"
+                            )
+                    except MatrixProfile.DoesNotExist:
+                        return LeaveCommunityChat(
+                            success=False,
+                            message="Matrix profile not found"
+                        )
+                    
+                    # Leave the Matrix room
+                    try:
+                        from msg.util.matrix_message_utils import leave_matrix_room
+                        import asyncio
+                        
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        
+                        try:
+                            success = loop.run_until_complete(
+                                leave_matrix_room(
+                                    access_token=matrix_profile.access_token,
+                                    user_id=matrix_profile.matrix_user_id,
+                                    room_id=room_id
+                                )
+                            )
+                        finally:
+                            loop.close()
+                        
+                        if success:
+                            # Remove membership from sub-community
+                            membership.delete()
+                            
+                            # Update sub-community member count
+                            sub_community.number_of_members = len(sub_community.sub_community_members.all())
+                            sub_community.save()
+                            
+                            return LeaveCommunityChat(
+                                success=True,
+                                message="Successfully left sub-community chat room and removed membership",
+                                room_id=room_id,
+                                left_at=datetime.now()
+                            )
+                        else:
+                            return LeaveCommunityChat(
+                                success=False,
+                                message="Failed to leave Matrix room"
+                            )
+                            
+                    except Exception as matrix_error:
+                        return LeaveCommunityChat(
+                            success=False,
+                            message=f"Matrix error: {str(matrix_error)}"
+                        )
+                        
+                except SubCommunity.DoesNotExist:
+                    return LeaveCommunityChat(
+                        success=False,
+                        message="Community or sub-community not found with this room ID"
+                    )
+            
+            # Check if user is the creator of the community
+            creator = community.created_by.single()
+            if creator and creator.user_id == str(user_id):
+                return LeaveCommunityChat(
+                    success=False,
+                    message="Community creator cannot leave their own community"
+                )
+            
+            # Find the membership for this user in the community
+            membership = None
+            for mem in community.members.all():
+                if mem.user.is_connected(user_node):
+                    membership = mem
+                    break
+            
+            if not membership:
+                return LeaveCommunityChat(
+                    success=False,
+                    message="You are not a member of this community"
+                )
             
             # Get user's Matrix profile
             try:
@@ -4125,9 +4350,16 @@ class LeaveCommunityChat(Mutation):
                     loop.close()
                 
                 if success:
+                    # Remove membership from community
+                    membership.delete()
+                    
+                    # Update community member count
+                    community.number_of_members = len(community.members.all())
+                    community.save()
+                    
                     return LeaveCommunityChat(
                         success=True,
-                        message="Successfully left community chat room",
+                        message="Successfully left community chat room and removed membership",
                         room_id=room_id,
                         left_at=datetime.now()
                     )
@@ -4147,6 +4379,880 @@ class LeaveCommunityChat(Mutation):
             return LeaveCommunityChat(
                 success=False,
                 message=f"Error leaving community chat: {str(error)}"
+            )
+
+
+class CreateCommunityV2(Mutation):
+    """
+    V2: Creates a new community with enhanced fields including username, location, and contact info.
+    
+    New fields in V2:
+    - username: Unique handle for the community
+    - city, state, country: Location information
+    - website_url, contact_email: Contact information
+    - enable_comments: Setting to allow/disallow comments on posts
+    
+    This version maintains all the functionality of V1 while adding the new fields.
+    """
+    community = graphene.Field(CommunityType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateCommunityInputV2()
+
+    @handle_graphql_community_errors 
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise Exception("Authentication Failure")
+            
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            
+            try:
+                created_by = Users.nodes.get(user_id=user_id)
+            except Exception as e:
+                raise
+            
+            # Check if username already exists across all entities (Users, Communities, SubCommunities)
+            username = input.get('username', '').strip().lower()
+            if username:
+                conflicts = []
+                
+                # Check in Users
+                try:
+                    existing_user = Users.nodes.get(username=username)
+                    if existing_user:
+                        conflicts.append("user")
+                except Users.DoesNotExist:
+                    pass
+                
+                # Check in Communities
+                try:
+                    existing_community = Community.nodes.get(username=username)
+                    if existing_community:
+                        conflicts.append("community")
+                except Community.DoesNotExist:
+                    pass
+                
+                # Check in SubCommunities
+                try:
+                    existing_subcommunity = SubCommunity.nodes.get(username=username)
+                    if existing_subcommunity:
+                        conflicts.append("subcommunity")
+                except SubCommunity.DoesNotExist:
+                    pass
+                
+                # If any conflicts exist, return error
+                if conflicts:
+                    if len(conflicts) == 1:
+                        entity_type = conflicts[0]
+                        return CreateCommunityV2(
+                            community=None, 
+                            success=False,
+                            message=f"Username '{username}' is already taken by a {entity_type}. Please choose a different username."
+                        )
+                    else:
+                        conflict_text = ", ".join(conflicts)
+                        return CreateCommunityV2(
+                            community=None, 
+                            success=False,
+                            message=f"Username '{username}' is already taken (conflicts: {conflict_text}). Please choose a different username."
+                        )
+            
+            room_id = None
+            access_token = None
+            
+            # Try to create a Matrix room if possible
+            try:
+                print("Trying to get MatrixProfile")
+                matrix_profile = MatrixProfile.objects.get(user=user_id)
+                if matrix_profile and matrix_profile.matrix_user_id and matrix_profile.access_token:
+                    print("Matrix profile found with valid credentials")
+                    matrix_user_id = matrix_profile.matrix_user_id
+                    access_token = matrix_profile.access_token
+                    room_name = input.get('name', '')
+                    topic = str(input.get('description', ''))
+                    
+                    print("Creating Matrix room...")
+                    room_id = asyncio.run(create_room(
+                        access_token=access_token,
+                        user_id=matrix_user_id,
+                        room_name=room_name,
+                        topic=topic,
+                        visibility="private",
+                        preset="private_chat",
+                    ))
+            except MatrixProfile.DoesNotExist:
+                print("No Matrix profile found for user")
+                matrix_logger.warning(f"No Matrix profile found for user {user_id}, creating community without chat room")
+            except Exception as e:
+                print(f"Matrix room creation error: {e}")
+                matrix_logger.error(f"Failed to create Matrix room: {e}")
+            
+            # Create community with V2 fields
+            community = Community(
+                name=input.get('name', ''),
+                username=username,
+                description=input.get('description', ''),
+                community_circle=input.get('community_circle').value,
+                community_type=input.get('community_type').value,
+                room_id=room_id,
+                category=input.get('category', ''),
+                city=input.get('city', ''),
+                state=input.get('state', ''),
+                country=input.get('country', ''),
+                address=input.get('address', ''),
+                website_url=input.get('website_url', ''),
+                contact_email=input.get('contact_email', ''),
+                enable_comments=input.get('enable_comments', True),
+                group_icon_id=input.get('group_icon_id', ''),
+                cover_image_id=input.get('cover_image_id', ''),
+                ai_generated=input.get('ai_generated', False),
+                tags=input.get('tags', []),
+            )
+            
+            print("Checking member_uid...")
+            member_uid = input.get('member_uid') or []
+            
+            member_uid.append(ADMIN_USER_ID)
+            if not member_uid:
+                print("No members selected")
+                return CreateCommunityV2(community=None, success=False, message=f"You have not selected any user")
+            
+            print(f"Member UIDs: {member_uid}")
+            
+            print("Checking for unavailable users...")
+            unavailable_user = userlist.get_unavailable_list_user(member_uid)
+            
+            if unavailable_user:
+                print(f"Unavailable users found: {unavailable_user}")
+                return CreateCommunityV2(community=None, success=False, message=f"These uid's do not correspond to any user {unavailable_user}")
+
+            print("Saving community...")
+            community.save()
+            
+            print("Connecting community with creator...")
+            community.created_by.connect(created_by)
+            created_by.community.connect(community)
+
+            print("Creating creator membership...")
+            membership = Membership(
+                is_admin=True,
+                can_message=True,
+                is_notification_muted=False
+            )
+            membership.save()
+            membership.user.connect(created_by)
+            membership.community.connect(community)
+            community.members.connect(membership)
+
+            # Extract mentions from community description
+            if description := input.get('description'):
+                from post.utils.mention_extractor import MentionExtractor
+                
+                print("Extracting mentions from community description...")
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(description)
+                
+                if mentioned_user_uids:
+                    print("Creating description mentions...")
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='community_description',
+                        content_uid=community.uid,
+                        mentioned_by_uid=created_by.uid,
+                        mention_context='description'
+                    )
+
+            if community and access_token:
+                try:
+                    community_data = {
+                        'community_type': community.community_type,
+                        'community_circle': community.community_circle,
+                        'category': community.category,
+                        'created_date': community.created_date,
+                        'community_uid': community.uid,
+                        'community_name': community.name,
+                    }
+                    print("Setting community room filter data...")
+                    filter_result = asyncio.run(set_room_avatar_score_and_filter(
+                        access_token=access_token,
+                        user_id=user_id,
+                        room_id=room_id,
+                        image_id=community.group_icon_id,
+                        community_data=community_data
+                    ))
+                    
+                    if filter_result["success"]:
+                        matrix_logger.info(f"Set avatar and score for community room {room_id}")
+                        print(f"Community filter data set successfully: {filter_result}")
+                    else:
+                        matrix_logger.warning(f"Failed to set community filter: {filter_result.get('error')}")
+                        print(f"Failed to set community filter data: {filter_result.get('error')}")
+                    
+                except Exception as e:
+                    matrix_logger.warning(f"Error setting community filter data: {e}")
+                    print(f"Error setting community filter data: {e}")
+
+            print("Adding other members...")
+            members_to_notify = []
+            for member in member_uid:
+                print(f"Adding member: {member}")
+                user_node = Users.nodes.get(uid=member)
+                membership = Membership(
+                    can_message=True,
+                    is_notification_muted=False
+                )
+                if member == ADMIN_USER_ID:
+                    membership.is_admin = True
+                    membership.can_message = True
+                    membership.is_notification_muted = False
+                    
+                membership.save()
+                membership.user.connect(user_node)
+                membership.community.connect(community)
+                community.members.connect(membership)
+                
+                # Collect members for notification
+                profile = user_node.profile.single()
+                if profile and profile.device_id:
+                    members_to_notify.append({
+                        'device_id': profile.device_id,
+                        'uid': user_node.uid
+                    })
+            
+            # Send notifications to initial members
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifyCommunityCreated(
+                        creator_name=created_by.username,
+                        members=members_to_notify,
+                        community_id=community.uid,
+                        community_name=community.name,
+                        community_icon=community.group_icon_id
+                    ))
+                finally:
+                    loop.close()
+            
+            # Invite all members to the Matrix room if a room was created
+            if room_id:
+                print("Initiating Matrix room invitations in background...")
+                matrix_logger.info(f"Starting background process to invite {len(member_uid)} members to Matrix room {room_id}")
+                
+                process_matrix_invites(
+                    admin_user_id=user_id,
+                    room_id=room_id,
+                    member_ids=member_uid
+                )
+
+            # Auto-assign agent to community after creation
+            agent_assignment_success = False
+            agent_name = None
+            assigned_agent = None
+            try:
+                print("Auto-assigning agent to community...")
+                from agentic.services.agent_service import AgentService
+                
+                agent_service = AgentService()
+                default_agent = agent_service.get_default_community_agent()
+                
+                if default_agent:
+                    print(f"Found default agent: {default_agent.uid}")
+                    assignment = agent_service.assign_agent_to_community(
+                        agent_uid=default_agent.uid,
+                        community_uid=community.uid,
+                        assigned_by_uid=user_id,
+                        allow_multiple_leaders=False
+                    )
+                    print(f"Successfully assigned agent {default_agent.uid} to community {community.uid}")
+                    agent_assignment_success = True
+                    agent_name = default_agent.name
+                    assigned_agent = default_agent
+                    
+                    from agentic.services.auth_service import AgentAuthService
+                    auth_service = AgentAuthService()
+                    auth_service.log_agent_action(
+                        agent_uid=default_agent.uid,
+                        community_uid=community.uid,
+                        action_type="auto_assignment",
+                        details={
+                            "assigned_during": "community_creation",
+                            "community_name": community.name,
+                            "assigned_by": user_id
+                        },
+                        success=True
+                    )
+                    
+                    if room_id and assigned_agent:
+                        try:
+                            print(f"Adding agent {assigned_agent.name} to Matrix room {room_id}...")
+                            from agentic.matrix_utils import join_agent_to_community_matrix_room
+                            
+                            join_agent_to_community_matrix_room(
+                                agent=assigned_agent,
+                                community=community
+                            )
+                            print(f"Successfully added agent {assigned_agent.name} to Matrix room")
+                        except Exception as matrix_error:
+                            print(f"Failed to add agent to Matrix room (non-critical): {matrix_error}")
+                            import traceback
+                            traceback.print_exc()
+                else:
+                    print("No default agent available for assignment")
+                    
+            except Exception as agent_error:
+                print(f"Agent assignment failed (non-critical): {agent_error}")
+                import traceback
+                traceback.print_exc()
+            
+            # Process tags if provided
+            tags = input.get('tags') or []
+            if tags:
+                print(f"Processing {len(tags)} tags for community...")
+                from community.models import CommunityKeyword
+                
+                for tag in tags:
+                    if tag and tag.strip():
+                        tag_cleaned = tag.strip().lower()
+                        try:
+                            existing_keyword = CommunityKeyword.nodes.get(keyword=tag_cleaned)
+                            print(f"Tag '{tag_cleaned}' already exists, skipping...")
+                        except CommunityKeyword.DoesNotExist:
+                            keyword = CommunityKeyword(
+                                keyword=tag_cleaned
+                            )
+                            keyword.save()
+                            keyword.community.connect(community)
+                            print(f"Created and associated tag: {tag_cleaned}")
+                        except Exception as tag_error:
+                            print(f"Error processing tag '{tag_cleaned}': {tag_error}")
+                            continue
+            
+            print("Community creation V2 completed successfully!")
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_id,
+                    content_type="community",
+                    content_id=community.uid,
+                    interaction_type="create",
+                    metadata={
+                        "community_id": community.uid,
+                        "community_name": community.name,
+                        "community_username": community.username,
+                        "community_type": community.community_type,
+                        "member_count": len(member_uid) if member_uid else 1,
+                        "has_matrix_room": bool(room_id),
+                        "agent_assigned": agent_assignment_success,
+                        "version": "v2"
+                    }
+                )
+            except Exception as activity_error:
+                print(f"Failed to track community creation activity: {activity_error}")
+            
+            success_message = str(CommMessages.COMMUNITY_CREATED)
+            
+            try:
+                community_obj = CommunityType.from_neomodel(community)
+            except Exception as e:
+                print(f"Error converting community to GraphQL type: {e}")
+                community_obj = None
+            
+            return CreateCommunityV2(
+                community=community_obj,
+                success=True,
+                message=success_message
+            )
+        except Exception as error:
+            print(f"ERROR in CreateCommunityV2: {error}")
+            import traceback
+            traceback.print_exc()
+            message = getattr(error, 'message', str(error))
+            return CreateCommunityV2(community=None, success=False, message=message)
+
+
+class CreateSubCommunityV2(Mutation):
+    """
+    V2: Creates a new sub-community with enhanced fields including username, location, and contact info.
+    
+    New fields in V2:
+    - username: Unique handle for the sub-community
+    - city, state, country: Location information
+    - website_url, contact_email: Contact information
+    - enable_comments: Setting to allow/disallow comments on posts
+    
+    This version maintains all the functionality of V1 while adding the new fields.
+    """
+    community = graphene.Field(SubCommunityType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateSubCommunityInputV2()
+
+    @handle_graphql_community_errors 
+    @login_required
+    def mutate(self, info, input):
+        user = info.context.user
+        if user.is_anonymous:
+            raise Exception("Authentication Failure")
+            
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+            
+        created_by = Users.nodes.get(user_id=user_id)
+        
+        # Check if username already exists across all entities (Users, Communities, SubCommunities)
+        username = input.get('username', '').strip().lower()
+        if username:
+            conflicts = []
+            
+            # Check in Users
+            try:
+                existing_user = Users.nodes.get(username=username)
+                if existing_user:
+                    conflicts.append("user")
+            except Users.DoesNotExist:
+                pass
+            
+            # Check in Communities
+            try:
+                existing_community = Community.nodes.get(username=username)
+                if existing_community:
+                    conflicts.append("community")
+            except Community.DoesNotExist:
+                pass
+            
+            # Check in SubCommunities
+            try:
+                existing_subcommunity = SubCommunity.nodes.get(username=username)
+                if existing_subcommunity:
+                    conflicts.append("subcommunity")
+            except SubCommunity.DoesNotExist:
+                pass
+            
+            # If any conflicts exist, return error
+            if conflicts:
+                if len(conflicts) == 1:
+                    entity_type = conflicts[0]
+                    return CreateSubCommunityV2(
+                        community=None, 
+                        success=False,
+                        message=f"Username '{username}' is already taken by a {entity_type}. Please choose a different username."
+                    )
+                else:
+                    conflict_text = ", ".join(conflicts)
+                    return CreateSubCommunityV2(
+                        community=None, 
+                        success=False,
+                        message=f"Username '{username}' is already taken (conflicts: {conflict_text}). Please choose a different username."
+                    )
+        
+        room_id = None
+        access_token = None
+            
+        # Try to create a Matrix room if possible
+        try:
+            print("Trying to get MatrixProfile")
+            matrix_profile = MatrixProfile.objects.get(user=user_id)
+            if matrix_profile and matrix_profile.matrix_user_id and matrix_profile.access_token:
+                matrix_user_id = matrix_profile.matrix_user_id
+                access_token = matrix_profile.access_token
+                room_name = input.get('name', '')
+                topic = str(input.get('description', ''))
+                    
+                print("Creating Matrix room...")
+                room_id = asyncio.run(create_room(
+                    access_token=access_token,
+                    user_id=matrix_user_id,
+                    room_name=room_name,
+                    topic=topic,
+                    visibility="private",
+                    preset="private_chat"
+                ))
+        except MatrixProfile.DoesNotExist:
+            print("No Matrix profile found for user")
+            matrix_logger.warning(f"No Matrix profile found for user {user_id}, creating community without chat room")
+        except Exception as e:
+            print(f"Matrix room creation error: {e}")
+            matrix_logger.error(f"Failed to create Matrix room: {e}")
+
+        if input.group_icon_id:
+            valid_id = get_valid_image(input.group_icon_id)
+                       
+        # Create sub-community with V2 fields
+        sub_community = SubCommunity(
+            name=input.get('name', ''),
+            username=username,
+            description=input.get('description', ''),
+            sub_community_circle=input.get('sub_community_circle').value,
+            sub_community_type=input.get('sub_community_type').value,
+            sub_community_group_type=input.get('sub_community_group_type').value,
+            category=input.get('category', ''),
+            city=input.get('city', ''),
+            state=input.get('state', ''),
+            country=input.get('country', ''),
+            address=input.get('address', ''),
+            website_url=input.get('website_url', ''),
+            contact_email=input.get('contact_email', ''),
+            enable_comments=input.get('enable_comments', True),
+            room_id=room_id,
+            cover_image_id=input.get('cover_image_id', ''),
+            group_icon_id=input.get('group_icon_id', ''),
+        )
+            
+        member_uid = input.get('member_uid') or []
+        member_uid.append(ADMIN_USER_ID)
+
+        if created_by.uid not in member_uid:
+           member_uid.append(created_by.uid)
+        if not member_uid:
+            return CreateSubCommunityV2(community=None, success=False, message=f"You have not selected any user")
+        unavailable_user = userlist.get_unavailable_list_user(member_uid)
+        if unavailable_user:
+            return CreateSubCommunityV2(community=None, success=False, message=f"These uid's do not correspond to any user {unavailable_user}")
+        
+        try:
+            community = Community.nodes.get(uid=input.parent_community_uid)
+
+            membership_exists = helperfunction.get_membership_for_user_in_community(created_by, community)
+
+            if not membership_exists:
+                return CreateSubCommunityV2(community=None, success=False, message="You are not a member of this community and this communnity is private")
+
+            if membership_exists:
+                if membership_exists.is_admin == False:
+                    return CreateSubCommunityV2(community=None, success=False, message="You are not authorised to add new member")
+
+            sub_community.save()
+            sub_community.created_by.connect(created_by)
+            sub_community.parent_community.connect(community)
+            if input.get('sub_community_type').value == 'child community':
+                community.child_communities.connect(sub_community)
+            if input.get('sub_community_type').value == 'sibling community':
+                community.sibling_communities.connect(sub_community)
+
+            # Set Matrix room avatar and filter data for sub-community
+            if sub_community and access_token:
+                try:
+                    sub_community_data = {
+                        'community_type': sub_community.sub_community_type,
+                        'community_circle': sub_community.sub_community_circle,
+                        'category': sub_community.category,
+                        'created_date': sub_community.created_date,
+                        'community_uid': sub_community.uid,
+                        'community_name': sub_community.name,
+                    }
+                    print("Setting sub-community room filter data...")
+                    filter_result = asyncio.run(set_room_avatar_score_and_filter(
+                        access_token=access_token,
+                        user_id=user_id,
+                        room_id=room_id,
+                        image_id=sub_community.group_icon_id,
+                        community_data=sub_community_data
+                    ))
+                    
+                    if filter_result["success"]:
+                        matrix_logger.info(f"Set avatar and score for sub-community room {room_id}")
+                        print(f"Sub-community filter data set successfully: {filter_result}")
+                    else:
+                        matrix_logger.warning(f"Failed to set sub-community filter: {filter_result.get('error')}")
+                        print(f"Failed to set sub-community filter data: {filter_result.get('error')}")
+                    
+                except Exception as e:
+                    matrix_logger.warning(f"Error setting sub-community filter data: {e}")
+                    print(f"Error setting sub-community filter data: {e}")
+
+            # Member who created the sub-community is itself a member
+            membership = SubCommunityMembership(
+                is_admin=True,
+                can_message=True,
+                is_notification_muted=False
+            )
+            membership.save()
+            membership.user.connect(created_by)
+            membership.sub_community.connect(sub_community)
+            sub_community.sub_community_members.connect(membership)
+
+
+            members_to_notify = []
+            for member in member_uid:
+
+                if member == created_by.uid:
+                   continue
+                user_node = Users.nodes.get(uid=member)
+                membership = SubCommunityMembership(
+                    can_message=True,
+                    is_notification_muted=False
+                )
+                if member == ADMIN_USER_ID:
+                    membership.is_admin = True
+                    membership.can_message = True
+                    membership.is_notification_muted = False
+                    
+                membership.save()
+                membership.user.connect(user_node)
+                membership.sub_community.connect(sub_community)
+                sub_community.sub_community_members.connect(membership)
+                
+                # Collect members for notification
+                profile = user_node.profile.single()
+                if profile and profile.device_id:
+                    members_to_notify.append({
+                        'device_id': profile.device_id,
+                        'uid': user_node.uid
+                    })
+
+            # Send notifications to initial members
+            if members_to_notify:
+                notification_service = NotificationService()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(notification_service.notifySubCommunityCreated(
+                        creator_name=created_by.username,
+                        members=members_to_notify,
+                        sub_community_id=sub_community.uid,
+                        sub_community_name=sub_community.name,
+                        sub_community_icon=sub_community.group_icon_id
+                    ))
+                finally:
+                    loop.close()
+
+            if room_id:
+                print("Initiating Matrix room invitations in background...")
+                matrix_logger.info(f"Starting background process to invite {len(member_uid)} members to Matrix room {room_id}")
+                
+                process_matrix_invites(
+                    admin_user_id=user_id,
+                    room_id=room_id,
+                    member_ids=member_uid
+                )
+            
+            # Track activity for analytics
+            try:
+                ActivityService.track_content_interaction_by_id(
+                    user_id=user_id,
+                    content_type="subcommunity",
+                    content_id=sub_community.uid,
+                    interaction_type="create",
+                    metadata={
+                        "subcommunity_id": sub_community.uid,
+                        "subcommunity_name": sub_community.name,
+                        "subcommunity_username": sub_community.username,
+                        "parent_community_id": community.uid,
+                        "member_count": len(member_uid) if member_uid else 1,
+                        "has_matrix_room": bool(room_id),
+                        "version": "v2"
+                    }
+                )
+            except Exception as activity_error:
+                print(f"Failed to track subcommunity creation activity: {activity_error}")
+            
+            return CreateSubCommunityV2(community=SubCommunityType.from_neomodel(sub_community), success=True, message=CommMessages.COMMUNITY_CREATED)
+            
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return CreateSubCommunityV2(community=None, success=False, message=message)
+class SendVibeToCommunityContent(Mutation):
+    """
+    Sends a vibe reaction to community content (achievement, activity, goal, affiliation).
+    
+    This mutation allows authenticated community members to send vibe reactions to
+    community content using the IndividualVibe system for standardized vibe metadata and scoring.
+    
+    Features:
+    - Validates vibe intensity (1.0 to 5.0)
+    - Gets IndividualVibe from PostgreSQL for metadata
+    - Validates community membership before allowing vibe
+    - Checks for existing vibe and updates if found (one vibe per user per content)
+    - Creates CommunityContentVibe node in Neo4j
+    - Updates user scores via VibeUtils
+    
+    Returns:
+        success: Boolean indicating if vibe was sent successfully
+        message: Status message or error description
+        community_content_vibe: The created or updated vibe reaction
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    community_content_vibe = graphene.Field(CommunityContentVibeType)
+    
+    class Arguments:
+        input = SendVibeToCommunityContentInput()
+    
+    @handle_graphql_community_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            # Get authenticated user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Validate vibe intensity (1.0 to 5.0)
+            if not (1.0 <= input.vibe_intensity <= 5.0):
+                return SendVibeToCommunityContent(
+                    success=False,
+                    message="Vibe intensity must be between 1.0 and 5.0",
+                    community_content_vibe=None
+                )
+            
+            try:
+                clean_intensity = round(float(input.vibe_intensity), 2)
+            except (ValueError, TypeError):
+                return SendVibeToCommunityContent(
+                    success=False,
+                    message="Invalid vibe intensity format",
+                    community_content_vibe=None
+                )
+            
+            if not (1.0 <= clean_intensity <= 5.0):
+                return SendVibeToCommunityContent(
+                    success=False,
+                    message="Vibe intensity must be between 1.0 and 5.0",
+                    community_content_vibe=None
+                )
+            
+            # Get the individual vibe from PostgreSQL
+            try:
+                individual_vibe = IndividualVibe.objects.get(id=input.individual_vibe_id)
+            except IndividualVibe.DoesNotExist:
+                return SendVibeToCommunityContent(
+                    success=False,
+                    message="Invalid vibe selected",
+                    community_content_vibe=None
+                )
+            
+            # Get the content node based on category
+            content_node = None
+            # Enum value is already a string (e.g., 'community_achievement', 'community_activity')
+            category = input.content_category
+            
+            try:
+                if category == 'community_achievement':
+                    content_node = CommunityAchievement.nodes.get(uid=input.content_uid)
+                elif category == 'community_activity':
+                    content_node = CommunityActivity.nodes.get(uid=input.content_uid)
+                elif category == 'community_goal':
+                    content_node = CommunityGoal.nodes.get(uid=input.content_uid)
+                elif category == 'community_affiliation':
+                    content_node = CommunityAffiliation.nodes.get(uid=input.content_uid)
+                else:
+                    return SendVibeToCommunityContent(
+                        success=False,
+                        message="Invalid content category. Must be community_achievement, community_activity, community_goal, or community_affiliation.",
+                        community_content_vibe=None
+                    )
+            except Exception as e:
+                return SendVibeToCommunityContent(
+                    success=False,
+                    message=f"Content not found: {str(e)}",
+                    community_content_vibe=None
+                )
+            
+            # Validate community membership
+            try:
+                community = content_node.community.single()
+                subcommunity = content_node.subcommunity.single() if hasattr(content_node, 'subcommunity') else None
+                
+                target_community = subcommunity if subcommunity else community
+                
+                if target_community:
+                    # Check if user is a member using the helper function
+                    membership = helperfunction.get_membership_for_user_in_community(user_node, target_community)
+                    
+                    if not membership:
+                        return SendVibeToCommunityContent(
+                            success=False,
+                            message="You must be a member of this community to send vibes",
+                            community_content_vibe=None
+                        )
+            except Exception as e:
+                # If we can't validate, allow the vibe (fail open for better UX)
+                pass
+            
+            # Check if user has already reacted to this content with a vibe
+            existing_vibe = None
+            try:
+                query = f"""
+                MATCH (u:Users {{uid: $user_uid}})-[:REACTED_BY]-(ccv:CommunityContentVibe)<-[:HAS_VIBE_REACTION]-(content {{uid: $content_uid}})
+                WHERE ccv.is_active = true
+                RETURN ccv
+                """
+                results, _ = db.cypher_query(query, {
+                    'user_uid': user_node.uid,
+                    'content_uid': input.content_uid
+                })
+                
+                if results:
+                    # Update existing vibe instead of creating new one
+                    from community.models import CommunityContentVibe
+                    existing_vibe_node = CommunityContentVibe.inflate(results[0][0])
+                    existing_vibe_node.individual_vibe_id = input.individual_vibe_id
+                    existing_vibe_node.vibe_name = individual_vibe.name_of_vibe
+                    existing_vibe_node.vibe_intensity = clean_intensity
+                    existing_vibe_node.reaction_type = "vibe"
+                    existing_vibe_node.timestamp = timezone.now()
+                    existing_vibe_node.is_active = True
+                    existing_vibe_node.save()
+                    
+                    return SendVibeToCommunityContent(
+                        success=True,
+                        message="Vibe updated successfully",
+                        community_content_vibe=CommunityContentVibeType.from_neomodel(existing_vibe_node)
+                    )
+            except Exception as e:
+                # Continue if query fails - better to allow than block valid reactions
+                pass
+            
+            # Create new vibe reaction in Neo4j
+            from community.models import CommunityContentVibe
+            community_content_vibe = CommunityContentVibe(
+                individual_vibe_id=input.individual_vibe_id,
+                vibe_name=individual_vibe.name_of_vibe,
+                vibe_intensity=clean_intensity,
+                reaction_type="vibe"
+            )
+            community_content_vibe.save()
+            
+            # Connect to user
+            community_content_vibe.reacted_by.connect(user_node)
+            
+            # Connect to content
+            content_node.vibe_reactions.connect(community_content_vibe)
+            
+            # Update user's vibe score using existing system
+            vibe_score_multiplier = clean_intensity / 5.0  # Convert to 0.0-1.0 multiplier
+            
+            # Apply weightages from IndividualVibe
+            adjusted_score = (
+                individual_vibe.weightage_iaq + 
+                individual_vibe.weightage_iiq + 
+                individual_vibe.weightage_ihq + 
+                individual_vibe.weightage_isq
+            ) / 4.0 * vibe_score_multiplier
+            
+            VibeUtils.onVibeCreated(user_node, individual_vibe.name_of_vibe, adjusted_score)
+            
+            return SendVibeToCommunityContent(
+                success=True,
+                message="Vibe sent to community content successfully!",
+                community_content_vibe=CommunityContentVibeType.from_neomodel(community_content_vibe)
+            )
+            
+        except Exception as e:
+            return SendVibeToCommunityContent(
+                success=False,
+                message=f"Error sending vibe: {str(e)}",
+                community_content_vibe=None
             )
 
 
@@ -4214,6 +5320,11 @@ class Mutation(graphene.ObjectType):
     create_community_post=CreateCommunityPost.Field()
     delete_community_post=DeleteCommunityPost.Field()
     leave_community_chat=LeaveCommunityChat.Field()
+    
+    # V2 Mutations with enhanced fields
+    create_community_v2=CreateCommunityV2.Field()
+    create_sub_community_v2=CreateSubCommunityV2.Field()
+    send_vibe_to_community_content=SendVibeToCommunityContent.Field()
 
 
 

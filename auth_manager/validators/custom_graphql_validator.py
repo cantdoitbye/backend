@@ -2006,6 +2006,70 @@ class UsernameString6_15(graphene.Scalar):
         return value
 
 
+class UsernameString3_30(graphene.Scalar):
+    """Custom String Scalar for community/subcommunity usernames (3-30 characters)"""
+    MIN_LENGTH = 3
+    MAX_LENGTH = 30
+    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")  # Allows letters, numbers, and underscores
+
+    @classmethod
+    def add_option(cls, field_name, mutation_name=None):
+        """Create a new class with the specified field name and mutation name"""
+        class_name = f"Custom{field_name.title().replace('_', '')}Validator"
+        if mutation_name:
+            class_name = f"{class_name}_{mutation_name}"
+        return type(class_name, (cls,), {'field_name': field_name, 'mutation_name': mutation_name})
+
+    field_name = "username"
+    mutation_name = None
+
+    def raise_error(self, message):
+        """Helper function to raise GraphQLError with custom extensions"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if self.mutation_name:
+            path.append(self.mutation_name)
+        path.append(self.field_name)
+        raise GraphQLError(message, extensions=extensions, path=path)
+
+    def parse_value(self, value):
+        """Handles values when passed as variables"""
+        if not isinstance(value, str):
+            self.raise_error(f"{self.field_name} must be a string.")
+        if not (self.MIN_LENGTH <= len(value) <= self.MAX_LENGTH):
+            self.raise_error(f"Username length must be between {self.MIN_LENGTH} and {self.MAX_LENGTH} characters.")
+        if not self.ALLOWED_PATTERN.match(value):
+            self.raise_error(f"{self.field_name} must contain only letters, numbers, and underscores.")
+        return value
+
+    @classmethod
+    def parse_literal(cls, node, _variables=None):
+        """Handles inline literals in GraphQL queries"""
+        extensions = {"code": "BAD_REQUEST", "status_code": 400}
+        path = []
+        if hasattr(cls, 'mutation_name') and cls.mutation_name:
+            path.append(cls.mutation_name)
+        path.append(cls.field_name)
+
+        if not isinstance(node, ast.StringValueNode):
+            raise GraphQLError(f"{cls.field_name} must be a string.", extensions=extensions, path=path)
+
+        value = node.value
+        if not (cls.MIN_LENGTH <= len(value) <= cls.MAX_LENGTH):
+            raise GraphQLError(
+                f"Username length must be between {cls.MIN_LENGTH} and {cls.MAX_LENGTH} characters.",
+                extensions=extensions,
+                path=path,
+            )
+        if not re.match(r"^[a-zA-Z0-9_]+$", value):
+            raise GraphQLError(
+                f"{cls.field_name} must contain only letters, numbers, and underscores.",
+                extensions=extensions,
+                path=path,
+            )
+        return value
+
+
 class PhoneNumberScalar(graphene.Scalar):
     """Custom Scalar for validating Indian phone numbers"""
 
@@ -2062,10 +2126,12 @@ class PhoneNumberScalar(graphene.Scalar):
             )
         return value
 class DateTimeScalar(graphene.Scalar):
-    """Custom Scalar for validating DateTime in ISO 8601 format (YYYY-MM-DDThh:mm:ss)"""
+    """Custom Scalar for validating DateTime in ISO 8601 format (YYYY-MM-DDThh:mm:ss) or date-only format (YYYY-MM-DD)"""
 
     # Pattern for ISO 8601 format: YYYY-MM-DDThh:mm:ss
     ISO_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+    # Pattern for date-only format: YYYY-MM-DD
+    DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
     @classmethod
     def add_option(cls, field_name, mutation_name=None):
@@ -2100,15 +2166,24 @@ class DateTimeScalar(graphene.Scalar):
         if not isinstance(value, str):
             self.raise_error(f"{self.field_name} must be a string.")
 
+        # Check if it matches date-only format (YYYY-MM-DD)
+        if self.DATE_PATTERN.match(value):
+            try:
+                # Convert date-only string to datetime object with time 00:00:00
+                return datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as e:
+                self.raise_error(f"Invalid date: {str(e)}")
+        
         # Check if it matches the ISO 8601 format
-        if not self.ISO_PATTERN.match(value):
-            self.raise_error(f"Invalid datetime format. Must be in ISO 8601 format (YYYY-MM-DDThh:mm:ss).")
-
-        try:
-            # Convert string to datetime object
-            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
-        except ValueError as e:
-            self.raise_error(f"Invalid datetime: {str(e)}")
+        elif self.ISO_PATTERN.match(value):
+            try:
+                # Convert string to datetime object
+                return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+            except ValueError as e:
+                self.raise_error(f"Invalid datetime: {str(e)}")
+        
+        else:
+            self.raise_error(f"Invalid datetime format. Must be YYYY-MM-DD or ISO 8601 format (YYYY-MM-DDThh:mm:ss).")
 
     @classmethod
     def parse_literal(cls, node, _variables=None):
@@ -2130,20 +2205,33 @@ class DateTimeScalar(graphene.Scalar):
 
         value = node.value
         
-        # Check if it matches the ISO 8601 format
-        if not cls.ISO_PATTERN.match(value):
-            raise GraphQLError(
-                f"Invalid datetime format. Must be in ISO 8601 format (YYYY-MM-DDThh:mm:ss).",
-                extensions=extensions,
-                path=path
-            )
+        # Check if it matches date-only format (YYYY-MM-DD)
+        if cls.DATE_PATTERN.match(value):
+            try:
+                # Convert date-only string to datetime object with time 00:00:00
+                return datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as e:
+                raise GraphQLError(
+                    f"Invalid date: {str(e)}",
+                    extensions=extensions,
+                    path=path
+                )
         
-        try:
-            # Convert string to datetime object
-            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
-        except ValueError as e:
+        # Check if it matches the ISO 8601 format
+        elif cls.ISO_PATTERN.match(value):
+            try:
+                # Convert string to datetime object
+                return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+            except ValueError as e:
+                raise GraphQLError(
+                    f"Invalid datetime: {str(e)}",
+                    extensions=extensions,
+                    path=path
+                )
+        
+        else:
             raise GraphQLError(
-                f"Invalid datetime: {str(e)}",
+                f"Invalid datetime format. Must be YYYY-MM-DD or ISO 8601 format (YYYY-MM-DDThh:mm:ss).",
                 extensions=extensions,
                 path=path
             )

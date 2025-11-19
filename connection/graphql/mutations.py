@@ -41,6 +41,7 @@ from connection.services.notification_service import NotificationService
 from auth_manager.Utils.matrix_avatar_manager import set_user_relations_data, get_user_relations
 from msg.models import MatrixProfile
 from user_activity.services.activity_service import ActivityService
+from connection.utils.dm_room_manager import update_dm_room_by_room_id
 
 class CreateConnection(Mutation):
     """Legacy Connection Creation Mutation (Deprecated)
@@ -149,20 +150,42 @@ class CreateConnection(Mutation):
             except:
                 pass
 
-            # Send notification to receiver about new connection request
-            receiver_profile = receiver.profile.single()
-            if receiver_profile and receiver_profile.device_id:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(notification_service.notifyConnectionRequest(
-                        sender_name=created_by_node.username,
-                        receiver_device_id=receiver_profile.device_id,
+            # ============= NOTIFICATION CODE START =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # receiver_profile = receiver.profile.single()
+            # if receiver_profile and receiver_profile.device_id:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyConnectionRequest(
+            #             sender_name=created_by_node.username,
+            #             receiver_device_id=receiver_profile.device_id,
+            #             connection_id=connection.uid
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            try:
+                from notification.global_service import GlobalNotificationService
+                
+                receiver_profile = receiver.profile.single()
+                if receiver_profile and receiver_profile.device_id:
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_connection_request",
+                        recipients=[{
+                            'device_id': receiver_profile.device_id,
+                            'uid': receiver.uid
+                        }],
+                        username=created_by_node.username,
+                        sender_id=created_by_node.uid,
                         connection_id=connection.uid
-                    ))
-                finally:
-                    loop.close()
+                    )
+            except Exception as e:
+                print(f"Failed to send connection request notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             # Track activity for analytics
             try:
@@ -336,39 +359,82 @@ class UpdateConnection(Mutation):
                 except Exception as e:
                        print(f"Error updating user relations: {e}")    
 
-                # Send notification to sender about accepted connection
-                sender_profile = sender.profile.single()
-                if sender_profile and sender_profile.device_id:
-                    notification_service = NotificationService()
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(notification_service.notifyConnectionAccepted(
-                            receiver_name=receiver_node.username,
-                            sender_device_id=sender_profile.device_id,
+                # ============= NOTIFICATION CODE START =============
+                # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+                # sender_profile = sender.profile.single()
+                # if sender_profile and sender_profile.device_id:
+                #     notification_service = NotificationService()
+                #     loop = asyncio.new_event_loop()
+                #     asyncio.set_event_loop(loop)
+                #     try:
+                #         loop.run_until_complete(notification_service.notifyConnectionAccepted(
+                #             receiver_name=receiver_node.username,
+                #             sender_device_id=sender_profile.device_id,
+                #             connection_id=connection.uid
+                #         ))
+                #     finally:
+                #         loop.close()
+                
+                # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+                try:
+                    from notification.global_service import GlobalNotificationService
+                    
+                    sender_profile = sender.profile.single()
+                    if sender_profile and sender_profile.device_id:
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="connection_accepted",
+                            recipients=[{
+                                'device_id': sender_profile.device_id,
+                                'uid': sender.uid
+                            }],
+                            username=receiver_node.username,
+                            accepter_id=receiver_node.uid,
                             connection_id=connection.uid
-                        ))
-                    finally:
-                        loop.close()
+                        )
+                except Exception as e:
+                    print(f"Failed to send connection accepted notification: {e}")
+                # ============= NOTIFICATION CODE END =============
 
             if input.connection_status == 'REJECTED':
                 connection_stat_receiver.rejected_connections_count+=1
                 connection_stat_receiver.save()
 
-                # Send notification to sender about rejected connection
-                sender_profile = sender.profile.single()
-                if sender_profile and sender_profile.device_id:
-                    notification_service = NotificationService()
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(notification_service.notifyConnectionRejected(
-                            receiver_name=receiver_node.username,
-                            sender_device_id=sender_profile.device_id,
+                # ============= NOTIFICATION CODE START =============
+                # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+                # sender_profile = sender.profile.single()
+                # if sender_profile and sender_profile.device_id:
+                #     notification_service = NotificationService()
+                #     loop = asyncio.new_event_loop()
+                #     asyncio.set_event_loop(loop)
+                #     try:
+                #         loop.run_until_complete(notification_service.notifyConnectionRejected(
+                #             receiver_name=receiver_node.username,
+                #             sender_device_id=sender_profile.device_id,
+                #             connection_id=connection.uid
+                #         ))
+                #     finally:
+                #         loop.close()
+                
+                # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+                try:
+                    from notification.global_service import GlobalNotificationService
+                    
+                    sender_profile = sender.profile.single()
+                    if sender_profile and sender_profile.device_id:
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="connection_rejected",
+                            recipients=[{
+                                'device_id': sender_profile.device_id,
+                                'uid': sender.uid
+                            }],
+                            username=receiver_node.username,
                             connection_id=connection.uid
-                        ))
-                    finally:
-                        loop.close()
+                        )
+                except Exception as e:
+                    print(f"Failed to send connection rejected notification: {e}")
+                # ============= NOTIFICATION CODE END =============
 
             connection.save()
 
@@ -598,6 +664,114 @@ class UpdateConnectionRelationOrCircle(Mutation):
             return UpdateConnectionRelationOrCircle(success=False, message=message)
 
 
+
+class UpdateDMRoomByRoomId(Mutation):
+    """
+    Update DM room data by providing room_id.
+    
+    This mutation:
+    - Takes Matrix room_id as input
+    - Finds both users in that room
+    - Gets their avatars, names, emails from database
+    - Updates Matrix room state event with both users' data
+    
+    Usage:
+    ```graphql
+    mutation {
+      updateDMRoomByRoomId(input: {
+        roomId: "!abc123:chat.ooumph.com"
+      }) {
+        success
+        message
+        user1Name
+        user2Name
+        relation
+      }
+    }
+    ```
+    """
+    
+    success = graphene.Boolean()
+    message = graphene.String()
+    room_id = graphene.String()
+    user1_name = graphene.String()
+    user2_name = graphene.String()
+    relation = graphene.String()
+    has_user1_avatar = graphene.Boolean()
+    has_user2_avatar = graphene.Boolean()
+
+    class Arguments:
+        input = UpdateDMRoomByRoomIdInput(required=True)
+    
+    @handle_graphql_connection_errors
+    @login_required
+    def mutate(self, info, input):
+        """Execute the DM room update mutation."""
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication required")
+
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            room_id = input.room_id  # Access using dot notation
+            
+            # Validate room_id format
+            if not room_id or not room_id.startswith('!'):
+                return UpdateDMRoomByRoomId(
+                    success=False,
+                    message="Invalid room ID format. Must start with '!'"
+                )
+            
+            # Get current user's Matrix profile
+            try:
+                current_user_matrix = MatrixProfile.objects.get(
+                    user=user_id,
+                    access_token__isnull=False,
+                    matrix_user_id__isnull=False
+                )
+            except MatrixProfile.DoesNotExist:
+                return UpdateDMRoomByRoomId(
+                    success=False,
+                    message="You don't have a Matrix profile. Please set up Matrix first."
+                )
+            
+            # Call the dm_room_manager function
+            result = asyncio.run(
+                update_dm_room_by_room_id(
+                    room_id=room_id,
+                    current_user_id=user_id,
+                    access_token=current_user_matrix.access_token,
+                    current_user_matrix_id=current_user_matrix.matrix_user_id
+                )
+            )
+            
+            if result['success']:
+                return UpdateDMRoomByRoomId(
+                    success=True,
+                    message=result.get('message', 'DM room data updated successfully'),
+                    room_id=room_id,
+                    user1_name=result.get('user1_name'),
+                    user2_name=result.get('user2_name'),
+                    relation=result.get('relation'),
+                    has_user1_avatar=result.get('has_user1_avatar', False),
+                    has_user2_avatar=result.get('has_user2_avatar', False)
+                )
+            else:
+                return UpdateDMRoomByRoomId(
+                    success=False,
+                    message=result.get('error', 'Failed to update DM room data'),
+                    room_id=room_id
+                )
+                
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in UpdateDMRoomByRoomId mutation: {e}", exc_info=True)
+            return UpdateDMRoomByRoomId(
+                success=False,
+                message=f"Error: {str(e)}"
+            )
 
 
 
@@ -1050,3 +1224,5 @@ class Mutation(graphene.ObjectType):
     update_connection=UpdateConnection.Field()
     delete_connection=DeleteConnection.Field()
     update_connection_relation_or_circle=UpdateConnectionRelationOrCircle.Field()
+
+    update_dm_room_by_room_id = UpdateDMRoomByRoomId.Field()

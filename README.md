@@ -136,6 +136,30 @@ The project includes integration with a Matrix server for real-time communicatio
 
 ---
 
+## Location Search API
+
+The project exposes a lightweight proxy for the Google Maps Places Text Search endpoint.
+
+| Detail | Description |
+| ------ | ----------- |
+| Endpoint | `GET /service/location-search/` |
+| Required | `query` – free-form text describing the place to search for |
+| Optional | `language`, `region`, `type` – forwarded to Google Places Text Search |
+| Response | Returns the JSON payload from Google Places |
+
+### Configuration
+
+- Set `GOOGLE_MAPS_API_KEY` in your environment so that `settings.GOOGLE_MAPS_API_KEY` is populated.
+- The backend enforces a 5-second timeout and surfaces Google availability issues as HTTP 502.
+
+### Example
+
+```bash
+curl "https://<your-host>/service/location-search/?query=coffee%20shops%20in%20Delhi&language=en"
+```
+
+---
+
 By following this configuration guide, you should have a better understanding of how each component of the project is set up and how to modify settings based on your environment and deployment needs.
 
 Shah Sanjay

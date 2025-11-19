@@ -69,9 +69,9 @@ class UserType(ObjectType):
         try:
             # Type safety check: Ensure user is actually a Users object and has profile attribute
             # This prevents errors when Community or other objects are mistakenly passed
-            if not isinstance(user, Users) and not hasattr(user, 'profile'):
-                print(f"WARNING: UserType.from_neomodel received non-User object: {type(user).__name__}")
-                return None
+            #if not isinstance(user, Users) and not hasattr(user, 'profile'):
+                #print(f"WARNING: UserType.from_neomodel received non-User object: {type(user).__name__}")
+                #return None
             
             # Combine first_name and last_name to create full name
             first_name = user.first_name or ""
@@ -1720,6 +1720,57 @@ class ProfileDataCommentType(ObjectType):
         )
 
 
+class ProfileContentVibeType(ObjectType):
+    """
+    GraphQL type for ProfileContentVibe objects.
+    
+    This type represents vibe reactions sent to profile content (achievements,
+    education, skills, experience). It provides a standardized structure for
+    returning vibe reaction data through the GraphQL API.
+    
+    Fields:
+        uid: Unique identifier for the vibe reaction
+        individual_vibe_id: ID referencing the IndividualVibe in PostgreSQL
+        vibe_name: Name of the vibe (from IndividualVibe)
+        vibe_intensity: Intensity of the vibe (1.0 to 5.0)
+        reacted_by: User who sent the vibe reaction
+        timestamp: When the vibe was sent
+        is_active: Whether the vibe is currently active
+    
+    Usage:
+        Returned by SendVibeToProfileContent mutation and profile content queries
+        to show vibe reaction details and user engagement.
+    """
+    uid = graphene.String()
+    individual_vibe_id = graphene.Int()
+    vibe_name = graphene.String()
+    vibe_intensity = graphene.Float()
+    reacted_by = graphene.Field(UserInfoType)
+    timestamp = graphene.DateTime()
+    is_active = graphene.Boolean()
+    
+    @classmethod
+    def from_neomodel(cls, vibe):
+        """
+        Convert ProfileContentVibe neomodel instance to GraphQL type.
+        
+        Args:
+            vibe: ProfileContentVibe neomodel instance
+            
+        Returns:
+            ProfileContentVibeType: GraphQL type instance with vibe data
+        """
+        return cls(
+            uid=vibe.uid,
+            individual_vibe_id=vibe.individual_vibe_id,
+            vibe_name=vibe.vibe_name,
+            vibe_intensity=vibe.vibe_intensity,
+            reacted_by=UserInfoType.from_neomodel(vibe.reacted_by.single()) if vibe.reacted_by.single() else None,
+            timestamp=vibe.timestamp,
+            is_active=vibe.is_active
+        )
+
+
 class ProfileDataCommentTypeV2(ObjectType):
     uid = graphene.String()
     user = graphene.Field(UserInfoTypeV2)
@@ -1758,8 +1809,14 @@ class AchievementType(ObjectType):
      vibe_list=graphene.List(lambda: ProfileDataVibeListType)
      comment=graphene.List(lambda:ProfileDataCommentType)
      like=graphene.List(lambda:ProfileDataReactionType)
+     vibe_reactions_list=graphene.List(lambda: ProfileContentVibeType)  # NEW: Show actual vibe nodes
      @classmethod
      def from_neomodel(cls, achievement):
+        # Count both old reactions and new vibe reactions
+        old_like_count = len(achievement.like.all())
+        new_vibe_count = len([v for v in achievement.vibe_reactions.all() if v.is_active]) if hasattr(achievement, 'vibe_reactions') else 0
+        total_vibe_count = old_like_count + new_vibe_count
+        
         return cls(
             uid=achievement.uid,
             what = achievement.what,
@@ -1773,10 +1830,11 @@ class AchievementType(ObjectType):
             file_url=([FileDetailType(**generate_presigned_url.generate_file_info(file_id)) for file_id in achievement.file_id] if achievement.file_id else None),
             category="achievement",
             comment_count= len(achievement.comment.all()),
-            vibe_count= len(achievement.like.all()),
+            vibe_count= str(total_vibe_count),  # Updated to include new vibes
             vibe_list=ProfileDataVibeListType.from_neomodel(achievement.uid,"achievement"),
             comment=[ProfileDataCommentType.from_neomodel(comment) for comment in achievement.comment[:2]],
             like=[ProfileDataReactionType.from_neomodel(like) for like in achievement.like[:2]],
+            vibe_reactions_list=[ProfileContentVibeType.from_neomodel(vibe) for vibe in achievement.vibe_reactions.all() if vibe.is_active] if hasattr(achievement, 'vibe_reactions') else [],  # NEW: Return actual vibe nodes
         )
      
 class EducationType(ObjectType):
@@ -1796,9 +1854,15 @@ class EducationType(ObjectType):
     vibe_list=graphene.List(lambda: ProfileDataVibeListType)
     comment=graphene.List(lambda:ProfileDataCommentType)
     like=graphene.List(lambda:ProfileDataReactionType)
+    vibe_reactions_list=graphene.List(lambda: ProfileContentVibeType)  # NEW: Show actual vibe nodes
 
     @classmethod
     def from_neomodel(cls, education):
+        # Count both old reactions and new vibe reactions
+        old_like_count = len(education.like.all())
+        new_vibe_count = len([v for v in education.vibe_reactions.all() if v.is_active]) if hasattr(education, 'vibe_reactions') else 0
+        total_vibe_count = old_like_count + new_vibe_count
+        
         return cls(
             uid=education.uid,
             what=education.what,
@@ -1815,10 +1879,11 @@ class EducationType(ObjectType):
             ),
             category = "education",
             comment_count=len(education.comment.all()),
-            vibe_count=len(education.like.all()),
+            vibe_count=str(total_vibe_count),  # Updated to include new vibes
             vibe_list=ProfileDataVibeListType.from_neomodel(education.uid,"education"),
             comment=[ProfileDataCommentType.from_neomodel(comment) for comment in education.comment[:2]],
             like=[ProfileDataReactionType.from_neomodel(like) for like in education.like[:2]],
+            vibe_reactions_list=[ProfileContentVibeType.from_neomodel(vibe) for vibe in education.vibe_reactions.all() if vibe.is_active] if hasattr(education, 'vibe_reactions') else [],  # NEW: Return actual vibe nodes
         )
 
 class ExperienceType(ObjectType):
@@ -1838,9 +1903,15 @@ class ExperienceType(ObjectType):
     vibe_list=graphene.List(lambda: ProfileDataVibeListType)
     comment=graphene.List(lambda:ProfileDataCommentType)
     like=graphene.List(lambda:ProfileDataReactionType)
+    vibe_reactions_list=graphene.List(lambda: ProfileContentVibeType)  # NEW: Show actual vibe nodes
 
     @classmethod
     def from_neomodel(cls, experience):
+        # Count both old reactions and new vibe reactions
+        old_like_count = len(experience.like.all())
+        new_vibe_count = len([v for v in experience.vibe_reactions.all() if v.is_active]) if hasattr(experience, 'vibe_reactions') else 0
+        total_vibe_count = old_like_count + new_vibe_count
+        
         return cls(
             uid=experience.uid,
             what=experience.what,
@@ -1857,10 +1928,11 @@ class ExperienceType(ObjectType):
             ),
             category="experience",
             comment_count=len(experience.comment.all()),
-            vibe_count= len(experience.like.all()),
+            vibe_count=str(total_vibe_count),  # Updated to include new vibes
             vibe_list=ProfileDataVibeListType.from_neomodel(experience.uid,"experience"),
             comment=[ProfileDataCommentType.from_neomodel(comment) for comment in experience.comment[:2]],
             like=[ProfileDataReactionType.from_neomodel(like) for like in experience.like[:2]],
+            vibe_reactions_list=[ProfileContentVibeType.from_neomodel(vibe) for vibe in experience.vibe_reactions.all() if vibe.is_active] if hasattr(experience, 'vibe_reactions') else [],  # NEW: Return actual vibe nodes
         )
 
 class SkillType(ObjectType):
@@ -1879,9 +1951,15 @@ class SkillType(ObjectType):
     vibe_list=graphene.List(lambda: ProfileDataVibeListType)
     comment=graphene.List(lambda:ProfileDataCommentType)
     like=graphene.List(lambda:ProfileDataReactionType)
+    vibe_reactions_list=graphene.List(lambda: ProfileContentVibeType)  # NEW: Show actual vibe nodes
 
     @classmethod
     def from_neomodel(cls, skill):
+        # Count both old reactions and new vibe reactions
+        old_like_count = len(skill.like.all())
+        new_vibe_count = len([v for v in skill.vibe_reactions.all() if v.is_active]) if hasattr(skill, 'vibe_reactions') else 0
+        total_vibe_count = old_like_count + new_vibe_count
+        
         return cls(
             uid=skill.uid,
             what=skill.what,
@@ -1897,10 +1975,11 @@ class SkillType(ObjectType):
             ),
             category = "skill",
             comment_count=len(skill.comment.all()),
-            vibe_count=len(skill.like.all()),
+            vibe_count=str(total_vibe_count),  # Updated to include new vibes
             vibe_list=ProfileDataVibeListType.from_neomodel(skill.uid,"skill"),
             comment=[ProfileDataCommentType.from_neomodel(comment) for comment in skill.comment[:2]],
             like=[ProfileDataReactionType.from_neomodel(like) for like in skill.like[:2]],
+            vibe_reactions_list=[ProfileContentVibeType.from_neomodel(vibe) for vibe in skill.vibe_reactions.all() if vibe.is_active] if hasattr(skill, 'vibe_reactions') else [],  # NEW: Return actual vibe nodes
         )
 
 

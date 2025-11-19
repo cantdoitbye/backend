@@ -2,6 +2,7 @@ from post.utils.reaction_manager import PostReactionUtils, IndividualVibeManager
 from post.redis import get_post_comment_count, get_post_like_count
 from post.models import PostReactionManager, Like
 from vibe_manager.models import IndividualVibe, CommunityVibe
+from community.utils.post_data_helper import CommunityPostDataHelper
 from neomodel import db
 from datetime import datetime
 
