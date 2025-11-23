@@ -1029,21 +1029,41 @@ class AddMember(Mutation):
                         'uid': user_node.uid
                     })
             
+            # ============= NOTIFICATION CODE START (AddMember) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityMemberAdded(
+            #             added_by_name=user.username,
+            #             members=members_to_notify,
+            #             community_id=community.uid,
+            #             community_name=community.name,
+            #             community_icon=community.group_icon_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             # Send notifications to new members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityMemberAdded(
-                        added_by_name=user.username,
-                        members=members_to_notify,
-                        community_id=community.uid,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_members_joined",
+                        recipients=members_to_notify,
+                        username=user.username,
                         community_name=community.name,
-                        community_icon=community.group_icon_id
-                    ))
-                finally:
-                    loop.close()
+                        community_id=community.uid,
+                        community_icon=community.group_icon_id if community.group_icon_id else None
+                    )
+                except Exception as e:
+                    print(f"Failed to send new member notification: {e}")
+            # ============= NOTIFICATION CODE END =============
             
             process_matrix_invites(
                 admin_user_id=community.created_by.single().user_id,
@@ -1280,21 +1300,41 @@ class AddSubCommunityMember(Mutation):
                         'uid': user_node.uid
                     })
 
+            # ============= NOTIFICATION CODE START (AddSubCommunityMember) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifySubCommunityMemberAdded(
+            #             added_by_name=user.username,
+            #             members=members_to_notify,
+            #             sub_community_id=sub_community.uid,
+            #             sub_community_name=sub_community.name,
+            #             sub_community_icon=sub_community.group_icon_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             # Send notifications to new members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifySubCommunityMemberAdded(
-                        added_by_name=user.username,
-                        members=members_to_notify,
-                        sub_community_id=sub_community.uid,
-                        sub_community_name=sub_community.name,
-                        sub_community_icon=sub_community.group_icon_id
-                    ))
-                finally:
-                    loop.close()
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="new_members_joined",
+                        recipients=members_to_notify,
+                        username=user.username,
+                        community_name=sub_community.name,
+                        community_id=sub_community.uid,
+                        community_icon=sub_community.group_icon_id if sub_community.group_icon_id else None
+                    )
+                except Exception as e:
+                    print(f"Failed to send new sub-community member notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             process_matrix_invites(
                 admin_user_id=sub_community.created_by.single().user_id,
@@ -1661,22 +1701,43 @@ class CreateCommunityGoal(graphene.Mutation):
                             'device_id': profile.device_id,
                             'uid': user.uid
                         })
-            # Send notifications
+            # ============= NOTIFICATION CODE START (CreateCommunityGoal) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityGoal(
+            #             creator_name=creator.username,
+            #             members=members_to_notify,
+            #             community_name=community_name,
+            #             goal_name=goal.name,
+            #             goal_id=goal.uid,
+            #             community_id=community_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            # Send notifications to community members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityGoal(
-                        creator_name=creator.username,
-                        members=members_to_notify,
-                        community_name=community_name,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="community_goal_created",
+                        recipients=members_to_notify,
                         goal_name=goal.name,
-                        goal_id=goal.uid,
-                        community_id=community_id
-                    ))
-                finally:
-                    loop.close()
+                        community_name=community_name,
+                        community_id=community_id,
+                        goal_id=goal.uid
+                    )
+                except Exception as e:
+                    print(f"Failed to send community goal notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateCommunityGoal(goal=CommunityGoalType.from_neomodel(goal), success=True, message=CommMessages.COMMUNITY_GOAL_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -2115,22 +2176,43 @@ class CreateCommunityAffiliation(graphene.Mutation):
                             'device_id': profile.device_id,
                             'uid': user.uid
                         })
-            # Send notifications
+            # ============= NOTIFICATION CODE START (CreateCommunityAffiliation) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityAffiliation(
+            #             creator_name=creator.username,
+            #             members=members_to_notify,
+            #             community_name=community_name,
+            #             affiliation_entity=affiliation.entity,
+            #             affiliation_id=affiliation.uid,
+            #             community_id=community_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            # Send notifications to community members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityAffiliation(
-                        creator_name=creator.username,
-                        members=members_to_notify,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="community_affiliation_created",
+                        recipients=members_to_notify,
                         community_name=community_name,
                         affiliation_entity=affiliation.entity,
-                        affiliation_id=affiliation.uid,
-                        community_id=community_id
-                    ))
-                finally:
-                    loop.close()
+                        community_id=community_id,
+                        affiliation_id=affiliation.uid
+                    )
+                except Exception as e:
+                    print(f"Failed to send community affiliation notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateCommunityAffiliation(affiliation=CommunityAffiliationType.from_neomodel(affiliation), success=True, message=CommMessages.COMMUNITY_AFFILIATION_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -2378,22 +2460,43 @@ class CreateCommunityAchievement(graphene.Mutation):
                             'device_id': profile.device_id,
                             'uid': user.uid
                         })
-            # Send notifications
+            # ============= NOTIFICATION CODE START (CreateCommunityAchievement) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityAchievement(
+            #             creator_name=creator.username,
+            #             members=members_to_notify,
+            #             community_name=community_name,
+            #             achievement_title=achievement.entity,
+            #             achievement_id=achievement.uid,
+            #             community_id=community_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            # Send notifications to community members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityAchievement(
-                        creator_name=creator.username,
-                        members=members_to_notify,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="community_achievement_unlocked",
+                        recipients=members_to_notify,
+                        achievement_name=achievement.entity,
                         community_name=community_name,
-                        achievement_title=achievement.entity,
-                        achievement_id=achievement.uid,
-                        community_id=community_id
-                    ))
-                finally:
-                    loop.close()
+                        community_id=community_id,
+                        achievement_icon=achievement.file_id[0] if achievement.file_id else None
+                    )
+                except Exception as e:
+                    print(f"Failed to send community achievement notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateCommunityAchievement(achievement=CommunityAchievementType.from_neomodel(achievement), success=True, message=CommMessages.COMMUNITY_ACHIEVEMENT_CREATED)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -3538,6 +3641,47 @@ class AssignRoleMutation(graphene.Mutation):
         # Assign the role to the user_uids
         role_assignment.assign_role(role_id=input.role_id, user_uid_list=input.user_uids)
 
+        # ============= NOTIFICATION CODE START (AssignRoleMutation) =============
+        # Send notification to users who received new roles
+        try:
+            from notification.global_service import GlobalNotificationService
+            
+            community = Community.nodes.get(uid=input.community_uid)
+            
+            # Get role name from role manager
+            role_name = "New Role"
+            for role in exist_community_role_manager.get_roles():
+                if role.get('id') == input.role_id:
+                    role_name = role.get('role_name', 'New Role')
+                    break
+            
+            # Notify each user about their new role
+            recipients = []
+            for user_uid in input.user_uids:
+                try:
+                    user_node = Users.nodes.get(uid=user_uid)
+                    profile = user_node.profile.single()
+                    if profile and profile.device_id:
+                        recipients.append({
+                            'device_id': profile.device_id,
+                            'uid': user_node.uid
+                        })
+                except Exception as e:
+                    print(f"Error getting user {user_uid}: {e}")
+            
+            if recipients:
+                service = GlobalNotificationService()
+                service.send(
+                    event_type="community_role_change",
+                    recipients=recipients,
+                    community_name=community.name,
+                    community_id=community.uid,
+                    role_name=role_name
+                )
+        except Exception as e:
+            print(f"Failed to send role assignment notification: {e}")
+        # ============= NOTIFICATION CODE END =============
+
         return AssignRoleMutation(success=True, message="Role assignment successful")
 
 
@@ -3600,6 +3744,47 @@ class AssignSubcommunityRoleMutation(graphene.Mutation):
 
         # Assign the role to the user_uids
         role_assignment.assign_role(role_id=input.role_id, user_uid_list=input.user_uids)
+
+        # ============= NOTIFICATION CODE START (AssignSubcommunityRoleMutation) =============
+        # Send notification to users who received new roles
+        try:
+            from notification.global_service import GlobalNotificationService
+            
+            sub_community = SubCommunity.nodes.get(uid=input.sub_community_uid)
+            
+            # Get role name from role manager
+            role_name = "New Role"
+            for role in exist_subcommunity_role_manager.get_roles():
+                if role.get('id') == input.role_id:
+                    role_name = role.get('role_name', 'New Role')
+                    break
+            
+            # Notify each user about their new role
+            recipients = []
+            for user_uid in input.user_uids:
+                try:
+                    user_node = Users.nodes.get(uid=user_uid)
+                    profile = user_node.profile.single()
+                    if profile and profile.device_id:
+                        recipients.append({
+                            'device_id': profile.device_id,
+                            'uid': user_node.uid
+                        })
+                except Exception as e:
+                    print(f"Error getting user {user_uid}: {e}")
+            
+            if recipients:
+                service = GlobalNotificationService()
+                service.send(
+                    event_type="community_role_change",
+                    recipients=recipients,
+                    community_name=sub_community.name,
+                    community_id=sub_community.uid,
+                    role_name=role_name
+                )
+        except Exception as e:
+            print(f"Failed to send sub-community role assignment notification: {e}")
+        # ============= NOTIFICATION CODE END =============
 
         return AssignSubcommunityRoleMutation(success=True, message="Role assignment successful")
 
@@ -3944,6 +4129,44 @@ class CreateCommunityPost(Mutation):
                         mentioned_by_uid=creator.uid,
                         mention_context='post_content'
                     )
+                    
+                    # ============= NOTIFICATION CODE START (Mention in Community Post) =============
+                    # Send notification to mentioned users
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        # Get community info
+                        community_name = community_obj.name if community_obj else "Community"
+                        community_id = community_obj.uid if community_obj else post.uid
+                        
+                        # Collect mentioned users with device IDs
+                        mention_recipients = []
+                        for mentioned_uid in mentioned_user_uids:
+                            try:
+                                mentioned_user = Users.nodes.get(uid=mentioned_uid)
+                                if mentioned_user.uid != creator.uid:  # Don't notify yourself
+                                    profile = mentioned_user.profile.single()
+                                    if profile and profile.device_id:
+                                        mention_recipients.append({
+                                            'device_id': profile.device_id,
+                                            'uid': mentioned_user.uid
+                                        })
+                            except Exception as e:
+                                print(f"Error getting mentioned user {mentioned_uid}: {e}")
+                        
+                        if mention_recipients:
+                            service = GlobalNotificationService()
+                            service.send(
+                                event_type="community_post_mention",
+                                recipients=mention_recipients,
+                                username=creator.username,
+                                community_name=community_name,
+                                community_id=community_id,
+                                post_id=post.uid
+                            )
+                    except Exception as e:
+                        print(f"Failed to send mention notification: {e}")
+                    # ============= NOTIFICATION CODE END =============
             
             if input.reaction and input.vibe:
                 try:
@@ -4624,21 +4847,41 @@ class CreateCommunityV2(Mutation):
                         'uid': user_node.uid
                     })
             
+            # ============= NOTIFICATION CODE START (CreateCommunityV2) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifyCommunityCreated(
+            #             creator_name=created_by.username,
+            #             members=members_to_notify,
+            #             community_id=community.uid,
+            #             community_name=community.name,
+            #             community_icon=community.group_icon_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             # Send notifications to initial members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifyCommunityCreated(
-                        creator_name=created_by.username,
-                        members=members_to_notify,
-                        community_id=community.uid,
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    service.send(
+                        event_type="user_joined_community",
+                        recipients=members_to_notify,
+                        username=created_by.username,
                         community_name=community.name,
-                        community_icon=community.group_icon_id
-                    ))
-                finally:
-                    loop.close()
+                        community_id=community.uid,
+                        community_icon=community.group_icon_id if community.group_icon_id else None
+                    )
+                except Exception as e:
+                    print(f"Failed to send community creation notification: {e}")
+            # ============= NOTIFICATION CODE END =============
             
             # Invite all members to the Matrix room if a room was created
             if room_id:
@@ -5010,21 +5253,44 @@ class CreateSubCommunityV2(Mutation):
                         'uid': user_node.uid
                     })
 
+            # ============= NOTIFICATION CODE START (CreateSubCommunityV2) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # if members_to_notify:
+            #     notification_service = NotificationService()
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            #     try:
+            #         loop.run_until_complete(notification_service.notifySubCommunityCreated(
+            #             creator_name=created_by.username,
+            #             members=members_to_notify,
+            #             sub_community_id=sub_community.uid,
+            #             sub_community_name=sub_community.name,
+            #             sub_community_icon=sub_community.group_icon_id
+            #         ))
+            #     finally:
+            #         loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
             # Send notifications to initial members
             if members_to_notify:
-                notification_service = NotificationService()
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(notification_service.notifySubCommunityCreated(
-                        creator_name=created_by.username,
-                        members=members_to_notify,
-                        sub_community_id=sub_community.uid,
-                        sub_community_name=sub_community.name,
-                        sub_community_icon=sub_community.group_icon_id
-                    ))
-                finally:
-                    loop.close()
+                    from notification.global_service import GlobalNotificationService
+                    
+                    service = GlobalNotificationService()
+                    # Determine if it's a child or sibling community
+                    sub_type = input.get('sub_community_type').value
+                    event_type = "new_child_community" if sub_type == 'child community' else "new_sibling_community"
+                    
+                    service.send(
+                        event_type=event_type,
+                        recipients=members_to_notify,
+                        community_name=sub_community.name,
+                        community_id=sub_community.uid,
+                        community_icon=sub_community.group_icon_id if sub_community.group_icon_id else None
+                    )
+                except Exception as e:
+                    print(f"Failed to send sub-community creation notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             if room_id:
                 print("Initiating Matrix room invitations in background...")

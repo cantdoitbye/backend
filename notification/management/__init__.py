@@ -1,5 +1,1 @@
-"""
-Management command init file
-"""
-
-
+# Django management commands for notifications

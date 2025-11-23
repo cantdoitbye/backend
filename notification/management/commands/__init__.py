@@ -1,5 +1,1 @@
-"""
-Management commands init file
-"""
-
-
+# Notification management commands

@@ -198,6 +198,7 @@ class CommentType(ObjectType):
     reply_count = graphene.Int()                          # Total number of replies
     depth_level = graphene.Int()                          # Nesting depth (0 = top-level)
     is_reply = graphene.Boolean()                         # True if this is a reply to another comment
+    is_answer = graphene.Boolean()
     vibe_reactions = graphene.List(lambda: CommentVibeType)  # Vibe reactions on this comment
     mentioned_users = graphene.List(UserType)
 
@@ -355,6 +356,7 @@ class CommentType(ObjectType):
             reply_count=reply_count,  # This is the count of replies to THIS comment
             depth_level=depth_level,
             is_reply=is_reply,
+            is_answer=getattr(comment, 'is_answer', False),
             vibe_reactions=vibe_reactions
         )
     def resolve_mentioned_users(self, info):

@@ -13,13 +13,15 @@ import job.graphql.schema as job_schema
 import monitoring.graphql.schema as monitoring_schema
 import agentic.graphql.schema as agentic_schema
 import analytics.graphql.schema as analytics_schema
+from notification.graphql.queries import NotificationQueries
+from notification.graphql.mutations import NotificationMutations
 
 import graphql_jwt
 
-class Query(auth_manager_schema.UserQuery, community_schema.CommunityQuery,story_schema.StoryQuery,post_schema.PostQuery,connection_schema.ConnectionQuery,msg_schema.MsgQuery,service_schema.ServiceQuery,dairy_schema.DairyQuery,shop_schema.ShopQuery,job_schema.JobQuery,vibe_schema.VibeQuery,monitoring_schema.monitoringQuery,agentic_schema.AgentQuery,analytics_schema.Query):
+class Query(auth_manager_schema.UserQuery, community_schema.CommunityQuery,story_schema.StoryQuery,post_schema.PostQuery,connection_schema.ConnectionQuery,msg_schema.MsgQuery,service_schema.ServiceQuery,dairy_schema.DairyQuery,shop_schema.ShopQuery,job_schema.JobQuery,vibe_schema.VibeQuery,monitoring_schema.monitoringQuery,agentic_schema.AgentQuery,analytics_schema.Query,NotificationQueries):
     pass
 
-class Mutation(auth_manager_schema.UserMutation, community_schema.CommunityMutation,story_schema.StoryMutation,post_schema.PostMutation,connection_schema.ConnectionMutation,msg_schema.MsgMutation,service_schema.ServiceMutation,dairy_schema.DairyMutation,shop_schema.ShopMutation,job_schema.JobMutation,vibe_schema.VibeMutation,monitoring_schema.monitoringMutation,agentic_schema.AgentMutation,analytics_schema.Mutation):
+class Mutation(auth_manager_schema.UserMutation, community_schema.CommunityMutation,story_schema.StoryMutation,post_schema.PostMutation,connection_schema.ConnectionMutation,msg_schema.MsgMutation,service_schema.ServiceMutation,dairy_schema.DairyMutation,shop_schema.ShopMutation,job_schema.JobMutation,vibe_schema.VibeMutation,monitoring_schema.monitoringMutation,agentic_schema.AgentMutation,analytics_schema.Mutation,NotificationMutations):
     token_auth = graphql_jwt.ObtainJSONWebToken.Field()
     verify_token = graphql_jwt.Verify.Field()
     refresh_token = graphql_jwt.Refresh.Field()

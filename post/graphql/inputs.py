@@ -91,3 +91,36 @@ class SendVibeToCommentInput(graphene.InputObjectType):
     comment_uid = custom_graphql_validator.String.add_option("commentUid", "SendVibeToComment")(required=True)
     individual_vibe_id = custom_graphql_validator.String.add_option("individualVibeId", "SendVibeToComment")(required=True)
     vibe_intensity = custom_graphql_validator.Float.add_option("vibeIntensity", "SendVibeToComment")(required=True)
+
+class CreateDebateInput(graphene.InputObjectType):
+    debate_title = custom_graphql_validator.SpecialCharacterString2_200.add_option("debateTitle", "CreateDebate")()
+    background_context = custom_graphql_validator.SpecialCharacterString2_200.add_option("backgroundContext", "CreateDebate")()
+    image_ids = custom_graphql_validator.ListString.add_option("imageIds", "CreateDebate")()
+    video_ids = custom_graphql_validator.ListString.add_option("videoIds", "CreateDebate")()
+    category = custom_graphql_validator.String.add_option("category", "CreateDebate")()
+    tags = graphene.List(graphene.String)
+    circle = custom_graphql_validator.String.add_option("circle", "CreateDebate")()
+    reaction = custom_graphql_validator.String.add_option("reaction", "CreateDebate")()
+    vibe = custom_graphql_validator.Float.add_option("vibe", "CreateDebate")()
+
+class UpdateDebateInput(graphene.InputObjectType):
+    uid = graphene.String(required=True)
+    debate_title = custom_graphql_validator.SpecialCharacterString2_200.add_option("debateTitle", "UpdateDebate")()
+    background_context = custom_graphql_validator.SpecialCharacterString2_200.add_option("backgroundContext", "UpdateDebate")()
+    image_ids = custom_graphql_validator.ListString.add_option("imageIds", "UpdateDebate")()
+    video_ids = custom_graphql_validator.ListString.add_option("videoIds", "UpdateDebate")()
+    category = custom_graphql_validator.String.add_option("category", "UpdateDebate")()
+    tags = graphene.List(graphene.String)
+    circle = custom_graphql_validator.String.add_option("circle", "UpdateDebate")()
+
+class CreateDebateAnswerInput(graphene.InputObjectType):
+    post_uid = custom_graphql_validator.String.add_option("postUid", "CreateDebateAnswer")(required=True)
+    content = custom_graphql_validator.SpecialCharacterString1_200.add_option("content", "CreateDebateAnswer")(required=True)
+    answer_file_id = custom_graphql_validator.ListString.add_option("answerFileId", "CreateDebateAnswer")()
+    mentioned_user_uids = graphene.List(graphene.String)
+
+class UpdateDebateAnswerInput(graphene.InputObjectType):
+    uid = custom_graphql_validator.String.add_option("uid", "UpdateDebateAnswer")(required=True)
+    content = custom_graphql_validator.SpecialCharacterString1_200.add_option("content", "UpdateDebateAnswer")()
+    is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateDebateAnswer")()
+    answer_file_id = custom_graphql_validator.ListString.add_option("answerFileId", "UpdateDebateAnswer")()

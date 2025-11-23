@@ -46,6 +46,7 @@ class Post(DjangoNode, StructuredNode):
     PRIVACY_CHOICES = {
         'public': 'Public',           # Everyone can see
         'outer': 'Outer Circle',      # Extended connections only
+        'inner': 'Inner Circle',      # Close connections only
         'universal': 'Universal',     # All app users
         'private': 'Private'          # Only creator can see
     }
@@ -182,7 +183,8 @@ class Comment(DjangoNode, StructuredNode):
     content = StringProperty()                         # The actual comment text
     timestamp = DateTimeProperty(default_now=True)    # When comment was posted
     is_deleted = BooleanProperty(default=False)       # Soft delete flag
-    comment_file_id = ArrayProperty(base_property=StringProperty())  # Array of file IDs for media
+    comment_file_id = ArrayProperty(base_property=StringProperty())
+    is_answer = BooleanProperty(default=False)
 
     # Relationships
     post = RelationshipTo('Post','HAS_POST')

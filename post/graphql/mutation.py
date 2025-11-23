@@ -245,12 +245,202 @@ class CreatePost(Mutation):
                 except Exception as e:
                     print(f"Failed to send post notification: {e}")
             # ============= NOTIFICATION CODE END =============
-
+        
             return CreatePost(success=True, message=PostMessages.POST_CREATED)
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
             return CreatePost(success=False, message=message)
         
+
+class CreateDebate(Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateDebateInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            created_by = Users.nodes.get(user_id=user_id)
+
+            file_ids = []
+            if input.image_ids:
+                file_ids.extend([fid for fid in input.image_ids if fid])
+            if input.video_ids:
+                file_ids.extend([fid for fid in input.video_ids if fid])
+
+            if file_ids:
+                for fid in file_ids:
+                    get_valid_image(fid)
+
+            tags = input.tags or []
+            if input.category:
+                tags = list(set(tags + [input.category]))
+
+            privacy = (input.circle or 'public').lower()
+
+            post = Post(
+                post_title=input.debate_title,
+                post_text=input.background_context,
+                post_type='debate',
+                privacy=privacy,
+                post_file_id=file_ids if file_ids else None,
+                tags=tags if tags else None
+            )
+            post.save()
+
+            post.created_by.connect(created_by)
+            created_by.post.connect(post)
+
+            content = f"{input.debate_title or ''} {input.background_context or ''}".strip()
+            mentioned_user_uids = []
+            try:
+                from post.utils.mention_extractor import MentionExtractor
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(content)
+            except Exception:
+                mentioned_user_uids = []
+
+            if mentioned_user_uids:
+               MentionService.create_mentions(
+                 mentioned_user_uids=mentioned_user_uids,
+                 content_type='post',
+                 content_uid=post.uid,
+                 mentioned_by_uid=created_by.uid,
+                 mention_context='post_content'
+                )
+
+            try:
+                activity_service = ActivityService()
+                activity_service.track_content_interaction(
+                    user=user,
+                    content_type='post',
+                    content_id=str(post.uid),
+                    interaction_type='create',
+                    ip_address=info.context.META.get('REMOTE_ADDR'),
+                    user_agent=info.context.META.get('HTTP_USER_AGENT', ''),
+                    metadata={
+                        'post_type': 'debate',
+                        'privacy': privacy,
+                        'has_media': bool(file_ids),
+                        'has_tags': bool(tags)
+                    }
+                )
+            except Exception:
+                pass
+
+            if input.reaction and input.vibe:
+                try:
+                    check_query = (
+                        "MATCH (user:Users {user_id: $user_id})-[:HAS_USER]->(like:Like) "
+                        "MATCH (like)-[:HAS_POST]->(post {uid: $post_uid}) "
+                        "RETURN like"
+                    )
+                    check_params = {'user_id': user_id, 'post_uid': post.uid}
+                    existing_results, _ = db.cypher_query(check_query, check_params)
+                    if not existing_results:
+                        try:
+                            post_reaction_manager = PostReactionManager.objects.get(post_uid=post.uid)
+                        except PostReactionManager.DoesNotExist:
+                            post_reaction_manager = PostReactionManager(post_uid=post.uid)
+                            post_reaction_manager.initialize_reactions()
+                            post_reaction_manager.save()
+
+                        post_reaction_manager.add_reaction(
+                            vibes_name=input.reaction,
+                            score=input.vibe
+                        )
+                        post_reaction_manager.save()
+
+                        like = Like(reaction=input.reaction, vibe=input.vibe)
+                        like.save()
+                        like.user.connect(created_by)
+                        post.like.connect(like)
+                        increment_post_like_count(post.uid)
+                except Exception:
+                    pass
+
+            return CreateDebate(success=True, message=PostMessages.POST_CREATED)
+        except Exception as error:
+            message=getattr(error , 'message' , str(error) )
+            return CreateDebate(success=False, message=message)
+
+class CreateDebateAnswer(Mutation):
+    comment = graphene.Field(CommentType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateDebateAnswerInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        user = info.context.user
+        if user.is_anonymous:
+            raise GraphQLError("Authentication Failure")
+
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=user_id)
+
+        try:
+            target_post = Post.nodes.get(uid=input.post_uid)
+
+            file_ids = input.answer_file_id if input.answer_file_id else None
+            comment = Comment(
+                content=input.content,
+                comment_file_id=file_ids,
+                is_answer=True
+            )
+            comment.save()
+
+            comment.user.connect(user_node)
+            target_post.comment.connect(comment)
+            comment.post.connect(target_post)
+
+            increment_post_comment_count(target_post.uid)
+
+            if input.content:
+                from post.utils.mention_extractor import MentionExtractor
+                mentioned_user_uids = MentionExtractor.extract_and_convert_mentions(input.content)
+                if mentioned_user_uids:
+                    current_user_uid = Users.nodes.get(user_id=info.context.user.id).uid
+                    MentionService.create_mentions(
+                        mentioned_user_uids=mentioned_user_uids,
+                        content_type='comment',
+                        content_uid=comment.uid,
+                        mentioned_by_uid=current_user_uid,
+                        mention_context='debate_answer'
+                    )
+
+            try:
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_id=target_post.uid,
+                    content_type='post',
+                    interaction_type='comment',
+                    metadata={
+                        'comment_id': comment.uid,
+                        'is_debate_answer': True,
+                        'post_type': getattr(target_post, 'post_type', None)
+                    }
+                )
+            except Exception:
+                pass
+
+            return CreateDebateAnswer(comment=CommentType.from_neomodel(comment, info), success=True, message=PostMessages.POST_COMMENT_CREATED)
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            return CreateDebateAnswer(comment=None, success=False, message=message)
+
 
 class UpdatePost(Mutation):
     """
@@ -326,6 +516,115 @@ class UpdatePost(Mutation):
             return UpdatePost(post=None, success=False, message=message)
         
 
+class UpdateDebate(Mutation):
+    post = graphene.Field(PostType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = UpdateDebateInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            updated_by = Users.nodes.get(user_id=user_id)
+
+            post = Post.nodes.get(uid=input.uid)
+            if post.post_type != 'debate':
+                raise GraphQLError("Invalid content type for debate update")
+
+            if input.debate_title is not None:
+                post.post_title = input.debate_title
+            if input.background_context is not None:
+                post.post_text = input.background_context
+            if input.circle is not None:
+                post.privacy = (input.circle or 'public').lower()
+
+            file_ids = None
+            combined_ids = []
+            if input.image_ids:
+                combined_ids.extend([fid for fid in input.image_ids if fid])
+            if input.video_ids:
+                combined_ids.extend([fid for fid in input.video_ids if fid])
+            if combined_ids:
+                for fid in combined_ids:
+                    get_valid_image(fid)
+                file_ids = combined_ids
+            if file_ids is not None:
+                post.post_file_id = file_ids
+
+            if input.tags is not None or input.category is not None:
+                tags = list(post.tags or [])
+                if input.tags is not None:
+                    tags = list(set((input.tags or [])))
+                if input.category:
+                    tags = list(set(tags + [input.category]))
+                post.tags = tags
+
+            post.save()
+            post.updated_by.connect(updated_by)
+
+            try:
+                ActivityService.track_content_interaction(
+                    user=updated_by,
+                    content_id=post.uid,
+                    content_type='post',
+                    interaction_type='update',
+                    metadata={
+                        'updated_fields': [k for k in input.keys()],
+                        'post_type': 'debate'
+                    }
+                )
+            except Exception:
+                pass
+
+            return UpdateDebate(post=PostType.from_neomodel(post,info), success=True, message="Debate updated successfully.")
+        except Exception as error:
+            message=getattr(error , 'message' , str(error) )
+            return UpdateDebate(post=None, success=False, message=message)
+
+class UpdateDebateAnswer(Mutation):
+    comment = graphene.Field(CommentType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = UpdateDebateAnswerInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            comment = Comment.nodes.get(uid=input.uid)
+            if not getattr(comment, 'is_answer', False):
+                raise GraphQLError("Not a debate answer")
+
+            if 'content' in input:
+                comment.content = input['content']
+            if 'is_deleted' in input:
+                comment.is_deleted = input['is_deleted']
+            if 'answer_file_id' in input and input['answer_file_id'] is not None:
+                comment.comment_file_id = input['answer_file_id']
+
+            comment.save()
+
+            return UpdateDebateAnswer(comment=CommentType.from_neomodel(comment), success=True, message=PostMessages.POST_COMMENT_UPDATED)
+        except Exception as error:
+            message=getattr(error , 'message' , str(error) )
+            return UpdateDebateAnswer(comment=None, success=False, message=message)
+
+
 class DeletePost(Mutation):
     """
     DeletePost mutation for soft-deleting posts (sets is_deleted=True).
@@ -396,6 +695,81 @@ class DeletePost(Mutation):
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
             return DeletePost(success=False, message=message)
+
+
+class DeleteDebate(Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = DeleteInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+
+            post = Post.nodes.get(uid=input.uid)
+            if post.post_type != 'debate':
+                return DeleteDebate(success=False, message=PostMessages.POST_DELETE_PERMISSION_DENIED)
+
+            created_by = post.created_by.single()
+            if created_by.user_id != str(user_id):
+                return DeleteDebate(success=False, message=PostMessages.POST_DELETE_PERMISSION_DENIED)
+
+            post.is_deleted = True
+            post.save()
+
+            try:
+                user_node = Users.nodes.get(user_id=user_id)
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_id=post.uid,
+                    content_type='post',
+                    interaction_type='delete',
+                    metadata={
+                        'post_type': 'debate',
+                        'deletion_type': 'soft_delete'
+                    }
+                )
+            except Exception:
+                pass
+
+            return DeleteDebate(success=True, message=PostMessages.POST_DELETED)
+        except Exception as error:
+            message=getattr(error , 'message' , str(error) )
+            return DeleteDebate(success=False, message=message)
+
+class DeleteDebateAnswer(Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = DeleteInput()
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+
+            comment = Comment.nodes.get(uid=input.uid)
+            if not getattr(comment, 'is_answer', False):
+                return DeleteDebateAnswer(success=False, message=PostMessages.POST_DELETE_PERMISSION_DENIED)
+
+            comment.delete()
+            return DeleteDebateAnswer(success=True, message=PostMessages.POST_COMMENT_DELETED)
+        except Exception as error:
+            message=getattr(error , 'message' , str(error) )
+            return DeleteDebateAnswer(success=False, message=message)
 
 
 class CreateTag(Mutation):
@@ -673,35 +1047,65 @@ class CreateComment(Mutation):
                         mention_context='comment_content'
                      )
 
-            # EXISTING LOGIC - Send notification to post creator about new comment
-            # Handle different creator types for Post vs CommunityPost
+            # ============= NOTIFICATION CODE START (CreateComment) =============
+            # === OLD NOTIFICATION CODE (COMMENTED - CAN BE REMOVED AFTER TESTING) ===
+            # post_creator = None
+            # if isinstance(target_post, Post):
+            #     post_creator = target_post.created_by.single()
+            # elif isinstance(target_post, CommunityPost):
+            #     post_creator = target_post.creator.single()
+            # 
+            # if post_creator and isinstance(post_creator, Users) and post_creator.uid != user_node.uid:
+            #     if isinstance(post_creator, Users):
+            #         profile = post_creator.profile.single()
+            #         if profile and profile.device_id:
+            #             notification_service = NotificationService()
+            #             loop = asyncio.new_event_loop()
+            #             asyncio.set_event_loop(loop)
+            #             try:
+            #                 loop.run_until_complete(notification_service.notifyNewComment(
+            #                     commenter_name=user_node.username,
+            #                     post_creator_device_id=profile.device_id,
+            #                     post_id=target_post.uid,
+            #                     comment_id=comment.uid,
+            #                     comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content
+            #                 ))
+            #             finally:
+            #                 loop.close()
+            
+            # === NEW NOTIFICATION CODE (USING GlobalNotificationService) ===
+            # Send notification to post creator about new comment
             post_creator = None
             if isinstance(target_post, Post):
-                # For regular posts, created_by points to Users
                 post_creator = target_post.created_by.single()
             elif isinstance(target_post, CommunityPost):
-                # For community posts, creator points to Users
                 post_creator = target_post.creator.single()
             
-            if post_creator and isinstance(post_creator, Users) and post_creator.uid != user_node.uid:  # Don't notify if commenting on own post
-                if isinstance(post_creator, Users):
-                    profile = post_creator.profile.single()
-                    if profile and profile.device_id:
-                        notification_service = NotificationService()
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            loop.run_until_complete(notification_service.notifyNewComment(
-                                commenter_name=user_node.username,
-                                post_creator_device_id=profile.device_id,
-                                post_id=target_post.uid,
-                                comment_id=comment.uid,
-                                comment_content=input.content[:50] + "..." if len(input.content) > 50 else input.content  # Truncate long comments
-                            ))
-                        finally:
-                            loop.close()
+            if post_creator and isinstance(post_creator, Users) and post_creator.uid != user_node.uid:
+                profile = post_creator.profile.single()
+                if profile and profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        # Truncate long comments for notification
+                        comment_preview = input.content[:50] + "..." if len(input.content) > 50 else input.content
+                        
+                        service.send(
+                            event_type="post_comment",
+                            recipients=[{
+                                'device_id': profile.device_id,
+                                'uid': post_creator.uid
+                            }],
+                            username=user_node.username,
+                            comment_text=comment_preview,
+                            post_id=target_post.uid,
+                            comment_id=comment.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send comment notification: {e}")
 
-            #notify parent comment author if this is a reply
+            # Notify parent comment author if this is a reply
             if parent_comment:
                 parent_comment_author = parent_comment.user.single()
                 if (parent_comment_author and 
@@ -710,20 +1114,26 @@ class CreateComment(Mutation):
                     
                     parent_profile = parent_comment_author.profile.single()
                     if parent_profile and parent_profile.device_id:
-                        notification_service = NotificationService()
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
                         try:
-                            # You can extend your notification service to handle reply notifications
-                            loop.run_until_complete(notification_service.notifyNewComment(
-                                commenter_name=user_node.username,
-                                post_creator_device_id=parent_profile.device_id,
+                            from notification.global_service import GlobalNotificationService
+                            
+                            service = GlobalNotificationService()
+                            reply_preview = f"Replied: {input.content[:50]}..." if len(input.content) > 50 else f"Replied: {input.content}"
+                            
+                            service.send(
+                                event_type="post_comment",
+                                recipients=[{
+                                    'device_id': parent_profile.device_id,
+                                    'uid': parent_comment_author.uid
+                                }],
+                                username=user_node.username,
+                                comment_text=reply_preview,
                                 post_id=target_post.uid,
-                                comment_id=comment.uid,
-                                comment_content=f"Replied: {input.content[:50]}..." if len(input.content) > 50 else f"Replied: {input.content}"
-                            ))
-                        finally:
-                            loop.close()
+                                comment_id=comment.uid
+                            )
+                        except Exception as e:
+                            print(f"Failed to send reply notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             # Track comment creation activity
             try:
@@ -1710,6 +2120,34 @@ class SendVibeToComment(Mutation):
             
             VibeUtils.onVibeCreated(user_node, individual_vibe.name_of_vibe, adjusted_score)
             
+            # ============= NOTIFICATION CODE START (SendVibeToComment) =============
+            # Send notification to comment author about vibe reaction
+            comment_author = comment.user.single()
+            if comment_author and comment_author.uid != user_node.uid:  # Don't notify yourself
+                author_profile = comment_author.profile.single()
+                if author_profile and author_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        # Get the post this comment belongs to
+                        post = comment.post.single() if hasattr(comment, 'post') else comment.community_post.single()
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="comment_vibe_reaction",
+                            recipients=[{
+                                'device_id': author_profile.device_id,
+                                'uid': comment_author.uid
+                            }],
+                            username=user_node.username,
+                            vibe_name=individual_vibe.name_of_vibe,
+                            post_id=post.uid if post else comment.uid,
+                            comment_id=comment.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send comment vibe notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return SendVibeToComment(
                 success=True,
                 message="Vibe sent to comment successfully!",
@@ -1739,6 +2177,14 @@ class Mutation(graphene.ObjectType):
     Create_post = CreatePost.Field()        # Create new posts
     update_post=UpdatePost.Field()          # Modify existing posts
     delete_post=DeletePost.Field()          # Soft delete posts
+
+    # Debate CRUD operations
+    create_debate = CreateDebate.Field()
+    update_debate = UpdateDebate.Field()
+    delete_debate = DeleteDebate.Field()
+    create_debate_answer = CreateDebateAnswer.Field()
+    update_debate_answer = UpdateDebateAnswer.Field()
+    delete_debate_answer = DeleteDebateAnswer.Field()
 
     # Tag management operations
     add_tag=CreateTag.Field()               # Add hashtags to posts

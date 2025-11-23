@@ -162,6 +162,8 @@ class GlobalNotificationService:
             status='pending',
             priority=notification_data.get('priority', 'normal'),
             click_action=notification_data.get('click_action'),
+            deep_link=notification_data.get('deep_link'),
+            web_link=notification_data.get('web_link'),
             image_url=notification_data.get('image_url'),
             data=notification_data.get('data', {})
         )
@@ -171,19 +173,22 @@ class GlobalNotificationService:
             'Accept': 'application/json'
         }
         
+        # Build payload with new format including deep_link and web_link
         payload = {
             "title": notification_data['title'],
             "body": notification_data['body'],
             "token": device_id,
             "priority": notification_data.get('priority', 'normal'),
             "click_action": notification_data.get('click_action', '/'),
-            "event_type": event_type,
+            "deep_link": notification_data.get('deep_link', ''),
+            "web_link": notification_data.get('web_link', ''),
             "data": {
                 "type": event_type,
                 **notification_data.get('data', {})
             }
         }
         
+        # Add optional image_url if present
         if notification_data.get('image_url'):
             payload['image_url'] = notification_data['image_url']
         

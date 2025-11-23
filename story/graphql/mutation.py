@@ -99,6 +99,38 @@ class CreateStory(Mutation):
                     mentioned_by_uid=created_by.uid,
                     mention_context='story_content'
                 )
+                
+                # ============= NOTIFICATION CODE START (Story Mention) =============
+                # Send notification to mentioned users
+                try:
+                    from notification.global_service import GlobalNotificationService
+                    
+                    # Collect mentioned users with device IDs
+                    mention_recipients = []
+                    for mentioned_uid in mentioned_user_uids:
+                        try:
+                            mentioned_user = Users.nodes.get(uid=mentioned_uid)
+                            if mentioned_user.uid != created_by.uid:  # Don't notify yourself
+                                profile = mentioned_user.profile.single()
+                                if profile and profile.device_id:
+                                    mention_recipients.append({
+                                        'device_id': profile.device_id,
+                                        'uid': mentioned_user.uid
+                                    })
+                        except Exception as e:
+                            print(f"Error getting mentioned user {mentioned_uid}: {e}")
+                    
+                    if mention_recipients:
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="story_mention",
+                            recipients=mention_recipients,
+                            username=created_by.username,
+                            story_id=story.uid
+                        )
+                except Exception as e:
+                    print(f"Failed to send story mention notification: {e}")
+                # ============= NOTIFICATION CODE END =============
 
             # Track story creation activity
             try:
@@ -618,6 +650,31 @@ class CreateStoryReaction(Mutation):
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.error(f"Failed to track vibe activity: {str(e)}")
+            
+            # ============= NOTIFICATION CODE START (CreateStoryReaction) =============
+            # Send notification to story creator about new reaction (only for new reactions, not updates)
+            if not existing_results:  # Only notify for new reactions, not updates
+                try:
+                    from notification.global_service import GlobalNotificationService
+                    
+                    story_creator = story.created_by.single()
+                    if story_creator and story_creator.uid != user.uid:  # Don't notify yourself
+                        creator_profile = story_creator.profile.single()
+                        if creator_profile and creator_profile.device_id:
+                            service = GlobalNotificationService()
+                            service.send(
+                                event_type="story_reaction",
+                                recipients=[{
+                                    'device_id': creator_profile.device_id,
+                                    'uid': story_creator.uid
+                                }],
+                                username=user.username,
+                                story_id=story.uid,
+                                reaction_type=input.reaction
+                            )
+                except Exception as e:
+                    print(f"Failed to send story reaction notification: {e}")
+            # ============= NOTIFICATION CODE END =============
             
             return CreateStoryReaction(success=True, message=message)
             

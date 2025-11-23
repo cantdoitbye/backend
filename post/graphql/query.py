@@ -506,6 +506,18 @@ class Query(graphene.ObjectType):
         except Exception as e:
             print(f"Error in resolve_postcomments_by_post_uid: {e}")
             return []    
+    debate_answers_by_post_uid = graphene.List(CommentType, post_uid=graphene.String(required=True))
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_debate_answers_by_post_uid(self, info, post_uid):
+        try:
+            post_node = Post.nodes.get(uid=post_uid)
+            comments = list(post_node.comment.all())
+            answers = [c for c in comments if getattr(c, 'is_answer', False) and not c.is_deleted]
+            return [CommentType.from_neomodel(c, info) for c in answers]
+        except Post.DoesNotExist:
+            return []
            
     comment_replies = graphene.List(
         CommentType,
@@ -1915,5 +1927,4 @@ class Query(graphene.ObjectType):
         details = ["Top Vibes - Meme", "Top Vibes - Podcasts", "Top Vibes - Videos", "Top Vibes - Music",
                    "Top Vibes - Articles", "Post From Connection", "Popular Post", "Recent Post"]
         return [PostCategoryType.from_neomodel(user_node, detail, search) for detail in details]
-
 

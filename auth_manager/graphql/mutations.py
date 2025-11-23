@@ -302,6 +302,27 @@ class CreateUser(Mutation):
                     # Log the error but don't fail the user creation
                     print(f"Error processing invite connection: {e}")
 
+            # Send signup completion notification
+            try:
+                from notification.global_service import GlobalNotificationService
+                
+                # Get user profile
+                profile = user_node.profile.single()
+                
+                if profile and profile.device_id:
+                    notification_service = GlobalNotificationService()
+                    notification_service.send(
+                        event_type="signup_completed",
+                        recipients=[{
+                            'device_id': profile.device_id,
+                            'uid': user_node.uid
+                        }],
+                        username=user_node.username or email.split('@')[0]
+                    )
+                    logger.info(f"Signup completion notification sent to user {email}")
+            except Exception as e:
+                # Don't fail the signup if notification fails
+                logger.warning(f"Failed to send signup completion notification: {e}")
 
             return CreateUser(user=user, token=token,refresh_token =refresh_token,success=True,message=UserMessages.ACCOUNT_CREATED)
         except Exception as error:
@@ -2163,6 +2184,29 @@ class VerifyOTPAndResetPassword(graphene.Mutation):
             refresh_token = create_refresh_token(user)
 
             otp_instance.delete()
+            
+            # Send password reset success notification
+            try:
+                from notification.global_service import GlobalNotificationService
+                
+                # Get user node and profile
+                user_node = Users.nodes.get(user_id=str(user.id))
+                profile = user_node.profile.single()
+                
+                if profile and profile.device_id:
+                    notification_service = GlobalNotificationService()
+                    notification_service.send(
+                        event_type="password_reset_success",
+                        recipients=[{
+                            'device_id': profile.device_id,
+                            'uid': user_node.uid
+                        }]
+                    )
+                    logger.info(f"Password reset notification sent to user {user.email}")
+            except Exception as e:
+                # Don't fail the password reset if notification fails
+                logger.warning(f"Failed to send password reset notification: {e}")
+            
             return VerifyOTPAndResetPassword(success=True,token=token,refresh_token=refresh_token, message="Password has been reset successfully.")
         
         except User.DoesNotExist:
@@ -2789,6 +2833,30 @@ class CreateUsersReview(graphene.Mutation):
             users_review.byuser.connect(byuser)
             users_review.touser.connect(touser)
             touser.user_review.connect(users_review)
+
+            # ============= NOTIFICATION CODE START (CreateUsersReview) =============
+            # Send notification to user who received the vibe/review
+            if touser and touser.uid != byuser.uid:  # Don't notify yourself
+                touser_profile = touser.profile.single()
+                if touser_profile and touser_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="vibe_sent_to_profile",
+                            recipients=[{
+                                'device_id': touser_profile.device_id,
+                                'uid': touser.uid
+                            }],
+                            sender_username=byuser.username,
+                            vibe_name=input.reaction,
+                            vibe_score=input.vibe,
+                            review_id=users_review.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send vibe to profile notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             return CreateUsersReview( success=True, message="Users Review created successfully.")
         except Exception as error:
@@ -3802,10 +3870,29 @@ class CreateAchievement(Mutation):
             achievement.profile.connect(profile)
             profile.achievement.connect(achievement)
 
-            
-
-            
-
+            # ============= NOTIFICATION CODE START (CreateAchievement) =============
+            # Send notification to user about new achievement
+            user_node = profile.user.single()
+            if user_node:
+                user_profile = user_node.profile.single()
+                if user_profile and user_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="achievement_added",
+                            recipients=[{
+                                'device_id': user_profile.device_id,
+                                'uid': user_node.uid
+                            }],
+                            achievement_name=input.get('what', 'New Achievement'),
+                            achievement_id=achievement.uid,
+                            achievement_icon=input.get('file_id', [None])[0] if input.get('file_id') else None
+                        )
+                    except Exception as e:
+                        print(f"Failed to send achievement notification: {e}")
+            # ============= NOTIFICATION CODE END =============
 
             return CreateAchievement(achievement=AchievementType.from_neomodel(achievement), success=True,message=UserMessages.CREATE_ACHIEVEMENT)
         except Exception as error:
@@ -3960,6 +4047,31 @@ class CreateEducation(Mutation):
             education.save()
             education.profile.connect(profile)
             profile.education.connect(education)
+            
+            # ============= NOTIFICATION CODE START (CreateEducation) =============
+            # Send notification to user about new education
+            user_node = profile.user.single()
+            if user_node:
+                user_profile = user_node.profile.single()
+                if user_profile and user_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="education_added",
+                            recipients=[{
+                                'device_id': user_profile.device_id,
+                                'uid': user_node.uid
+                            }],
+                            degree_name=degree or 'Degree',
+                            institution_name=school_name or 'Institution',
+                            education_id=education.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send education notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateEducation(education=EducationType.from_neomodel(education), success=True,message=UserMessages.CREATE_EDUCATION)
             
         except Exception as error:
@@ -4122,6 +4234,31 @@ class CreateExperience(Mutation):
             experience.save()
             experience.profile.connect(profile)
             profile.experience.connect(experience)
+            
+            # ============= NOTIFICATION CODE START (CreateExperience) =============
+            # Send notification to user about new experience
+            user_node = profile.user.single()
+            if user_node:
+                user_profile = user_node.profile.single()
+                if user_profile and user_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="experience_added",
+                            recipients=[{
+                                'device_id': user_profile.device_id,
+                                'uid': user_node.uid
+                            }],
+                            job_title=title or 'Position',
+                            company_name=company_name or 'Company',
+                            experience_id=experience.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send experience notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateExperience(experience=ExperienceType.from_neomodel(experience), success=True,message=UserMessages.CREATE_EXPERIENCE)
         except Exception as error:
             message = getattr(error, 'message', str(error))
@@ -4276,6 +4413,30 @@ class CreateSkill(Mutation):
             skill.save()
             skill.profile.connect(profile)
             profile.skill.connect(skill)
+            
+            # ============= NOTIFICATION CODE START (CreateSkill) =============
+            # Send notification to user about new skill
+            user_node = profile.user.single()
+            if user_node:
+                user_profile = user_node.profile.single()
+                if user_profile and user_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="skill_added",
+                            recipients=[{
+                                'device_id': user_profile.device_id,
+                                'uid': user_node.uid
+                            }],
+                            skill_name=what or 'New Skill',
+                            skill_id=skill.uid
+                        )
+                    except Exception as e:
+                        print(f"Failed to send skill notification: {e}")
+            # ============= NOTIFICATION CODE END =============
+            
             return CreateSkill(skill=SkillType.from_neomodel(skill), success=True,message=UserMessages.CREATE_SKILL)
         except Exception as error:
             message = getattr(error, 'message', str(error))
