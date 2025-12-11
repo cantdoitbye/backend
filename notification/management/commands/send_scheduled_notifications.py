@@ -57,12 +57,22 @@ class Command(BaseCommand):
         self.stdout.write('\n📬 Checking for pending connection requests...')
         
         try:
+            # Check for both Connection and ConnectionV2 models
+            # Connection model: Uses "Received" status, relationship HAS_RECIEVED_CONNECTION
+            # ConnectionV2 model: Uses "Pending" status, relationship HAS_CONNECTION
             query = """
-            MATCH (receiver:Users)<-[:RECEIVER]-(conn:Connection {connection_status: 'PENDING'})
-            WHERE conn.created_date < datetime() - duration('P1D')
-            WITH receiver, count(conn) as request_count
+            MATCH (receiver:Users)-[:PROFILE]->(profile:Profile)
+            WHERE profile.device_id IS NOT NULL
+            OPTIONAL MATCH (receiver)<-[:HAS_RECIEVED_CONNECTION]-(conn:Connection)
+            WHERE conn.connection_status = 'Received'
+            AND conn.timestamp < datetime() - duration('P1D')
+            OPTIONAL MATCH (receiver)-[:HAS_CONNECTION]->(conn2:ConnectionV2)
+            WHERE conn2.connection_status = 'Pending'
+            AND conn2.created_date < datetime() - duration('P1D')
+            WITH receiver, profile, count(conn) + count(conn2) as request_count
             WHERE request_count > 0
-            RETURN receiver.uid as user_uid, request_count
+            RETURN receiver.uid as user_uid, receiver.username as username, 
+                   request_count, profile.device_id as device_id
             ORDER BY request_count DESC
             """
             
@@ -72,30 +82,30 @@ class Command(BaseCommand):
                 self.stdout.write('   No pending requests found.')
                 return 0
             
+            self.stdout.write(f'   Found {len(results)} users with pending requests')
+            
             sent_count = 0
             service = GlobalNotificationService() if not dry_run else None
             
             for row in results:
                 user_uid = row[0]
-                request_count = row[1]
+                username = row[1]
+                request_count = row[2]
+                device_id = row[3]
                 
                 try:
-                    user = Users.nodes.get(uid=user_uid)
-                    profile = user.profile.single()
-                    
-                    if profile and profile.device_id:
-                        if dry_run:
-                            self.stdout.write(f'   Would send to {user.username}: {request_count} pending requests')
-                        else:
-                            service.send(
-                                event_type="pending_connection_requests",
-                                recipients=[{
-                                    'device_id': profile.device_id,
-                                    'uid': user_uid
-                                }],
-                                request_count=request_count
-                            )
-                        sent_count += 1
+                    if dry_run:
+                        self.stdout.write(f'   Would send to {username}: {request_count} pending request(s)')
+                    else:
+                        service.send(
+                            event_type="pending_connection_requests",
+                            recipients=[{
+                                'device_id': device_id,
+                                'uid': user_uid
+                            }],
+                            request_count=request_count
+                        )
+                    sent_count += 1
                         
                 except Exception as e:
                     logger.error(f"Error processing user {user_uid}: {e}")
@@ -113,11 +123,21 @@ class Command(BaseCommand):
         self.stdout.write('\n👤 Checking for incomplete profiles...')
         
         try:
+            # Check for users with incomplete profiles (created in last 30 days)
+            # Profile is incomplete if: no bio OR no profile_pic_id OR no city OR no state
             query = """
             MATCH (user:Users)-[:PROFILE]->(profile:Profile)
-            WHERE user.created_date > datetime() - duration('P7D')
-            AND (profile.bio IS NULL OR profile.bio = '' OR profile.profile_image_id IS NULL)
-            RETURN user.uid as user_uid, user.username as username
+            WHERE user.created_date > datetime() - duration('P30D')
+            AND profile.device_id IS NOT NULL
+            AND (
+                profile.bio IS NULL OR profile.bio = '' OR 
+                profile.profile_pic_id IS NULL OR profile.profile_pic_id = '' OR
+                profile.city IS NULL OR profile.city = '' OR
+                profile.state IS NULL OR profile.state = ''
+            )
+            RETURN user.uid as user_uid, user.username as username, user.email as email,
+                   profile.bio as bio, profile.profile_pic_id as profile_pic, 
+                   profile.city as city, profile.state as state
             LIMIT 100
             """
             
@@ -127,12 +147,25 @@ class Command(BaseCommand):
                 self.stdout.write('   No incomplete profiles found.')
                 return 0
             
+            self.stdout.write(f'   Found {len(results)} users with incomplete profiles')
+            
             sent_count = 0
             service = GlobalNotificationService() if not dry_run else None
             
             for row in results:
                 user_uid = row[0]
-                username = row[1]
+                username = row[1] or row[2]  # username or email
+                bio = row[3]
+                profile_pic = row[4]
+                city = row[5]
+                state = row[6]
+                
+                # Show what's missing
+                missing = []
+                if not bio: missing.append('bio')
+                if not profile_pic: missing.append('profile_pic')
+                if not city: missing.append('city')
+                if not state: missing.append('state')
                 
                 try:
                     user = Users.nodes.get(uid=user_uid)
@@ -140,7 +173,7 @@ class Command(BaseCommand):
                     
                     if profile and profile.device_id:
                         if dry_run:
-                            self.stdout.write(f'   Would send profile reminder to {username}')
+                            self.stdout.write(f'   Would send to {username} (missing: {", ".join(missing)})')
                         else:
                             service.send(
                                 event_type="profile_edit_reminder",
@@ -163,75 +196,75 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'   ✗ Error: {e}'))
             return 0
 
-    def send_trending_topics(self, dry_run=False):
-        """Send trending topic notifications matching user interests"""
-        self.stdout.write('\n🔥 Checking for trending topics...')
+    # def send_trending_topics(self, dry_run=False):
+    #     """Send trending topic notifications matching user interests"""
+    #     self.stdout.write('\n🔥 Checking for trending topics...')
         
-        try:
-            query = """
-            MATCH (user:Users)-[:PROFILE]->(profile:Profile)
-            WHERE profile.interests IS NOT NULL 
-            AND profile.interests <> []
-            AND profile.device_id IS NOT NULL
-            RETURN user.uid as user_uid, user.username as username, profile.interests as interests, profile.device_id as device_id
-            ORDER BY user.created_date DESC
-            LIMIT 50
-            """
+    #     try:
+    #         query = """
+    #         MATCH (user:Users)-[:PROFILE]->(profile:Profile)
+    #         WHERE profile.interests IS NOT NULL 
+    #         AND profile.interests <> []
+    #         AND profile.device_id IS NOT NULL
+    #         RETURN user.uid as user_uid, user.username as username, profile.interests as interests, profile.device_id as device_id
+    #         ORDER BY user.created_date DESC
+    #         LIMIT 50
+    #         """
             
-            results, _ = db.cypher_query(query)
+    #         results, _ = db.cypher_query(query)
             
-            if not results:
-                self.stdout.write('   No users with interests found.')
-                return 0
+    #         if not results:
+    #             self.stdout.write('   No users with interests found.')
+    #             return 0
             
-            # Mock trending topics (replace with real analytics)
-            trending_topics = [
-                {'name': 'AI & Machine Learning', 'keywords': ['ai', 'ml', 'machine learning', 'artificial intelligence']},
-                {'name': 'Web Development', 'keywords': ['web', 'javascript', 'react', 'frontend', 'backend']},
-                {'name': 'Mobile Development', 'keywords': ['mobile', 'ios', 'android', 'flutter']},
-                {'name': 'Data Science', 'keywords': ['data', 'analytics', 'python', 'statistics']},
-            ]
+    #         # Mock trending topics (replace with real analytics)
+    #         trending_topics = [
+    #             {'name': 'AI & Machine Learning', 'keywords': ['ai', 'ml', 'machine learning', 'artificial intelligence']},
+    #             {'name': 'Web Development', 'keywords': ['web', 'javascript', 'react', 'frontend', 'backend']},
+    #             {'name': 'Mobile Development', 'keywords': ['mobile', 'ios', 'android', 'flutter']},
+    #             {'name': 'Data Science', 'keywords': ['data', 'analytics', 'python', 'statistics']},
+    #         ]
             
-            sent_count = 0
-            service = GlobalNotificationService() if not dry_run else None
+    #         sent_count = 0
+    #         service = GlobalNotificationService() if not dry_run else None
             
-            for row in results:
-                user_uid = row[0]
-                username = row[1]
-                user_interests = row[2] or []
-                device_id = row[3]
+    #         for row in results:
+    #             user_uid = row[0]
+    #             username = row[1]
+    #             user_interests = row[2] or []
+    #             device_id = row[3]
                 
-                # Find matching topics
-                for topic in trending_topics:
-                    matched = False
-                    for interest in user_interests:
-                        if any(keyword.lower() in interest.lower() for keyword in topic['keywords']):
-                            matched = True
-                            break
+    #             # Find matching topics
+    #             for topic in trending_topics:
+    #                 matched = False
+    #                 for interest in user_interests:
+    #                     if any(keyword.lower() in interest.lower() for keyword in topic['keywords']):
+    #                         matched = True
+    #                         break
                     
-                    if matched:
-                        if dry_run:
-                            self.stdout.write(f'   Would send trending topic "{topic["name"]}" to {username}')
-                        else:
-                            service.send(
-                                event_type="trending_topic_matching_interest",
-                                recipients=[{
-                                    'device_id': device_id,
-                                    'uid': user_uid
-                                }],
-                                topic_name=topic['name'],
-                                username=username
-                            )
-                        sent_count += 1
-                        break  # Only one topic per user
+    #                 if matched:
+    #                     if dry_run:
+    #                         self.stdout.write(f'   Would send trending topic "{topic["name"]}" to {username}')
+    #                     else:
+    #                         service.send(
+    #                             event_type="trending_topic_matching_interest",
+    #                             recipients=[{
+    #                                 'device_id': device_id,
+    #                                 'uid': user_uid
+    #                             }],
+    #                             topic_name=topic['name'],
+    #                             username=username
+    #                         )
+    #                     sent_count += 1
+    #                     break  # Only one topic per user
             
-            self.stdout.write(f'   ✓ Sent {sent_count} trending topic notifications')
-            return sent_count
+    #         self.stdout.write(f'   ✓ Sent {sent_count} trending topic notifications')
+    #         return sent_count
             
-        except Exception as e:
-            logger.error(f"Error in send_trending_topics: {e}")
-            self.stdout.write(self.style.ERROR(f'   ✗ Error: {e}'))
-            return 0
+    #     except Exception as e:
+    #         logger.error(f"Error in send_trending_topics: {e}")
+    #         self.stdout.write(self.style.ERROR(f'   ✗ Error: {e}'))
+    #         return 0
 
     def send_community_suggestions(self, dry_run=False):
         """Send community suggestions to users"""

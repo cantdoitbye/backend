@@ -382,12 +382,27 @@ class NonSpecialCharacterString2_50(graphene.Scalar):
     
 
 class NonSpecialCharacterString1_200(graphene.Scalar):
-    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, and common punctuation for comments"""
+    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, emojis, and common punctuation"""
 
     MIN_LENGTH = 1
     MAX_LENGTH = 200
-    # Allows letters, numbers, spaces, and common punctuation (no HTML tags)
-    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z0-9À-ÖØ-öø-ÿ\s.,!?;:'\"-]+$", re.UNICODE)
+    # Allows letters, numbers, spaces, emojis, and common punctuation (no HTML tags)
+    ALLOWED_PATTERN = re.compile(
+        r"^[a-zA-Z0-9\s!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~"
+        r"\u2600-\u26FF"  # Miscellaneous Symbols
+        r"\u2700-\u27BF"  # Dingbats
+        r"\u200D"  # Zero-Width Joiner (ZWJ) - for complex emoji sequences
+        r"\uFE00-\uFE0F"  # Variation Selectors (VS15, VS16) - for emoji variations
+        r"\u20E3"  # Combining Enclosing Keycap - for keycap emojis like 2️⃣
+        r"\U0001F300-\U0001F5FF"  # Miscellaneous Symbols and Pictographs
+        r"\U0001F600-\U0001F64F"  # Emoticons
+        r"\U0001F680-\U0001F6FF"  # Transport and Map Symbols
+        r"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        r"\U0001FA00-\U0001FA6F"  # Chess Symbols
+        r"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        r"]+$",
+        re.UNICODE
+    )
      
     @classmethod
     def add_option(cls, field_name, mutation_name=None):
@@ -435,7 +450,7 @@ class NonSpecialCharacterString1_200(graphene.Scalar):
             self.raise_error("HTML tags are not allowed.")
         
         if not self.ALLOWED_PATTERN.match(value_trimmed):
-            self.raise_error(f"{self.field_name} must contain only letters, numbers, spaces, and basic punctuation.")
+            self.raise_error(f"{self.field_name} must contain only letters, numbers, spaces, emojis, and common punctuation.")
         return value_trimmed
 
     @classmethod
@@ -478,7 +493,7 @@ class NonSpecialCharacterString1_200(graphene.Scalar):
             )
         if not cls.ALLOWED_PATTERN.match(value):
             raise GraphQLError(
-                "Value must contain only letters, numbers, spaces, and basic punctuation.",
+                "Value must contain only letters, numbers, spaces, emojis, and common punctuation.",
                 extensions=extensions,
                 path=path
             )
@@ -1142,11 +1157,27 @@ class SpecialCharacterString10_200(graphene.Scalar):
         return value    
 
 class NonSpecialCharacterString2_100(graphene.Scalar):
-    """Custom String Scalar that enforces length constraints and disallows special characters"""
+    """Custom String Scalar that enforces length constraints and allows letters, numbers, spaces, emojis, and common punctuation"""
 
     MIN_LENGTH = 2
     MAX_LENGTH = 100
-    ALLOWED_PATTERN = re.compile(r"^[a-zA-Z ]+$")  # Allows only letters, numbers, and spaces
+    # Allows letters, numbers, spaces, emojis, and common punctuation
+    ALLOWED_PATTERN = re.compile(
+        r"^[a-zA-Z0-9\s!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~"
+        r"\u2600-\u26FF"  # Miscellaneous Symbols
+        r"\u2700-\u27BF"  # Dingbats
+        r"\u200D"  # Zero-Width Joiner (ZWJ) - for complex emoji sequences
+        r"\uFE00-\uFE0F"  # Variation Selectors (VS15, VS16) - for emoji variations
+        r"\u20E3"  # Combining Enclosing Keycap - for keycap emojis like 2️⃣
+        r"\U0001F300-\U0001F5FF"  # Miscellaneous Symbols and Pictographs
+        r"\U0001F600-\U0001F64F"  # Emoticons
+        r"\U0001F680-\U0001F6FF"  # Transport and Map Symbols
+        r"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        r"\U0001FA00-\U0001FA6F"  # Chess Symbols
+        r"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        r"]+$",
+        re.UNICODE
+    )
 
     @classmethod
     def add_option(cls, field_name, mutation_name=None):
@@ -1208,7 +1239,7 @@ class NonSpecialCharacterString2_100(graphene.Scalar):
             )
         if not cls.ALLOWED_PATTERN.match(value):
             raise GraphQLError(
-                f"{cls.field_name} must contain only letters and spaces. No special characters allowed.",
+                f"{cls.field_name} must contain only letters, numbers, spaces, emojis, and common punctuation.",
                 extensions=extensions,
                 path=path
             )

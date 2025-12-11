@@ -73,7 +73,13 @@ class Users(DjangoNode, StructuredNode):
     job=RelationshipTo('job.models.Job','HAS_JOB')
     blocked=RelationshipTo('msg.models.Block','HAS_BLOCK')
     user_back_profile_review=RelationshipTo('BackProfileUsersReview','HAS_USER_REVIEW')
-
+    opportunity=RelationshipTo('opportunity.models.Opportunity','CREATED_BY')
+    chat_requester = RelationshipFrom('msg.models.DebateChatRequest','CHAT_REQUESTER')
+    chat_responder = RelationshipFrom('msg.models.DebateChatRequest','CHAT_RESPONDER')
+    diary_folders = RelationshipTo('diary.models.DiaryFolder', 'HAS_DIARY_FOLDER')
+    diary_notes = RelationshipTo('diary.models.DiaryNote', 'HAS_DIARY_NOTE')
+    diary_documents = RelationshipTo('diary.models.DiaryDocument', 'HAS_DIARY_DOCUMENT')
+    diary_todos = RelationshipTo('diary.models.DiaryTodo', 'HAS_DIARY_TODO')
     def save(self, *args, **kwargs):
         self.updated_at = datetime.now()
         super().save(*args, **kwargs)

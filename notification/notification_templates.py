@@ -510,6 +510,77 @@ NOTIFICATION_TEMPLATES = {
         "web_link": f"{WEB_BASE_URL}/home",
         "priority": "high"
     },
+
+     # =========================================================================
+    # 11. opportunity 
+    # =========================================================================
+        
+    "opportunity_comment": {
+        "title": "{username} commented on your opportunity",
+        "body": "{comment_text}",
+        "data": {
+            "type": "opportunity_comment",
+            "opportunity_id": "{opportunity_id}",
+            "comment_id": "{comment_id}",
+            "username": "{username}"
+        },
+        "sound": "default",
+        "priority": "high"
+    },
+    
+    "opportunity_comment_reply": {
+        "title": "{username} replied to your comment",
+        "body": "{comment_text}",
+        "data": {
+            "type": "opportunity_comment_reply",
+            "opportunity_id": "{opportunity_id}",
+            "comment_id": "{comment_id}",
+            "username": "{username}"
+        },
+        "sound": "default",
+        "priority": "high"
+    },
+    
+    "opportunity_like": {
+        "title": "{username} sent a vibe to your opportunity",
+        "body": "Received {vibe_name} for {role}",
+        "data": {
+            "type": "opportunity_like",
+            "opportunity_id": "{opportunity_id}",
+            "username": "{username}",
+            "vibe_name": "{vibe_name}"
+        },
+        "sound": "default",
+        "priority": "default"
+    },
+    
+    "opportunity_share": {
+        "title": "{username} shared your opportunity",
+        "body": "{role} at {location}",
+        "data": {
+            "type": "opportunity_share",
+            "opportunity_id": "{opportunity_id}",
+            "username": "{username}",
+            "role": "{role}",
+            "location": "{location}"
+        },
+        "sound": "default",
+        "priority": "default"
+    },
+
+     "opportunity_application": {
+        "title": "{username} applied for your opportunity",
+        "body": "New application for {role}",
+        "data": {
+            "type": "opportunity_application",
+            "opportunity_id": "{opportunity_id}",
+            "username": "{username}",
+            "role": "{role}",
+            "room_id": "{room_id}"
+        },
+        "sound": "default",
+        "priority": "high"
+    },
     
     
 }

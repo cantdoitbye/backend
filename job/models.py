@@ -6,6 +6,7 @@ from django.utils import timezone
 from datetime import timedelta
 from auth_manager.models import Users 
 
+
 class Industry(DjangoNode, StructuredNode):
     uid= UniqueIdProperty()
     name = StringProperty()

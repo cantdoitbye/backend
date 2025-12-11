@@ -94,11 +94,18 @@ class GlobalNotificationService:
         # Format notification from template
         try:
             notification_data = format_notification(event_type, **template_vars)
+            logger.debug(f"Formatted notification data: {notification_data}")
         except Exception as e:
+            logger.error(f"Error formatting notification: {e}")
             print(f"Error formatting notification: {e}")
             return
         
+        logger.info(f"📨 Sending {event_type} notification to {len(valid_recipients)} recipients")
         print(f"📨 Sending {event_type} notification to {len(valid_recipients)} recipients")
+        print(f"📋 Title: '{notification_data.get('title')}'")
+        print(f"📋 Body: '{notification_data.get('body')}'")
+        print(f"📋 Deep Link: '{notification_data.get('deep_link')}'")
+        print(f"📋 Web Link: '{notification_data.get('web_link')}'")
         
         # Create batch log
         log = NotificationLog.objects.create(
@@ -195,6 +202,10 @@ class GlobalNotificationService:
         # Send with retries using requests library (synchronous)
         for attempt in range(self.max_retries):
             try:
+                # Log the payload being sent
+                logger.info(f"📤 Sending notification to {user_uid}")
+                logger.debug(f"Payload: {payload}")
+                
                 response = requests.post(
                     f"{self.notification_service_url}/notifications",
                     json=payload,
@@ -202,13 +213,24 @@ class GlobalNotificationService:
                     timeout=self.timeout
                 )
                 
+                # Log the response
+                logger.info(f"📥 Response status: {response.status_code}")
+                logger.debug(f"Response body: {response.text}")
+                
                 if response.status_code == 200:
                     # Update notification record
                     notification.status = 'sent'
                     notification.sent_at = timezone.now()
                     notification.save()
                     
-                    print(f"✅ Sent to {user_uid}")
+                    # Parse response to check if notification was actually delivered
+                    try:
+                        response_data = response.json()
+                        logger.info(f"✅ Sent to {user_uid} - Response: {response_data}")
+                        print(f"✅ Sent to {user_uid} - FCM Response: {response_data}")
+                    except:
+                        logger.info(f"✅ Sent to {user_uid}")
+                        print(f"✅ Sent to {user_uid}")
                     
                     return {
                         'success': True,
@@ -217,6 +239,7 @@ class GlobalNotificationService:
                     }
                 else:
                     if attempt < self.max_retries - 1:
+                        logger.warning(f"⚠️ Attempt {attempt + 1} failed for {user_uid}, retrying...")
                         time.sleep(2 ** attempt)  # Exponential backoff
                         continue
                     else:
@@ -225,12 +248,13 @@ class GlobalNotificationService:
                         notification.error_message = f"Status {response.status_code}: {response.text}"
                         notification.save()
                         
-                        print(f"❌ Failed to send to {user_uid}: {response.status_code}")
+                        logger.error(f"❌ Failed to send to {user_uid}: {response.status_code} - {response.text}")
+                        print(f"❌ Failed to send to {user_uid}: {response.status_code} - {response.text}")
                         
                         return {
                             'success': False,
                             'user_uid': user_uid,
-                            'error': f"Status {response.status_code}"
+                            'error': f"Status {response.status_code}: {response.text}"
                         }
             
             except Exception as e:

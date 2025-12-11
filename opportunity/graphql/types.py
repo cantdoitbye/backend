@@ -110,6 +110,9 @@ class OpportunityType(ObjectType):
     # ========== COMPUTED FIELDS ==========
     is_expired = graphene.Boolean()  # Based on expires_at date
     engagement_score = graphene.Float()  # Calculated engagement score
+
+    application_count = graphene.Int()
+    has_applied = graphene.Boolean()
     
     @classmethod
     def from_neomodel(cls, opportunity, info=None, user=None):
@@ -346,6 +349,44 @@ class OpportunityType(ObjectType):
         results, _ = db.cypher_query(query, {'opportunity_uid': self.uid})
         return round(results[0][0], 2) if results else 0.0
 
+    def resolve_application_count(self, info):
+        """Get total number of applications for this opportunity"""
+        from neomodel import db
+        query = """
+        MATCH (o:Opportunity {uid: $opportunity_uid})-[:HAS_APPLICATION]->(app:OpportunityApplication)
+        WHERE app.is_active = true
+        RETURN count(app) as count
+        """
+        results, _ = db.cypher_query(query, {'opportunity_uid': self.uid})
+        return results[0][0] if results else 0
+
+    def resolve_has_applied(self, info):
+        """Check if current user has applied to this opportunity"""
+        try:
+            from neomodel import db
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            
+            if not user_id:
+                return False
+            
+            from auth_manager.models import Users
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            query = """
+            MATCH (u:Users {uid: $user_uid})-[:APPLIED_TO]->(app:OpportunityApplication)<-[:HAS_APPLICATION]-(o:Opportunity {uid: $opportunity_uid})
+            WHERE app.is_active = true
+            RETURN app
+            LIMIT 1
+            """
+            results, _ = db.cypher_query(query, {
+                'user_uid': user_node.uid,
+                'opportunity_uid': self.uid
+            })
+            return len(results) > 0
+        except Exception:
+            return False    
+
 
 class OpportunityListType(ObjectType):
     """
@@ -357,3 +398,54 @@ class OpportunityListType(ObjectType):
     total_count = graphene.Int()
     has_more = graphene.Boolean()
     offset = graphene.Int()
+
+class OpportunityApplicationType(graphene.ObjectType):  # ← FIX: Use graphene.ObjectType
+    """GraphQL type for opportunity applications"""
+    uid = graphene.String()
+    applied_at = graphene.DateTime()
+    status = graphene.String()
+    is_active = graphene.Boolean()
+    
+    # Relationships
+    applicant = graphene.Field('auth_manager.graphql.types.UserType')
+    opportunity = graphene.Field('opportunity.graphql.types.OpportunityType')
+    
+    # NOTE: No Meta class needed for graphene.ObjectType
+    
+    @staticmethod
+    def from_neomodel(application, info=None):
+        """Convert OpportunityApplication node to GraphQL type"""
+        from auth_manager.graphql.types import UserType
+        
+        applicant = application.applicant.single()
+        opportunity_node = application.opportunity.single()
+        
+        return OpportunityApplicationType(
+            uid=application.uid,
+            applied_at=application.applied_at,
+            status=application.status,
+            is_active=application.is_active,
+            applicant=UserType.from_neomodel(applicant) if applicant else None,
+            opportunity=OpportunityType.from_neomodel(opportunity_node, info) if opportunity_node else None
+        )
+
+
+class OpportunityCountsType(ObjectType):
+    """
+    GraphQL type for opportunity counts by type.
+    
+    Returns counts of different opportunity types:
+    - total_count: Total number of all opportunities
+    - job_count: Number of job opportunities (from database)
+    - event_count: Number of event opportunities (static: 10, not yet implemented)
+    - cause_count: Number of cause opportunities (static: 10, not yet implemented)
+    - business_count: Number of business opportunities (static: 10, not yet implemented)
+    - post_count: Number of posts (static: 20, not yet implemented)
+    """
+    total_count = graphene.Int(description="Total number of all opportunities")
+    job_count = graphene.Int(description="Number of job opportunities")
+    event_count = graphene.Int(description="Number of event opportunities")
+    cause_count = graphene.Int(description="Number of cause opportunities")
+    business_count = graphene.Int(description="Number of business opportunities")
+    post_count = graphene.Int(description="Number of posts")
+

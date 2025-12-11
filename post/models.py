@@ -184,12 +184,13 @@ class Comment(DjangoNode, StructuredNode):
     timestamp = DateTimeProperty(default_now=True)    # When comment was posted
     is_deleted = BooleanProperty(default=False)       # Soft delete flag
     comment_file_id = ArrayProperty(base_property=StringProperty())
+    stance = StringProperty()
     is_answer = BooleanProperty(default=False)
 
     # Relationships
     post = RelationshipTo('Post','HAS_POST')
     community_post = RelationshipTo('community.models.CommunityPost', 'HAS_COMMUNITY_POST')
-
+    opportunity = RelationshipTo('opportunity.models.Opportunity', 'HAS_OPPORTUNITY')
     user = RelationshipTo('Users','HAS_USER')         # User who wrote the comment
     vibe_reactions = RelationshipTo('CommentVibe', 'HAS_VIBE_REACTION')  # Vibe reactions on this comment
     #Self-referencing relationships for nested replies
@@ -266,7 +267,7 @@ class Like(DjangoNode, StructuredNode):
     # Relationships
     post = RelationshipTo('Post','HAS_POST')          # Post being reacted to
     user = RelationshipTo('Users','HAS_USER')         # User giving the reaction
-
+    opportunity = RelationshipTo('opportunity.models.Opportunity', 'HAS_OPPORTUNITY')
     def save(self, *args, **kwargs):
         """Update timestamp on save"""
         self.timestamp = datetime.now()
@@ -409,6 +410,7 @@ class PostShare(DjangoNode, StructuredNode):
     # Relationships
     post = RelationshipTo('Post','HAS_POST')           # Post being shared
     user = RelationshipTo('Users','HAS_USER')          # User sharing the post
+    opportunity = RelationshipTo('opportunity.models.Opportunity', 'HAS_OPPORTUNITY')
 
     def save(self, *args, **kwargs):
         """Update shared timestamp on save"""
@@ -442,7 +444,7 @@ class PostView(DjangoNode, StructuredNode):
     # Relationships
     post = RelationshipTo('Post','HAS_POST')           # Post being viewed
     user = RelationshipTo('Users','HAS_USER')          # User viewing the post
-
+    opportunity = RelationshipTo('opportunity.models.Opportunity', 'HAS_OPPORTUNITY')
     def save(self, *args, **kwargs):
         """Update viewed timestamp on save"""
         self.viewed_at = datetime.now()

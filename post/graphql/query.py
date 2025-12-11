@@ -10,6 +10,11 @@ from post.utils.reaction_manager import PostReactionUtils, IndividualVibeManager
 from post.utils.feed_metrics import log_feed_metrics, monitor_feed_performance
 from post.utils.feed_validation import validate_feed_algorithm_requirements, validate_feed_quality
 from post.utils.feed_fallbacks import get_appropriate_fallback_feed
+from post.utils.feed_history import get_viewed_today, mark_viewed, get_hidden_today, get_muted_creators, get_creator_counts, increment_creator_counts
+from post.utils.feed_selection import diversify, compose_with_quotas, creator_key, inject_exploration
+from post.utils.ab_config import get_feed_config
+from post.utils.trending import fetch_trending
+from post.utils.interest_vectors import get_user_interest_vector
 from .types import *
 from auth_manager.models import Users, Profile
 from post.models import *
@@ -58,6 +63,20 @@ class Query(graphene.ObjectType):
                 return PostType.from_neomodel(post, info)
             except CommunityPost.DoesNotExist:
                 raise Exception("Post not found")
+
+    # Dedicated debate-by-uid (ensures post_type='debate')
+    debate_by_uid = graphene.Field(PostType, debate_uid=graphene.String(required=True))
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_debate_by_uid(self, info, debate_uid):
+        try:
+            post = Post.nodes.get(uid=debate_uid)
+            if post.is_deleted or getattr(post, 'post_type', '') != 'debate':
+                return None
+            return PostType.from_neomodel(post, info)
+        except Post.DoesNotExist:
+            return None
 
     my_post = graphene.List(PostType)
 
@@ -109,6 +128,349 @@ class Query(graphene.ObjectType):
             return [TagType.from_neomodel(x) for x in tags]
         except Exception as e:
             raise Exception(e)
+
+    my_feed = graphene.List(FeedTestType, circle_type=CircleTypeEnum(), first=graphene.Int(default_value=20), after=graphene.String())
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_my_feed(self, info, circle_type=None, first=20, after=None):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        try:
+            first = min(max(1, int(first)), 50)
+        except Exception:
+            first = 20
+
+        cursor_timestamp = None
+        cursor_post_uid = None
+        if after:
+            try:
+                raw = str(after).strip()
+                if raw.startswith('{') and 'cursor' in raw:
+                    import re
+                    m = re.search(r'"cursor"\s*:\s*"([A-Za-z0-9_\-+/=]+)"', raw)
+                    if m:
+                        raw = m.group(1)
+                if raw.startswith('"') and raw.endswith('"'):
+                    raw = raw[1:-1]
+                pad = (-len(raw)) % 4
+                if pad:
+                    raw = raw + ('=' * pad)
+                decoded = base64.b64decode(raw.encode()).decode()
+                parts = decoded.split('_', 1)
+                if len(parts) == 2:
+                    ts = parts[0]
+                    cursor_post_uid = parts[1]
+                    try:
+                        cursor_timestamp = float(ts)
+                    except Exception:
+                        try:
+                            from datetime import datetime
+                            tsc = ts.replace('Z', '')
+                            dt = None
+                            try:
+                                dt = datetime.fromisoformat(tsc)
+                            except Exception:
+                                try:
+                                    dt = datetime.strptime(tsc, "%Y-%m-%dT%H:%M:%S.%f")
+                                except Exception:
+                                    dt = datetime.strptime(tsc, "%Y-%m-%dT%H:%M:%S")
+                            cursor_timestamp = dt.timestamp() if dt else None
+                        except Exception:
+                            cursor_timestamp = None
+            except Exception:
+                cursor_timestamp = None
+                cursor_post_uid = None
+
+        params = {
+            "log_in_user_node_id": str(user_id),
+            "cursor_timestamp": cursor_timestamp,
+            "cursor_post_uid": cursor_post_uid,
+            "limit": first * 3
+        }
+
+        results, _ = db.cypher_query(post_queries.post_feed_query, params)
+        interests = get_user_interest_vector(str(user_id))
+        print("feed_interests", user_id, sorted(interests.get('post_types', {}).items(), key=lambda x: x[1], reverse=True)[:3])
+
+        viewed = get_viewed_today(str(user_id))
+        hidden = get_hidden_today(str(user_id))
+        muted = get_muted_creators(str(user_id))
+
+        def get_blocked_creators(u_id: str):
+            try:
+                q = (
+                    "MATCH (me:Users {user_id: $uid})-[:HAS_BLOCK]->(b:Block)-[:BLOCKED]->(u:Users) "
+                    "RETURN u.uid"
+                )
+                res, _ = db.cypher_query(q, {"uid": str(u_id)})
+                return set([row[0] for row in res if row and row[0]])
+            except Exception:
+                return set()
+
+        blocked = get_blocked_creators(user_id)
+        print("feed_filters", user_id, len(viewed), len(hidden), len(muted), len(blocked), len(results))
+        filtered = []
+        for r in results:
+            pd = r[0] if r else {}
+            puid = None
+            if isinstance(pd, dict):
+                puid = pd.get('uid') or pd.get('post_uid')
+            else:
+                puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+            ck = creator_key(r)
+            allow = ck not in muted and ck not in blocked
+            if puid and (puid in viewed or puid in hidden):
+                allow = False
+            if allow:
+                filtered.append(r)
+
+        if len(filtered) < max(5, first // 2):
+            seen = set()
+            loose = []
+            for r in results:
+                pd = r[0] if r else {}
+                puid = None
+                if isinstance(pd, dict):
+                    puid = pd.get('uid') or pd.get('post_uid')
+                else:
+                    puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+                ck = creator_key(r)
+                if ck in muted or ck in blocked:
+                    continue
+                if puid and puid in seen:
+                    continue
+                loose.append(r)
+                if puid:
+                    seen.add(puid)
+                if len(loose) >= first:
+                    break
+            filtered = loose
+
+        def circle_weight(c):
+            try:
+                t = None
+                if isinstance(c, dict):
+                    t = c.get('circle_type')
+                else:
+                    t = getattr(c, 'circle_type', None)
+                wmap = {
+                    'family': 1.0,
+                    'close': 0.8,
+                    'friends': 0.6,
+                    'acquaintance': 0.3
+                }
+                return wmap.get(str(t).lower(), 0.2) if t else 0.2
+            except Exception:
+                return 0.2
+
+        def final_score(row):
+            try:
+                post_data = row[0] if row else {}
+                circle = row[5] if len(row) > 5 else None
+                overall = row[7] if len(row) > 7 and row[7] is not None else 2.0
+                created = row[8] if len(row) > 8 and row[8] is not None else post_data.get('created_at', 0)
+                import time as _t
+                import random as _rand
+                age_h = max(0.0, (_t.time() - float(created)) / 3600.0) if created else 0.0
+                recency = 0.25 if age_h < 24 else (0.1 if age_h < 72 else 0.0)
+                cboost = circle_weight(circle)
+                jitter = _rand.uniform(-0.03, 0.03)
+                iboost = 0.0
+                try:
+                    pt = post_data.get('post_type', '')
+                    if pt:
+                        iboost += float(interests.get('post_types', {}).get(pt, 0.0)) * 0.4
+                    tags = post_data.get('tags') or []
+                    if isinstance(tags, list) and tags:
+                        s = 0.0
+                        for t in tags:
+                            if t:
+                                s += float(interests.get('tags', {}).get(str(t).lower(), 0.0))
+                                if s >= 2.0:
+                                    break
+                        iboost += min(s * 0.1, 0.4)
+                except Exception:
+                    iboost = 0.0
+                return overall + recency + cboost + iboost + jitter
+            except Exception:
+                return 2.0
+
+        scored = sorted(filtered, key=final_score, reverse=True)
+        cfg = get_feed_config(str(user_id))
+        session_counts = get_creator_counts(str(user_id))
+        selected = compose_with_quotas(
+            scored,
+            first,
+            connected_ratio=cfg.get('connected_ratio', 0.6),
+            max_per_creator=cfg.get('creator_cap', 2),
+            session_counts=session_counts,
+            session_limit=cfg.get('session_limit', 5)
+        )
+        print("feed_selection", user_id, len(filtered), len(selected), len(session_counts))
+
+        exploration_count = max(1, int(first * cfg.get('exploration_ratio', 0.2)))
+        if exploration_count > 0:
+            exclude_uids = set()
+            for r in selected:
+                pd = r[0] if r else {}
+                uid = pd.get('uid') if isinstance(pd, dict) else getattr(pd, 'uid', None)
+                if uid:
+                    exclude_uids.add(uid)
+            trending_rows = fetch_trending(max(exploration_count * 2, 5), exclude_uids)
+            safe_trending = []
+            for r in trending_rows:
+                pd = r[0] if r else {}
+                puid = None
+                if isinstance(pd, dict):
+                    puid = pd.get('uid') or pd.get('post_uid')
+                else:
+                    puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+                ck2 = creator_key(r)
+                allow2 = ck2 not in muted and ck2 not in blocked
+                if puid and (puid in viewed or puid in hidden) and len(selected) >= 10:
+                    allow2 = False
+                if allow2:
+                    safe_trending.append(r)
+            selected = inject_exploration(selected, safe_trending, exploration_count)
+
+        if len(selected) < first:
+            extra_needed = first - len(selected)
+            exclude_uids2 = set()
+            for r in selected:
+                pd = r[0] if r else {}
+                uid2 = pd.get('uid') if isinstance(pd, dict) else getattr(pd, 'uid', None)
+                if uid2:
+                    exclude_uids2.add(uid2)
+            more_trending = fetch_trending(max(extra_needed * 2, 10), exclude_uids2)
+            safe_more = []
+            for r in more_trending:
+                pd = r[0] if r else {}
+                puid = None
+                if isinstance(pd, dict):
+                    puid = pd.get('uid') or pd.get('post_uid')
+                else:
+                    puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+                ck3 = creator_key(r)
+                allow3 = ck3 not in muted and ck3 not in blocked
+                if puid and (puid in viewed or puid in hidden) and len(selected) >= 10:
+                    allow3 = False
+                if allow3:
+                    safe_more.append(r)
+            selected = inject_exploration(selected, safe_more, extra_needed)
+
+        if len(selected) < first:
+            try:
+                category = 'new_user' if not interests.get('post_types') else 'unknown'
+                need = first - len(selected)
+                fallback_rows = get_appropriate_fallback_feed(category, str(user_id), limit=max(need * 3, 10))
+                added = []
+                used_uids = set()
+                for r in selected:
+                    pd = r[0] if r else {}
+                    puid0 = pd.get('uid') if isinstance(pd, dict) else getattr(pd, 'uid', None)
+                    if puid0:
+                        used_uids.add(puid0)
+                # Prefer non-duplicates
+                for r in fallback_rows:
+                    if len(added) >= need:
+                        break
+                    pd = r[0] if r else {}
+                    puid = None
+                    if isinstance(pd, dict):
+                        puid = pd.get('uid') or pd.get('post_uid')
+                    else:
+                        puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+                    if puid and puid not in used_uids:
+                        added.append(r)
+                        used_uids.add(puid)
+                # Emergency fill: allow soft duplicates if still short
+                if len(added) < need:
+                    for r in fallback_rows:
+                        if len(added) >= need:
+                            break
+                        pd = r[0] if r else {}
+                        puid = None
+                        if isinstance(pd, dict):
+                            puid = pd.get('uid') or pd.get('post_uid')
+                        else:
+                            puid = getattr(pd, 'uid', None) or getattr(pd, 'post_uid', None)
+                        # Allow duplicate only when current feed is very short
+                        if puid and len(selected) + len(added) < 10:
+                            added.append(r)
+                selected += added
+                print("feed_fallback", user_id, category, len(added))
+            except Exception:
+                pass
+
+        try:
+            PostReactionUtils.initialize_map(selected)
+            IndividualVibeManager.store_data()
+            fids = []
+            for r in selected:
+                pd = r[0] if r else {}
+                ids = pd.get('post_file_id')
+                if ids:
+                    for i in ids:
+                        if i:
+                            fids.append(i)
+            if fids:
+                FileURL.store_file_urls(fids)
+        except Exception:
+            pass
+
+        feed_items = []
+        for row in selected:
+            try:
+                post_node = row[0] if row[0] else None
+                user_node = row[1] if len(row) > 1 else None
+                profile_node = row[2] if len(row) > 2 else None
+                reactions = row[3] if len(row) > 3 else None
+                connection = row[4] if len(row) > 4 else None
+                circle = row[5] if len(row) > 5 else None
+                share_count = row[6] if len(row) > 6 and row[6] is not None else 0
+                overall_score = row[7] if len(row) > 7 and row[7] is not None else 2.0
+                post_data = post_node
+
+                include = True
+                if circle_type is not None:
+                    original = None
+                    if circle:
+                        if isinstance(circle, dict):
+                            original = circle.get('circle_type')
+                        else:
+                            original = getattr(circle, 'circle_type', None)
+                    val = getattr(circle_type, 'value', None)
+                    if val == 'Universe':
+                        include = (connection is None)
+                    else:
+                        include = bool(connection and circle and original == val)
+
+                if include:
+                    item = FeedTestType.from_neomodel(
+                        post_data=post_data,
+                        reactions_nodes=reactions,
+                        connection_node=connection,
+                        circle_node=circle,
+                        user_node=user_node,
+                        profile=profile_node,
+                        query_share_count=share_count,
+                        query_overall_score=overall_score
+                    )
+                    if item is not None:
+                        feed_items.append(item)
+            except Exception:
+                continue
+
+        try:
+            mark_viewed(str(user_id), [x.uid for x in feed_items if hasattr(x, 'uid')])
+            for r in selected:
+                increment_creator_counts(str(user_id), creator_key(r), 1)
+        except Exception:
+            pass
+
+        print("feed_return", user_id, len(feed_items))
+        return feed_items
 
     all_postreactions = graphene.List(LikeType)
 
@@ -831,79 +1193,79 @@ class Query(graphene.ObjectType):
         return [SavedPostType.from_neomodel(x) for x in saved]
 
     # Optimisation and review required for this query
-    my_feed = graphene.List(FeedType, circle_type=CircleTypeEnum())
+    # my_feed = graphene.List(FeedType, circle_type=CircleTypeEnum())
 
-    @handle_graphql_post_errors
-    @login_required
-    def resolve_my_feed(self, info, circle_type=None):
-        payload = info.context.payload
-        user_id = payload.get('user_id')
-        log_in_user_node = Users.nodes.get(user_id=user_id)
+    # @handle_graphql_post_errors
+    # @login_required
+    # def resolve_my_feed(self, info, circle_type=None):
+    #     payload = info.context.payload
+    #     user_id = payload.get('user_id')
+    #     log_in_user_node = Users.nodes.get(user_id=user_id)
 
-        # Get blocked users and their IDs
-        blocked_users = users.get_blocked_users(user_id)
-        blocked_user_ids = {user['user_id'] for user in blocked_users}
+    #     # Get blocked users and their IDs
+    #     blocked_users = users.get_blocked_users(user_id)
+    #     blocked_user_ids = {user['user_id'] for user in blocked_users}
 
-        # Fetch all posts
-        all_posts = Post.nodes.all()
+    #     # Fetch all posts
+    #     all_posts = Post.nodes.all()
 
-        # Filter posts based on two conditions:
-        # 1. The post should not be created by a blocked user.
-        # 2. The post should not be created by the logged-in user.
-        filtered_posts = filter(
-            lambda post: (
-                post.created_by.single().user_id not in blocked_user_ids and
-                post.created_by.single().user_id != str(
-                    user_id)  # Exclude posts by logged-in user
-            ),
-            all_posts
-        )
-        # Reverse the list of filtered posts to get the latest posts first
-        reversed_posts = list(filtered_posts)[::-1]
+    #     # Filter posts based on two conditions:
+    #     # 1. The post should not be created by a blocked user.
+    #     # 2. The post should not be created by the logged-in user.
+    #     filtered_posts = filter(
+    #         lambda post: (
+    #             post.created_by.single().user_id not in blocked_user_ids and
+    #             post.created_by.single().user_id != str(
+    #                 user_id)  # Exclude posts by logged-in user
+    #         ),
+    #         all_posts
+    #     )
+    #     # Reverse the list of filtered posts to get the latest posts first
+    #     reversed_posts = list(filtered_posts)[::-1]
 
-        # print("Reversed Posts:", reversed_posts)  # Add this line for debugging
-        result_feed = []
-        feed_count = 0
-        user_has_connection = False
-        for post_data in reversed_posts:
-            if feed_count >= 100:
-                break  # Stop processing if we've reached the limit
-            post_user = post_data.created_by.single()  # The user who created the post
+    #     # print("Reversed Posts:", reversed_posts)  # Add this line for debugging
+    #     result_feed = []
+    #     feed_count = 0
+    #     user_has_connection = False
+    #     for post_data in reversed_posts:
+    #         if feed_count >= 100:
+    #             break  # Stop processing if we've reached the limit
+    #         post_user = post_data.created_by.single()  # The user who created the post
 
-            # Query the connection and circle using Cypher
-            query = """
-            MATCH (byuser:Users {uid: $log_in_user_node_uid})-[c1:HAS_CONNECTION]->(conn:Connection)
-            MATCH (conn)-[c3:HAS_CIRCLE]->(circle:Circle)
-            MATCH (touser:Users {uid: $post_user_uid})-[c2:HAS_CONNECTION]->(conn)
-            RETURN conn, circle
-            """
+    #         # Query the connection and circle using Cypher
+    #         query = """
+    #         MATCH (byuser:Users {uid: $log_in_user_node_uid})-[c1:HAS_CONNECTION]->(conn:Connection)
+    #         MATCH (conn)-[c3:HAS_CIRCLE]->(circle:Circle)
+    #         MATCH (touser:Users {uid: $post_user_uid})-[c2:HAS_CONNECTION]->(conn)
+    #         RETURN conn, circle
+    #         """
 
-            params = {
-                "log_in_user_node_uid": log_in_user_node.uid,
-                "post_user_uid": post_user.uid,
-            }
+    #         params = {
+    #             "log_in_user_node_uid": log_in_user_node.uid,
+    #             "post_user_uid": post_user.uid,
+    #         }
 
-            results = db.cypher_query(query, params)
+    #         results = db.cypher_query(query, params)
 
-            # print(results)
-            if results and results[0]:
-                user_has_connection = True
-                connection_node = results[0][0][0]
-                circle_node = results[0][0][1]
-                original_circle_type = circle_node.get('circle_type')
-                if circle_type is None or original_circle_type == circle_type.value:
-                    # If no circle_type is selected, or the circle_type matches, include the post
-                    result_feed.append(FeedType.from_neomodel(
-                        post_data, connection_node, circle_node, log_in_user_node))
+    #         # print(results)
+    #         if results and results[0]:
+    #             user_has_connection = True
+    #             connection_node = results[0][0][0]
+    #             circle_node = results[0][0][1]
+    #             original_circle_type = circle_node.get('circle_type')
+    #             if circle_type is None or original_circle_type == circle_type.value:
+    #                 # If no circle_type is selected, or the circle_type matches, include the post
+    #                 result_feed.append(FeedType.from_neomodel(
+    #                     post_data, connection_node, circle_node, log_in_user_node))
 
-            else:
-                if circle_type is None:
-                    result_feed.append(FeedType.from_neomodel(
-                        post_data, connection_node=None, circle_node=None, log_in_user_node=log_in_user_node))
+    #         else:
+    #             if circle_type is None:
+    #                 result_feed.append(FeedType.from_neomodel(
+    #                     post_data, connection_node=None, circle_node=None, log_in_user_node=log_in_user_node))
 
-        if not user_has_connection and circle_type is not None:
-            return []
-        return result_feed
+    #     if not user_has_connection and circle_type is not None:
+    #         return []
+    #     return result_feed
 
     post_by_userid = graphene.List(
         PostType, user_id=graphene.String(required=True))
@@ -1928,3 +2290,48 @@ class Query(graphene.ObjectType):
                    "Top Vibes - Articles", "Post From Connection", "Popular Post", "Recent Post"]
         return [PostCategoryType.from_neomodel(user_node, detail, search) for detail in details]
 
+    # New: Global debate feed for everyone with title/data pattern
+    global_debate_feed = graphene.List(PostCategoryType)
+
+    @handle_graphql_post_errors
+    @login_required
+    def resolve_global_debate_feed(self, info):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=user_id)
+
+        def fetch_posts(query, params=None):
+            params = params or {}
+            results, _ = db.cypher_query(query, params)
+            items = []
+            for row in results:
+                post_data = row[0]
+                items.append(PostRecommendedType.from_neomodel(post_data))
+            return items
+
+        # Top in World: best debate posts by vibe_score
+        world_query = (
+            "MATCH (p:Post) "
+            "WHERE p.is_deleted = false AND p.post_type = 'debate' "
+            "RETURN p ORDER BY p.vibe_score DESC, p.created_at DESC LIMIT 12"
+        )
+        top_world = fetch_posts(world_query)
+        world_section = PostCategoryType(title="Top in World", data=top_world)
+
+        # Static India sections (same selection for now)
+        india_random_query = (
+            "MATCH (p:Post) "
+            "WHERE p.is_deleted = false AND p.post_type = 'debate' "
+            "RETURN p ORDER BY rand() LIMIT 12"
+        )
+        top_delhi = fetch_posts(india_random_query)
+        top_mumbai = fetch_posts(india_random_query)
+        top_bangalore = fetch_posts(india_random_query)
+
+        india_sections = [
+            PostCategoryType(title="Top in India - Delhi", data=top_delhi),
+            PostCategoryType(title="Top in India - Mumbai", data=top_mumbai),
+            PostCategoryType(title="Top in India - Bangalore", data=top_bangalore),
+        ]
+
+        return [world_section] + india_sections

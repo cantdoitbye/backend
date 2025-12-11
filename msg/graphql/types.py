@@ -4,6 +4,7 @@ from graphene import ObjectType
 from auth_manager.graphql.types import UserType
 from auth_manager.Utils import generate_presigned_url
 from msg.models import MatrixProfile
+from msg.models import DebateChatRequest
 from graphene_django.types import DjangoObjectType
 
 class ConversationType(ObjectType):
@@ -157,4 +158,39 @@ class SendMatrixMessageResponse(ObjectType):
     success = graphene.Boolean()
     message = graphene.String()
 
+class DebateChatRequestType(ObjectType):
+    uid = graphene.String()
+    source_type = graphene.String()
+    source_uid = graphene.String()
+    topic_text = graphene.String()
+    status = graphene.String()
+    matrix_room_id = graphene.String()
+    created_at = graphene.DateTime()
+    expires_at = graphene.DateTime()
+    max_turns_per_user = graphene.Int()
+    requester_turns_used = graphene.Int()
+    responder_turns_used = graphene.Int()
+    requester = graphene.Field(UserType)
+    responder = graphene.Field(UserType)
+    requester_stance = graphene.String()
+    responder_stance = graphene.String()
 
+    @classmethod
+    def from_neomodel(cls, req):
+        return cls(
+            uid=req.uid,
+            source_type=req.source_type,
+            source_uid=req.source_uid,
+            topic_text=req.topic_text,
+            status=req.status,
+            matrix_room_id=req.matrix_room_id,
+            created_at=req.created_at,
+            expires_at=req.expires_at,
+            max_turns_per_user=req.max_turns_per_user,
+            requester_turns_used=req.requester_turns_used,
+            responder_turns_used=req.responder_turns_used,
+            requester_stance=getattr(req,'requester_stance',None),
+            responder_stance=getattr(req,'responder_stance',None),
+            requester=UserType.from_neomodel(req.requester.single()) if req.requester.single() else None,
+            responder=UserType.from_neomodel(req.responder.single()) if req.responder.single() else None,
+        )

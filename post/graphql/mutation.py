@@ -40,6 +40,7 @@ from post.redis import increment_post_like_count
 from user_activity.services.activity_service import ActivityService
 from vibe_manager.services.vibe_activity_service import VibeActivityService
 from post.services.mention_service import MentionService
+from post.utils.feed_history import hide_post_today, mute_creator
 
 
 
@@ -240,7 +241,9 @@ class CreatePost(Mutation):
                         username=created_by.username,
                         post_title=post_title[:50] if post_title else "New post",
                         post_id=post.uid,
-                        post_image_url=FileDetailType(**generate_presigned_url.generate_file_info(post_file_id[0])).url if post_file_id else None
+                        post_image_url=FileDetailType(**generate_presigned_url.generate_file_info(post_file_id[0])).url if post_file_id else None,
+                        sender_uid=created_by.uid,
+                        sender_id=created_by.user_id
                     )
                 except Exception as e:
                     print(f"Failed to send post notification: {e}")
@@ -395,10 +398,14 @@ class CreateDebateAnswer(Mutation):
             target_post = Post.nodes.get(uid=input.post_uid)
 
             file_ids = input.answer_file_id if input.answer_file_id else None
+            stance = (input.stance or '').lower()
+            if stance not in ['for','against']:
+                return CreateDebateAnswer(comment=None, success=False, message="Invalid stance")
             comment = Comment(
                 content=input.content,
                 comment_file_id=file_ids,
-                is_answer=True
+                is_answer=True,
+                stance=stance
             )
             comment.save()
 
@@ -616,6 +623,10 @@ class UpdateDebateAnswer(Mutation):
                 comment.is_deleted = input['is_deleted']
             if 'answer_file_id' in input and input['answer_file_id'] is not None:
                 comment.comment_file_id = input['answer_file_id']
+            if 'stance' in input and input['stance'] is not None:
+                s = str(input['stance']).lower()
+                if s in ['for','against']:
+                    comment.stance = s
 
             comment.save()
 
@@ -770,6 +781,44 @@ class DeleteDebateAnswer(Mutation):
         except Exception as error:
             message=getattr(error , 'message' , str(error) )
             return DeleteDebateAnswer(success=False, message=message)
+
+
+class HidePostFromFeed(graphene.Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        post_uid = graphene.String(required=True)
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, post_uid):
+        try:
+            payload = info.context.payload
+            user_id = str(payload.get('user_id'))
+            hide_post_today(user_id, post_uid)
+            return HidePostFromFeed(success=True, message="Post hidden from your feed today")
+        except Exception as e:
+            return HidePostFromFeed(success=False, message=str(e))
+
+
+class MuteCreatorInFeed(graphene.Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        creator_uid = graphene.String(required=True)
+
+    @handle_graphql_post_errors
+    @login_required
+    def mutate(self, info, creator_uid):
+        try:
+            payload = info.context.payload
+            user_id = str(payload.get('user_id'))
+            mute_creator(user_id, creator_uid)
+            return MuteCreatorInFeed(success=True, message="Creator muted for your feed")
+        except Exception as e:
+            return MuteCreatorInFeed(success=False, message=str(e))
 
 
 class CreateTag(Mutation):
@@ -1100,7 +1149,9 @@ class CreateComment(Mutation):
                             username=user_node.username,
                             comment_text=comment_preview,
                             post_id=target_post.uid,
-                            comment_id=comment.uid
+                            comment_id=comment.uid,
+                            sender_uid=user_node.uid,
+                            sender_id=user_node.user_id
                         )
                     except Exception as e:
                         print(f"Failed to send comment notification: {e}")
@@ -1129,7 +1180,9 @@ class CreateComment(Mutation):
                                 username=user_node.username,
                                 comment_text=reply_preview,
                                 post_id=target_post.uid,
-                                comment_id=comment.uid
+                                comment_id=comment.uid,
+                                sender_uid=user_node.uid,
+                                sender_id=user_node.user_id
                             )
                         except Exception as e:
                             print(f"Failed to send reply notification: {e}")
@@ -2220,3 +2273,6 @@ class Mutation(graphene.ObjectType):
 
     # Analytics operations
     view_post=CreatePostView.Field()                # Track post views
+    # Feed controls
+    hide_post_from_feed = HidePostFromFeed.Field()
+    mute_creator_in_feed = MuteCreatorInFeed.Field()

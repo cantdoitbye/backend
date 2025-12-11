@@ -180,7 +180,8 @@ class CreateConnection(Mutation):
                             'uid': receiver.uid
                         }],
                         username=created_by_node.username,
-                        sender_id=created_by_node.uid,
+                        sender_uid=created_by_node.uid,
+                        sender_id=created_by_node.user_id,
                         connection_id=connection.uid
                     )
             except Exception as e:
@@ -389,7 +390,9 @@ class UpdateConnection(Mutation):
                                 'uid': sender.uid
                             }],
                             username=receiver_node.username,
-                            accepter_id=receiver_node.uid,
+                            user_id=receiver_node.uid,
+                            sender_uid=receiver_node.uid,
+                            sender_id=receiver_node.user_id,
                             connection_id=connection.uid
                         )
                 except Exception as e:
@@ -430,7 +433,9 @@ class UpdateConnection(Mutation):
                                 'uid': sender.uid
                             }],
                             username=receiver_node.username,
-                            connection_id=connection.uid
+                            connection_id=connection.uid,
+                            sender_uid=receiver_node.uid,
+                            sender_id=receiver_node.user_id
                         )
                 except Exception as e:
                     print(f"Failed to send connection rejected notification: {e}")

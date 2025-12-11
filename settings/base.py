@@ -30,6 +30,7 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
+    'channels',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -57,10 +58,10 @@ INSTALLED_APPS = [
     'monitoring',
     'docs',
     'agentic',
-    'user_activity',
-    'analytics',
     'notification',
-
+    'opportunity',
+    'diary',
+    'realtime'
 
 ]
 
@@ -96,7 +97,36 @@ TEMPLATES = [
         },
     },
 ]
+# Redis configuration for Django Channels
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 
+# Parse Redis URL
+redis_url = urlparse(REDIS_URL)
+REDIS_HOST = redis_url.hostname or 'redis'
+REDIS_PORT = redis_url.port or 6379
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', 'ooumphmemoriDB003')  # Get from env or use default
+REDIS_DB = int(redis_url.path.lstrip('/') or '0')
+
+# Construct Redis URL with password for Docker
+# If running in Docker, use 'redis' as host, otherwise use parsed host
+if REDIS_HOST == 'backend.ooumph.com':
+    # Production - use URL as-is (no password)
+    REDIS_CONNECTION_URL = REDIS_URL
+else:
+    # Local Docker - add password
+    REDIS_CONNECTION_URL = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+
+ASGI_APPLICATION = 'socialooumph.asgi.application'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [REDIS_CONNECTION_URL],  # Use connection URL with password
+            "capacity": 1500,
+            "expiry": 10,
+        },
+    },
+}
 WSGI_APPLICATION = 'socialooumph.wsgi.application'
 
 url = urlparse(os.getenv('DATABASE_URL'))
@@ -335,3 +365,30 @@ APPLE_PRIVATE_KEY = os.getenv('APPLE_PRIVATE_KEY', '')  # Private key content
 
 # logger = logging.getLogger('environment')
 # logger.info(f"Running in {ENV} environment"
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '%(asctime)s %(levelname)s %(name)s %(message)s'
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

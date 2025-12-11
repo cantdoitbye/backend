@@ -15,9 +15,9 @@ from graphql import GraphQLError
 from graphql_jwt.decorators import login_required
 from neomodel import db
 
-from .types import OpportunityType, OpportunityListType
+from .types import OpportunityType, OpportunityListType, OpportunityApplicationType
 from .inputs import OpportunityFilterInput
-from opportunity.models import Opportunity
+from opportunity.models import Opportunity, OpportunityApplication
 from auth_manager.models import Users
 from post.models import Comment
 from post.graphql.types import CommentType
@@ -67,6 +67,28 @@ class OpportunityQueries(graphene.ObjectType):
         limit=graphene.Int(default_value=20),
         offset=graphene.Int(default_value=0),
         description="Get comments for an opportunity with pagination"
+    )
+
+    my_applications = graphene.Field(
+        graphene.List('opportunity.graphql.types.OpportunityApplicationType'),
+        limit=graphene.Int(default_value=20),
+        offset=graphene.Int(default_value=0),
+        description="Get all opportunities the current user has applied to"
+    )
+    
+    # Get applicants for an opportunity (for opportunity creator)
+    opportunity_applicants = graphene.Field(
+        graphene.List('opportunity.graphql.types.OpportunityApplicationType'),
+        opportunity_uid=graphene.String(required=True),
+        limit=graphene.Int(default_value=20),
+        offset=graphene.Int(default_value=0),
+        description="Get all applicants for an opportunity"
+    )
+    
+    # Get opportunity counts by type
+    opportunity_counts = graphene.Field(
+        'opportunity.graphql.types.OpportunityCountsType',
+        description="Get counts of opportunities by type (job, event, cause, business)"
     )
     
     # ========== RESOLVERS ==========
@@ -477,4 +499,165 @@ class OpportunityQueries(graphene.ObjectType):
             
         except Exception as e:
             print(f"Error fetching opportunity comments: {str(e)}")
-            return []        
+            return []     
+
+    @login_required
+    def resolve_my_applications(self, info, limit=20, offset=0):
+        """
+        Get all opportunities the current user has applied to.
+        Returns applications with opportunity details.
+        """
+        try:
+            # Get current user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Query applications
+            query = """
+            MATCH (u:Users {uid: $user_uid})-[:APPLIED_TO]->(app:OpportunityApplication)<-[:HAS_APPLICATION]-(o:Opportunity)
+            WHERE app.is_active = true AND o.is_deleted = false
+            
+            // Order by most recent applications first
+            ORDER BY app.applied_at DESC
+            
+            // Pagination
+            SKIP $offset
+            LIMIT $limit
+            
+            RETURN app, o
+            """
+            
+            results, _ = db.cypher_query(query, {
+                'user_uid': user_node.uid,
+                'offset': offset,
+                'limit': limit
+            })
+            
+            if not results:
+                return []
+                        
+            applications = []
+            for row in results:
+                app_node = OpportunityApplication.inflate(row[0])
+                application_type = OpportunityApplicationType.from_neomodel(app_node, info)
+                applications.append(application_type)
+            
+            return applications
+            
+        except Exception as e:
+            print(f"Error fetching user applications: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return []
+    
+    @login_required
+    def resolve_opportunity_applicants(self, info, opportunity_uid, limit=20, offset=0):
+        """
+        Get all applicants for an opportunity.
+        Only accessible by opportunity creator.
+        """
+        try:
+            # Get current user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+            
+            # Get opportunity
+            try:
+                opportunity = Opportunity.nodes.get(uid=opportunity_uid)
+            except Opportunity.DoesNotExist:
+                return []
+            
+            # Verify user is the opportunity creator
+            creator = opportunity.created_by.single()
+            if not creator or creator.uid != user_node.uid:
+                print(f"⚠ User {user_node.uid} tried to access applicants for opportunity they don't own")
+                return []
+            
+            # Query applications
+            query = """
+            MATCH (o:Opportunity {uid: $opportunity_uid})-[:HAS_APPLICATION]->(app:OpportunityApplication)<-[:APPLIED_TO]-(u:Users)
+            WHERE app.is_active = true
+            
+            // Order by most recent applications first
+            ORDER BY app.applied_at DESC
+            
+            // Pagination
+            SKIP $offset
+            LIMIT $limit
+            
+            RETURN app, u
+            """
+            
+            results, _ = db.cypher_query(query, {
+                'opportunity_uid': opportunity_uid,
+                'offset': offset,
+                'limit': limit
+            })
+            
+            if not results:
+                return []
+            
+            
+            applications = []
+            for row in results:
+                app_node = OpportunityApplication.inflate(row[0])
+                application_type = OpportunityApplicationType.from_neomodel(app_node, info)
+                applications.append(application_type)
+            
+            return applications
+            
+        except Exception as e:
+            print(f"Error fetching opportunity applicants: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return []
+    
+    @login_required
+    def resolve_opportunity_counts(self, info):
+        """
+        Get counts of opportunities by type.
+        
+        Returns:
+            OpportunityCountsType with counts for each opportunity type
+            - job_count: Actual count from database
+            - event_count: Static 10 (not yet implemented)
+            - cause_count: Static 10 (not yet implemented)
+            - business_count: Static 10 (not yet implemented)
+            - total_count: Sum of all counts
+        """
+        try:
+            from opportunity.graphql.types import OpportunityCountsType
+            
+            # Count actual jobs from database
+            query = """
+            MATCH (opp:Opportunity {is_deleted: false, is_active: true})
+            WHERE opp.opportunity_type = 'job'
+            RETURN count(opp) as job_count
+            """
+            results, _ = db.cypher_query(query)
+            job_count = results[0][0] if results else 0
+            
+            # Static counts for not-yet-implemented types
+            event_count = 10
+            cause_count = 10
+            business_count = 10
+            post_count = 20
+            
+            # Calculate total
+            total_count = job_count + event_count + cause_count + business_count + post_count
+            
+            return OpportunityCountsType(
+                total_count=total_count,
+                job_count=job_count,
+                event_count=event_count,
+                cause_count=cause_count,
+                business_count=business_count,
+                post_count=post_count
+            )
+            
+        except Exception as error:
+            message = getattr(error, 'message', str(error))
+            print(f"Error fetching opportunity counts: {message}")
+            raise GraphQLError(f"Failed to fetch opportunity counts: {message}")

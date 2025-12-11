@@ -118,9 +118,11 @@ class CreateDebateAnswerInput(graphene.InputObjectType):
     content = custom_graphql_validator.SpecialCharacterString1_200.add_option("content", "CreateDebateAnswer")(required=True)
     answer_file_id = custom_graphql_validator.ListString.add_option("answerFileId", "CreateDebateAnswer")()
     mentioned_user_uids = graphene.List(graphene.String)
+    stance = custom_graphql_validator.String.add_option("stance", "CreateDebateAnswer")(required=True)
 
 class UpdateDebateAnswerInput(graphene.InputObjectType):
     uid = custom_graphql_validator.String.add_option("uid", "UpdateDebateAnswer")(required=True)
     content = custom_graphql_validator.SpecialCharacterString1_200.add_option("content", "UpdateDebateAnswer")()
     is_deleted = custom_graphql_validator.Boolean.add_option("isDeleted", "UpdateDebateAnswer")()
     answer_file_id = custom_graphql_validator.ListString.add_option("answerFileId", "UpdateDebateAnswer")()
+    stance = custom_graphql_validator.String.add_option("stance", "UpdateDebateAnswer")()

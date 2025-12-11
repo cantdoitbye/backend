@@ -123,3 +123,31 @@ class MatrixProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - Matrix Profile"
+
+
+class DebateChatRequest(DjangoNode, StructuredNode):
+    uid = UniqueIdProperty()
+    source_type = StringProperty()  # post | comment | answer
+    source_uid = StringProperty()
+    topic_text = StringProperty()
+    status = StringProperty(default="PENDING")  # PENDING | ACCEPTED | DECLINED | EXPIRED
+    matrix_room_id = StringProperty()
+    created_at = DateTimeProperty(default_now=True)
+    expires_at = DateTimeProperty()
+    max_turns_per_user = IntegerProperty(default=10)
+    requester_turns_used = IntegerProperty(default=0)
+    responder_turns_used = IntegerProperty(default=0)
+    requester_stance = StringProperty()
+    responder_stance = StringProperty()
+
+    requester = RelationshipTo('Users', 'CHAT_REQUESTER')
+    responder = RelationshipTo('Users', 'CHAT_RESPONDER')
+    post = RelationshipTo('post.models.Post', 'HAS_DEBATE_POST')
+    comment = RelationshipTo('post.models.Comment', 'HAS_DEBATE_COMMENT')
+
+    def save(self, *args, **kwargs):
+        self.created_at = datetime.now()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        app_label = 'msg'

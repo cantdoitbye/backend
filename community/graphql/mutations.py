@@ -4162,7 +4162,9 @@ class CreateCommunityPost(Mutation):
                                 username=creator.username,
                                 community_name=community_name,
                                 community_id=community_id,
-                                post_id=post.uid
+                                post_id=post.uid,
+                                sender_uid=creator.uid,
+                                sender_id=creator.user_id
                             )
                     except Exception as e:
                         print(f"Failed to send mention notification: {e}")
@@ -4309,7 +4311,9 @@ class CreateCommunityPost(Mutation):
                         community_name=community_name,
                         post_title=post.post_title[:50] if post.post_title else "New post",
                         post_id=post.uid,
-                        community_id=community_id
+                        community_id=community_id,
+                        sender_uid=creator.uid,
+                        sender_id=creator.user_id
                     )
                 except Exception as e:
                     print(f"Failed to send community post notification: {e}")

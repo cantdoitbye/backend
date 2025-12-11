@@ -1,5 +1,1 @@
-"""Analytics Services Package
-
-This package contains services for analytics data processing,
-aggregation, and activity tracking.
-"""
+from user_activity.services.activity_service import ActivityService

@@ -24,10 +24,11 @@ from .inputs import (
     CreateOpportunityCommentInput,
     CreateOpportunityLikeInput,
     ShareOpportunityInput,
-    DeleteOpportunityLikeInput
+    DeleteOpportunityLikeInput,
+    ApplyToOpportunityInput
 
 )
-from opportunity.models import Opportunity
+from opportunity.models import Opportunity,OpportunityApplication
 from auth_manager.models import Users
 from auth_manager.Utils.generate_presigned_url import get_valid_image
 from user_activity.services.activity_service import ActivityService
@@ -735,7 +736,7 @@ class CreateOpportunityLike(graphene.Mutation):
 
             # Get the vibe type
             try:
-                individual_vibe = IndividualVibe.nodes.get(uid=input.individual_vibe_id)
+                individual_vibe = IndividualVibe.objects.get(id=input.individual_vibe_id)
             except IndividualVibe.DoesNotExist:
                 return CreateOpportunityLike(
                     success=False,
@@ -1039,6 +1040,201 @@ class DeleteOpportunityLike(graphene.Mutation):
                 like_count=0
             )
 
+# ============================================================================
+# APPLY TO OPPORTUNITY MUTATION
+# ============================================================================
+
+class ApplyToOpportunityInput(graphene.InputObjectType):
+    """Input type for applying to an opportunity"""
+    opportunity_uid = graphene.String(required=True, description="UID of the opportunity to apply to")
+
+
+class ApplyToOpportunity(graphene.Mutation):
+    """
+    Apply to an opportunity by joining its Matrix room and tracking application.
+    
+    Flow:
+    1. Check if user already applied
+    2. Create application record in Neo4j
+    3. Join user to Matrix room
+    4. Send notification to opportunity creator
+    5. Track application activity
+    """
+    success = graphene.Boolean()
+    message = graphene.String()
+    room_id = graphene.String()
+    application = graphene.Field('opportunity.graphql.types.OpportunityApplicationType')
+
+    class Arguments:
+        input = ApplyToOpportunityInput(required=True)
+
+    @login_required
+    def mutate(self, info, input):
+        try:
+            # Get authenticated user
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            user_node = Users.nodes.get(user_id=user_id)
+
+            # Get the opportunity
+            try:
+                opportunity = Opportunity.nodes.get(uid=input.opportunity_uid)
+            except Opportunity.DoesNotExist:
+                return ApplyToOpportunity(
+                    success=False,
+                    message="Opportunity not found",
+                    room_id=None,
+                    application=None
+                )
+
+            # Check if user already applied
+            existing_query = """
+            MATCH (u:Users {uid: $user_uid})-[:APPLIED_TO]->(app:OpportunityApplication)<-[:HAS_APPLICATION]-(o:Opportunity {uid: $opportunity_uid})
+            WHERE app.is_active = true
+            RETURN app
+            """
+            results, _ = db.cypher_query(existing_query, {
+                'user_uid': user_node.uid,
+                'opportunity_uid': opportunity.uid
+            })
+            
+            if results:
+                from opportunity.graphql.types import OpportunityApplicationType
+                existing_app = OpportunityApplication.inflate(results[0][0])
+                return ApplyToOpportunity(
+                    success=False,
+                    message="You have already applied to this opportunity",
+                    room_id=opportunity.room_id,
+                    application=OpportunityApplicationType.from_neomodel(existing_app, info)
+                )
+
+            # Create application record
+            application = OpportunityApplication(
+                status='pending',
+                is_active=True
+            )
+            application.save()
+            
+            # Establish relationships
+            application.applicant.connect(user_node)
+            opportunity.applications.connect(application)
+            application.opportunity.connect(opportunity)
+            
+            print(f"✓ Application record created: {application.uid}")
+
+            # Join Matrix room if it exists
+            if opportunity.room_id:
+                try:
+                    from msg.models import MatrixProfile
+                    matrix_profile = MatrixProfile.objects.get(user=user_id)
+                    
+                    if matrix_profile.access_token and matrix_profile.matrix_user_id:
+                        import asyncio
+                        from nio import AsyncClient, JoinError
+                        
+                        async def join_room():
+                            """Join the opportunity Matrix room"""
+                            client = AsyncClient(
+                                "https://chat.ooumph.com",
+                                matrix_profile.matrix_user_id
+                            )
+                            client.access_token = matrix_profile.access_token
+                            
+                            try:
+                                response = await client.join(opportunity.room_id)
+                                
+                                if isinstance(response, JoinError):
+                                    print(f"❌ Failed to join room: {response.message}")
+                                    await client.close()
+                                    return False
+                                
+                                print(f"✓ User {user_node.username} joined opportunity room {opportunity.room_id}")
+                                await client.close()
+                                return True
+                                
+                            except Exception as e:
+                                print(f"❌ Error joining room: {str(e)}")
+                                await client.close()
+                                return False
+                        
+                        # Execute the async function
+                        joined = asyncio.run(join_room())
+                        
+                        if joined:
+                            print(f"✓ Successfully joined Matrix room")
+                        else:
+                            print(f"⚠ Failed to join Matrix room, but application recorded")
+                            
+                except MatrixProfile.DoesNotExist:
+                    print(f"⚠ User has no Matrix profile, application recorded but not joined to room")
+                except Exception as matrix_error:
+                    print(f"⚠ Matrix error: {str(matrix_error)}, but application recorded")
+
+            # Send notification to opportunity creator
+            opportunity_creator = opportunity.created_by.single()
+            if opportunity_creator and opportunity_creator.uid != user_node.uid:
+                creator_profile = opportunity_creator.profile.single()
+                if creator_profile and creator_profile.device_id:
+                    try:
+                        from notification.global_service import GlobalNotificationService
+                        
+                        service = GlobalNotificationService()
+                        service.send(
+                            event_type="opportunity_application",
+                            recipients=[{
+                                'device_id': creator_profile.device_id,
+                                'uid': opportunity_creator.uid
+                            }],
+                            username=user_node.username,
+                            opportunity_id=opportunity.uid,
+                            role=opportunity.role,
+                            room_id=opportunity.room_id if opportunity.room_id else ""
+                        )
+                        print(f"✓ Notification sent to opportunity creator")
+                    except Exception as e:
+                        print(f"⚠ Failed to send application notification: {e}")
+
+            # Track application activity
+            try:
+                from activity.services import ActivityService
+                
+                ActivityService.track_content_interaction(
+                    user=user_node,
+                    content_id=opportunity.uid,
+                    content_type='opportunity',
+                    interaction_type='apply',
+                    metadata={
+                        'application_uid': application.uid,
+                        'opportunity_type': opportunity.opportunity_type,
+                        'opportunity_role': opportunity.role,
+                        'room_id': opportunity.room_id if opportunity.room_id else None,
+                        'has_room': bool(opportunity.room_id)
+                    }
+                )
+                print(f"✓ Application activity tracked")
+            except Exception as e:
+                print(f"⚠ Failed to track application activity: {str(e)}")
+
+            # Return success
+            from opportunity.graphql.types import OpportunityApplicationType
+            return ApplyToOpportunity(
+                success=True,
+                message="Application submitted successfully! The opportunity creator will review your application.",
+                room_id=opportunity.room_id if opportunity.room_id else None,
+                application=OpportunityApplicationType.from_neomodel(application, info)
+            )
+
+        except Exception as error:
+            import traceback
+            print(f"❌ Apply to opportunity error: {str(error)}")
+            print(traceback.format_exc())
+            return ApplyToOpportunity(
+                success=False,
+                message=f"Failed to apply: {str(error)}",
+                room_id=None,
+                application=None
+            )       
+
 class OpportunityMutations(graphene.ObjectType):
     """
     Container for all opportunity-related mutations.
@@ -1055,3 +1251,6 @@ class OpportunityMutations(graphene.ObjectType):
     create_opportunity_like = CreateOpportunityLike.Field()
     delete_opportunity_like = DeleteOpportunityLike.Field()
     share_opportunity = ShareOpportunity.Field()
+
+    apply_to_opportunity = ApplyToOpportunity.Field()
+

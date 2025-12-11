@@ -46,6 +46,8 @@ class PostType(ObjectType):
     updated_by=graphene.Field(lambda:UserFeedType)
     comment=graphene.List(lambda:CommentNonPostType)
     like= graphene.List(lambda:LikeNonPostType)
+    answers=graphene.List(lambda:CommentNonPostType)
+    comments=graphene.List(lambda:CommentNonPostType)
     share_count=graphene.Int()
     my_vibe_details = graphene.List(lambda:ReactionFeedType)
     vibe_feed_List=graphene.List(lambda:VibeFeedListType)
@@ -152,6 +154,8 @@ class PostType(ObjectType):
                 created_by=UserFeedType.from_neomodel(user_node,profile) if user_node and profile else None,
                 comment=[CommentNonPostType.from_neomodel(comment) for comment in post.comment],
                 like=[LikeNonPostType.from_neomodel(like) for like in post.like],
+                answers=[CommentNonPostType.from_neomodel(c) for c in post.comment if getattr(c, 'is_answer', False)],
+                comments=[CommentNonPostType.from_neomodel(c) for c in post.comment if not getattr(c, 'is_answer', False)],
                 share_count=post.share_count,
                 my_vibe_details=[ReactionFeedType.from_neomodel(r) for r in reactions_nodes] if reactions_nodes else None,
                 vibe_feed_List=[VibeFeedListType.from_neomodel(vibe) for vibe in sorted_reactions],
@@ -181,6 +185,7 @@ class CommentType(ObjectType):
     uid = graphene.String()
     post = graphene.Field(PostType)
     user = graphene.Field(UserType)
+    opportunity = graphene.Field('opportunity.graphql.types.OpportunityType')
     content = graphene.String()
     timestamp = graphene.DateTime()
     is_deleted = graphene.Boolean()
@@ -199,6 +204,7 @@ class CommentType(ObjectType):
     depth_level = graphene.Int()                          # Nesting depth (0 = top-level)
     is_reply = graphene.Boolean()                         # True if this is a reply to another comment
     is_answer = graphene.Boolean()
+    stance = graphene.String()
     vibe_reactions = graphene.List(lambda: CommentVibeType)  # Vibe reactions on this comment
     mentioned_users = graphene.List(UserType)
 
@@ -357,6 +363,7 @@ class CommentType(ObjectType):
             depth_level=depth_level,
             is_reply=is_reply,
             is_answer=getattr(comment, 'is_answer', False),
+            stance=getattr(comment, 'stance', None),
             vibe_reactions=vibe_reactions
         )
     def resolve_mentioned_users(self, info):
@@ -379,6 +386,34 @@ class CommentType(ObjectType):
         except Exception as e:
           logger.error(f"Error getting mentioned users for comment {self.uid}: {str(e)}")
         return []
+    def resolve_opportunity(self, info):
+        """Get the opportunity this comment belongs to"""
+        try:
+            # Query directly from Neo4j using comment UID
+            from neomodel import db
+            from opportunity.models import Opportunity
+            from opportunity.graphql.types import OpportunityType
+            
+            query = """
+            MATCH (c:Comment {uid: $comment_uid})-[:HAS_OPPORTUNITY]->(o:Opportunity)
+            WHERE o.is_deleted = false
+            RETURN o
+            LIMIT 1
+            """
+            results, _ = db.cypher_query(query, {'comment_uid': self.uid})
+            
+            if results and results[0]:
+                opportunity = Opportunity.inflate(results[0][0])
+                # Get the current user from context
+                user = info.context.user if hasattr(info.context, 'user') else None
+                return OpportunityType.from_neomodel(opportunity, info, user)
+                
+        except Exception as e:
+            print(f"Error resolving opportunity for comment {self.uid}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return None
     
 class NestedCommentsResponse(ObjectType):
     """Response type for nested comment queries with metadata."""
@@ -587,6 +622,7 @@ class CommentNonPostType(ObjectType):
     content = graphene.String()
     timestamp = graphene.DateTime()
     is_deleted = graphene.Boolean()
+    stance = graphene.String()
 
     @classmethod
     def from_neomodel(cls, comment):
@@ -595,7 +631,8 @@ class CommentNonPostType(ObjectType):
             user=UserType.from_neomodel(comment.user.single()) if comment.user.single() else None,
             content=comment.content,
             timestamp=comment.timestamp,
-            is_deleted=comment.is_deleted
+            is_deleted=comment.is_deleted,
+            stance=getattr(comment,'stance',None)
         )
     
 class LikeNonPostType(ObjectType):

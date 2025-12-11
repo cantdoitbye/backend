@@ -1,10 +1,15 @@
+version: '3.8'
+
 services:
   hey_backend:
     build: .
     container_name: django_backend
-    command: python manage.py runserver 0.0.0.0:8000
+    # Using runserver for now (WebSocket support will be added later)
+    # command: python manage.py runserver 0.0.0.0:8000
+    # For WebSocket support (requires daphne in container):
+    command: daphne -b 0.0.0.0 -p 8000 socialooumph.asgi:application
     volumes:
-      - .:/app
+      - .:/code
 
     ports:
       - "8000:8000"

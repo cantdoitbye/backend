@@ -176,9 +176,8 @@ def validate_bio(input_string):
     """
     Validates the bio input field based on the following criteria:
     - Must meet minimum and maximum length requirements.
-    - Should allow valid special characters and Unicode (e.g., emojis).
+    - Should allow letters, numbers, spaces, emojis, and common punctuation.
     - Should reject HTML tags to prevent XSS attacks.
-    - Should reject disallowed punctuation (e.g., @).
 
     Args:
         input_string (str): The bio input to validate.
@@ -192,7 +191,7 @@ def validate_bio(input_string):
 
     # Explanation of the pattern:
     # (?!.*<[^>]+>)     : Rejects HTML tags (negative lookahead).
-    # [A-Za-z0-9\s!#.,'\"-🌲💻\u00C0-\u017F] : Allows alphanumeric, spaces, valid special characters, emojis, and Unicode.
+    # [A-Za-z0-9\s!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~...] : Allows alphanumeric, spaces, common punctuation, and emojis.
     # {1,200}           : Enforces minimum length of 1 and maximum length of 200 characters.
 
     # Validate using regex
@@ -200,7 +199,7 @@ def validate_bio(input_string):
         raise GraphQLError(
             "Invalid input. Bio must be between 1 and 200 characters long, "
             "must not contain HTML tags, and can only include letters, numbers, "
-            "spaces, valid special characters, emojis, and Unicode characters."
+            "spaces, emojis, and common punctuation."
         )
 
     return True
@@ -211,9 +210,8 @@ def validate_designation(input_string, max_length=100):
     """
     Validates the designation field based on the following criteria:
     - Must not be empty.
-    - Must only contain letters, spaces, and (if applicable) numbers in specific formats.
+    - Must only contain letters, numbers, spaces, emojis, and common punctuation.
     - Must be at least 2 characters long and not exceed the maximum length.
-    - Should reject invalid special characters.
     - Case-insensitivity is implicit as all case formats are valid.
 
     Args:
@@ -242,7 +240,7 @@ def validate_designation(input_string, max_length=100):
     # Validate against the regex pattern
     if not re.fullmatch(DESIGNATION_PATTERN, input_string):
         raise GraphQLError(
-            "Invalid input. Designation must be between 2 and 100 characters and can only contain letters, spaces, and (if applicable) numbers."
+            "Invalid input. Designation must be between 2 and 100 characters and can only contain letters, numbers, spaces, emojis, and common punctuation."
         )
 
     return True

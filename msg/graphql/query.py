@@ -5,6 +5,8 @@ from graphql_jwt.decorators import login_required,superuser_required
 from .types import *
 from auth_manager.models import Users
 from msg.models import *
+from msg.models import DebateChatRequest
+from .types import DebateChatRequestType
 
 class Query(graphene.ObjectType):
    all_conversations = graphene.List(ConversationType)
@@ -140,3 +142,21 @@ class Query(graphene.ObjectType):
         payload = info.context.payload
         user_id = payload.get('user_id')
         return MatrixProfile.objects.get(user=user_id)
+
+   my_debate_chat_requests = graphene.List(DebateChatRequestType, status=graphene.String())
+   @login_required
+   def resolve_my_debate_chat_requests(self, info, status=None):
+        payload = info.context.payload
+        user_id = payload.get('user_id')
+        user_node = Users.nodes.get(user_id=user_id)
+        reqs = []
+        try:
+            reqs.extend(list(user_node.chat_requester))
+        except Exception:
+            pass
+        try:
+            reqs.extend(list(user_node.chat_responder))
+        except Exception:
+            pass
+        filtered = [r for r in reqs if (status is None or r.status == status)]
+        return [DebateChatRequestType.from_neomodel(r) for r in filtered]

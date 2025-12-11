@@ -1,7 +1,10 @@
 # vibe_manager/services/vibe_activity_service.py
 
 from django.contrib.auth.models import User
-from user_activity.models import VibeActivity
+try:
+    from user_activity.models import VibeActivity
+except Exception:
+    VibeActivity = None
 from django.utils import timezone
 import logging
 
@@ -61,6 +64,9 @@ class VibeActivityService:
             ... )
         """
         try:
+            if VibeActivity is None:
+                logger.info("VibeActivity model unavailable; skipping vibe_creation tracking")
+                return None
             # Handle user_id if passed instead of User object
             if isinstance(user, str):
                 user = User.objects.get(id=user)
@@ -134,6 +140,9 @@ class VibeActivityService:
             tuple: (sender_activity, receiver_activity) or (None, None) if failed
         """
         try:
+            if VibeActivity is None:
+                logger.info("VibeActivity model unavailable; skipping vibe_sending tracking")
+                return None, None
             # Handle user_id if passed instead of User object
             if isinstance(sender, str):
                 sender = User.objects.get(id=sender)
@@ -239,6 +248,9 @@ class VibeActivityService:
             VibeActivity: Created activity record or None if failed
         """
         try:
+            if VibeActivity is None:
+                logger.info("VibeActivity model unavailable; skipping vibe_view tracking")
+                return None
             # Handle user_id if passed instead of User object
             if isinstance(user, str):
                 user = User.objects.get(id=user)
@@ -297,6 +309,9 @@ class VibeActivityService:
             VibeActivity: Created activity record or None if failed
         """
         try:
+            if VibeActivity is None:
+                logger.info("VibeActivity model unavailable; skipping vibe_search tracking")
+                return None
             # Handle user_id if passed instead of User object
             if isinstance(user, str):
                 user = User.objects.get(id=user)
@@ -343,6 +358,9 @@ class VibeActivityService:
             user_agent: User agent string
         """
         try:
+            if VibeActivity is None:
+                logger.info("VibeActivity model unavailable; skipping vibe_viewing tracking")
+                return None
             # Handle user_id if passed instead of User object
             if isinstance(user, str):
                 user = User.objects.get(id=user)
@@ -398,6 +416,18 @@ class VibeActivityService:
             dict: Summary of vibe activities
         """
         try:
+            if VibeActivity is None:
+                return {
+                    'total_activities': 0,
+                    'vibes_created': 0,
+                    'vibes_sent': 0,
+                    'vibes_received': 0,
+                    'vibes_viewed': 0,
+                    'searches_performed': 0,
+                    'success_rate': 0,
+                    'most_active_day': None,
+                    'favorite_vibe_category': None
+                }
             from datetime import timedelta
             
             # Handle user_id if passed instead of User object

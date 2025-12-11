@@ -1,7 +1,10 @@
 from django.db.models import Count, Q, Avg, Sum, Max, Min
 from django.utils import timezone
 from datetime import datetime, timedelta
-from user_activity.models import VibeActivity
+try:
+    from user_activity.models import VibeActivity
+except Exception:
+    VibeActivity = None
 from auth_manager.models import Users
 from typing import Dict, List, Optional, Any
 import logging
@@ -27,6 +30,31 @@ class VibeAnalyticsService:
             Dictionary containing activity summary
         """
         try:
+            if VibeActivity is None:
+                return {
+                    'period': {
+                        'start_date': None,
+                        'end_date': None,
+                        'days': days
+                    },
+                    'overview': {
+                        'total_activities': 0,
+                        'successful_activities': 0,
+                        'failed_activities': 0,
+                        'success_rate': 0
+                    },
+                    'activity_breakdown': [],
+                    'vibe_type_breakdown': [],
+                    'daily_trends': [],
+                    'most_active_users': [],
+                    'popular_vibes': [],
+                    'score_impact': {
+                        'avg_score_impact': None,
+                        'max_score_impact': None,
+                        'min_score_impact': None,
+                        'total_score_impact': None
+                    }
+                }
             end_date = timezone.now()
             start_date = end_date - timedelta(days=days)
             
@@ -138,6 +166,28 @@ class VibeAnalyticsService:
             Dictionary containing creation analytics
         """
         try:
+            if VibeActivity is None:
+                return {
+                    'period': {
+                        'start_date': None,
+                        'end_date': None,
+                        'days': days
+                    },
+                    'creation_overview': {
+                        'total_attempts': 0,
+                        'successful_creations': 0,
+                        'failed_creations': 0,
+                        'success_rate': 0
+                    },
+                    'category_breakdown': [],
+                    'quality_analysis': {
+                        'avg_iq': None,
+                        'avg_aq': None,
+                        'avg_sq': None,
+                        'avg_hq': None
+                    },
+                    'hourly_patterns': []
+                }
             end_date = timezone.now()
             start_date = end_date - timedelta(days=days)
             
@@ -222,6 +272,26 @@ class VibeAnalyticsService:
             Dictionary containing engagement metrics
         """
         try:
+            if VibeActivity is None:
+                return {
+                    'period': {
+                        'start_date': None,
+                        'end_date': None,
+                        'days': days
+                    },
+                    'engagement_overview': {
+                        'total_activities': 0,
+                        'unique_users': 0,
+                        'unique_vibes': 0
+                    },
+                    'engagement_breakdown': [],
+                    'user_engagement_levels': {
+                        'high_engagement': 0,
+                        'medium_engagement': 0,
+                        'low_engagement': 0
+                    },
+                    'top_interactions': []
+                }
             end_date = timezone.now()
             start_date = end_date - timedelta(days=days)
             
@@ -297,6 +367,27 @@ class VibeAnalyticsService:
             Dictionary containing real-time stats
         """
         try:
+            if VibeActivity is None:
+                return {
+                    'timestamp': timezone.now().isoformat(),
+                    'last_24_hours': {
+                        'total_activities': 0,
+                        'creations': 0,
+                        'sendings': 0,
+                        'viewings': 0,
+                        'searches': 0,
+                        'unique_users': 0
+                    },
+                    'last_1_hour': {
+                        'total_activities': 0,
+                        'creations': 0,
+                        'sendings': 0,
+                        'viewings': 0,
+                        'searches': 0,
+                        'unique_users': 0
+                    },
+                    'recent_activities': []
+                }
             now = timezone.now()
             last_24h = now - timedelta(hours=24)
             last_1h = now - timedelta(hours=1)

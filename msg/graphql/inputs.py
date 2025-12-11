@@ -81,3 +81,18 @@ class UnbanUserByAgentInput(graphene.InputObjectType):
     agent_uid = graphene.String(required=True)
     community_id = graphene.ID(required=True)
     target_user_id = graphene.String(required=True)
+
+class CreateDebateChatRequestInput(graphene.InputObjectType):
+    source_type = graphene.String(required=True)  # 'post' | 'comment' | 'answer'
+    source_uid = graphene.String(required=True)
+
+class RespondDebateChatRequestInput(graphene.InputObjectType):
+    uid = graphene.String(required=True)
+    accept = graphene.Boolean(required=True)
+
+class RegisterDebateChatTurnInput(graphene.InputObjectType):
+    request_uid = graphene.String(required=True)
+    actor = graphene.String(required=True)  # 'requester' | 'responder'
+
+class ExpireDebateChatSessionInput(graphene.InputObjectType):
+    request_uid = graphene.String(required=True)

@@ -126,7 +126,9 @@ class CreateStory(Mutation):
                             event_type="story_mention",
                             recipients=mention_recipients,
                             username=created_by.username,
-                            story_id=story.uid
+                            story_id=story.uid,
+                            sender_uid=created_by.uid,
+                            sender_id=created_by.user_id
                         )
                 except Exception as e:
                     print(f"Failed to send story mention notification: {e}")
@@ -203,7 +205,9 @@ class CreateStory(Mutation):
                         recipients=followers,
                         username=created_by.username,
                         story_id=story.uid,
-                        story_thumbnail_url=story.story_image_id
+                        story_thumbnail_url=story.story_image_id,
+                        sender_uid=created_by.uid,
+                        sender_id=created_by.user_id
                     )
                 except Exception as e:
                     print(f"Failed to send story notification: {e}")
@@ -670,7 +674,9 @@ class CreateStoryReaction(Mutation):
                                 }],
                                 username=user.username,
                                 story_id=story.uid,
-                                reaction_type=input.reaction
+                                reaction_type=input.reaction,
+                                sender_uid=user.uid,
+                                sender_id=user.user_id
                             )
                 except Exception as e:
                     print(f"Failed to send story reaction notification: {e}")

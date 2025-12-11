@@ -272,4 +272,13 @@ class DeleteOpportunityLikeInput(graphene.InputObjectType):
     """Input type for removing like from opportunity"""
     opportunity_uid = graphene.String(required=True, description="UID of the opportunity")
 
+class ApplyToOpportunityInput(graphene.InputObjectType):
+    """Input type for applying to an opportunity"""
+    opportunity_uid = graphene.String(required=True, description="UID of the opportunity to apply to")
+    application_message = graphene.String(description="Optional message with application")
+
+class ApplyToOpportunityInput(graphene.InputObjectType):
+    """Input type for applying to an opportunity"""
+    opportunity_uid = graphene.String(required=True, description="UID of the opportunity to apply to")
+
 

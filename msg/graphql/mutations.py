@@ -8,6 +8,8 @@ from .raw_query.block_exist import relationship_exists
 from .types import *
 from auth_manager.models import Users
 from msg.models import *
+from msg.models import DebateChatRequest, MatrixProfile
+from neomodel import db
 from msg.util.matrix_vibe_sender import send_vibe_reaction_to_matrix
 from msg.util.matrix_message_utils import (
     get_community_matrix_messages,
@@ -30,6 +32,9 @@ from .messages import MsgMessages
 from graphql_jwt.decorators import login_required,superuser_required
 from msg.services.notification_service import NotificationService
 from community.models import Community, Membership
+from post.models import Post, Comment
+from community.utils.create_matrix_room_with_token import create_room
+from community.utils.matrix_invites import process_matrix_invites
 
 class CreateConversation(Mutation):
     conversation = graphene.Field(ConversationType)
@@ -1291,6 +1296,259 @@ class UnbanUserByAgent(graphene.Mutation):
             )
 
 
+
+class CreateDebateChatRequest(Mutation):
+    request = graphene.Field('msg.graphql.types.DebateChatRequestType')
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = CreateDebateChatRequestInput()
+
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+            requester = Users.nodes.get(user_id=user_id)
+
+            source_type = input.source_type.lower()
+            source_uid = input.source_uid
+
+            responder = None
+            topic_text = None
+            post_node = None
+            comment_node = None
+
+            if source_type == 'post':
+                post_node = Post.nodes.get(uid=source_uid)
+                responder = post_node.created_by.single()
+                topic_text = post_node.post_title or ''
+            else:
+                comment_node = Comment.nodes.get(uid=source_uid)
+                responder = comment_node.user.single()
+                topic_text = comment_node.content or ''
+
+            if not responder or responder.uid == requester.uid:
+                return CreateDebateChatRequest(request=None, success=False, message="Invalid chat request target")
+
+            # Prevent duplicate pending/active requests for same source and participants
+            dup_query = (
+                "MATCH (req:DebateChatRequest {source_uid: $source_uid, source_type: $source_type}) "
+                "MATCH (req)-[:CHAT_REQUESTER]->(:Users {uid: $requester_uid}) "
+                "MATCH (req)-[:CHAT_RESPONDER]->(:Users {uid: $responder_uid}) "
+                "WHERE req.status IN ['PENDING','ACCEPTED'] "
+                "RETURN req LIMIT 1"
+            )
+            dup_params = {
+                'source_uid': source_uid,
+                'source_type': source_type,
+                'requester_uid': requester.uid,
+                'responder_uid': responder.uid
+            }
+            dup_results, _ = db.cypher_query(dup_query, dup_params)
+            if dup_results and dup_results[0]:
+                try:
+                    existing_req = DebateChatRequest.inflate(dup_results[0][0])
+                    return CreateDebateChatRequest(
+                        request=DebateChatRequestType.from_neomodel(existing_req),
+                        success=False,
+                        message="Debate chat request already exists"
+                    )
+                except Exception:
+                    return CreateDebateChatRequest(
+                        request=None,
+                        success=False,
+                        message="Debate chat request already exists"
+                    )
+
+            # Set default opposing stance when source has a stance
+            requester_stance = None
+            responder_stance = None
+            if comment_node and getattr(comment_node, 'stance', None):
+                responder_stance = str(comment_node.stance).lower()
+                if responder_stance in ['for','against']:
+                    requester_stance = 'against' if responder_stance == 'for' else 'for'
+
+            req = DebateChatRequest(
+                source_type=source_type,
+                source_uid=source_uid,
+                topic_text=topic_text,
+                status='PENDING'
+            )
+            req.save()
+            req.requester.connect(requester)
+            req.responder.connect(responder)
+            if post_node:
+                req.post.connect(post_node)
+            if comment_node:
+                req.comment.connect(comment_node)
+            if requester_stance:
+                req.requester_stance = requester_stance
+            if responder_stance:
+                req.responder_stance = responder_stance
+            req.save()
+
+            return CreateDebateChatRequest(request=DebateChatRequestType.from_neomodel(req), success=True, message="Chat request created")
+        except Exception as error:
+            message=getattr(error,'message',str(error))
+            return CreateDebateChatRequest(request=None, success=False, message=message)
+
+class RespondDebateChatRequest(Mutation):
+    request = graphene.Field('msg.graphql.types.DebateChatRequestType')
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = RespondDebateChatRequestInput()
+
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+
+            req = DebateChatRequest.nodes.get(uid=input.uid)
+            responder = req.responder.single()
+            if not responder or responder.user_id != str(user_id):
+                return RespondDebateChatRequest(request=None, success=False, message="Permission denied")
+
+            if input.accept is False:
+                req.status = 'DECLINED'
+                req.save()
+                return RespondDebateChatRequest(request=DebateChatRequestType.from_neomodel(req), success=True, message="Chat request declined")
+
+            matrix_profile = MatrixProfile.objects.filter(user=user_id).first()
+            if not matrix_profile or not matrix_profile.matrix_user_id or not matrix_profile.access_token:
+                return RespondDebateChatRequest(request=None, success=False, message="Matrix not available")
+
+            room_id = asyncio.run(create_room(
+                access_token=matrix_profile.access_token,
+                user_id=matrix_profile.matrix_user_id,
+                room_name=req.topic_text or "Debate",
+                topic=req.topic_text or "",
+                visibility="private",
+                preset="private_chat"
+            ))
+
+            if isinstance(room_id, tuple):
+                room_id = room_id[0] if room_id[0] else None
+
+            if not room_id:
+                return RespondDebateChatRequest(request=None, success=False, message="Failed to create room")
+
+            req.matrix_room_id = room_id
+            req.status = 'ACCEPTED'
+            from django.utils import timezone
+            from datetime import timedelta
+            req.expires_at = timezone.now() + timedelta(hours=24)
+            req.requester_turns_used = 0
+            req.responder_turns_used = 0
+            req.save()
+
+            members = []
+            requester = req.requester.single()
+            if requester:
+                members.append(requester.uid)
+            process_matrix_invites(admin_user_id=user_id, room_id=room_id, member_ids=members)
+
+            return RespondDebateChatRequest(request=DebateChatRequestType.from_neomodel(req), success=True, message="Chat room created")
+        except Exception as error:
+            message=getattr(error,'message',str(error))
+            return RespondDebateChatRequest(request=None, success=False, message=message)
+
+class RegisterDebateChatTurn(Mutation):
+    request = graphene.Field('msg.graphql.types.DebateChatRequestType')
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = RegisterDebateChatTurnInput()
+
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+
+            req = DebateChatRequest.nodes.get(uid=input.request_uid)
+            from django.utils import timezone
+            if req.status != 'ACCEPTED' or (req.expires_at and timezone.now() > req.expires_at):
+                try:
+                    req.status = 'EXPIRED'
+                    req.save()
+                except Exception:
+                    pass
+                return RegisterDebateChatTurn(request=DebateChatRequestType.from_neomodel(req), success=False, message="Session expired or not active")
+
+            actor = input.actor.lower()
+            requester = req.requester.single()
+            responder = req.responder.single()
+            is_requester = requester and requester.user_id == str(user_id)
+            is_responder = responder and responder.user_id == str(user_id)
+            if actor == 'requester' and not is_requester:
+                return RegisterDebateChatTurn(request=None, success=False, message="Actor mismatch")
+            if actor == 'responder' and not is_responder:
+                return RegisterDebateChatTurn(request=None, success=False, message="Actor mismatch")
+
+            if actor == 'requester':
+                if req.requester_turns_used >= req.max_turns_per_user:
+                    return RegisterDebateChatTurn(request=DebateChatRequestType.from_neomodel(req), success=False, message="Turn limit reached")
+                req.requester_turns_used += 1
+            else:
+                if req.responder_turns_used >= req.max_turns_per_user:
+                    return RegisterDebateChatTurn(request=DebateChatRequestType.from_neomodel(req), success=False, message="Turn limit reached")
+                req.responder_turns_used += 1
+
+            req.save()
+            return RegisterDebateChatTurn(request=DebateChatRequestType.from_neomodel(req), success=True, message="Turn registered")
+        except Exception as error:
+            message=getattr(error,'message',str(error))
+            return RegisterDebateChatTurn(request=None, success=False, message=message)
+
+class ExpireDebateChatSession(Mutation):
+    request = graphene.Field('msg.graphql.types.DebateChatRequestType')
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        input = ExpireDebateChatSessionInput()
+
+    @login_required
+    def mutate(self, info, input):
+        try:
+            user = info.context.user
+            if user.is_anonymous:
+                raise GraphQLError("Authentication Failure")
+            payload = info.context.payload
+            user_id = payload.get('user_id')
+
+            req = DebateChatRequest.nodes.get(uid=input.request_uid)
+            requester = req.requester.single()
+            responder = req.responder.single()
+            allowed = (requester and requester.user_id == str(user_id)) or (responder and responder.user_id == str(user_id))
+            if not allowed:
+                return ExpireDebateChatSession(request=None, success=False, message="Permission denied")
+
+            from django.utils import timezone
+            req.status = 'EXPIRED'
+            req.expires_at = timezone.now()
+            req.save()
+            return ExpireDebateChatSession(request=DebateChatRequestType.from_neomodel(req), success=True, message="Session expired")
+        except Exception as error:
+            message=getattr(error,'message',str(error))
+            return ExpireDebateChatSession(request=None, success=False, message=message)
+
+
 class Mutation(graphene.ObjectType):
     Create_Conversation = CreateConversation.Field()
     Update_Conversation= UpdateConversation.Field()
@@ -1311,3 +1569,7 @@ class Mutation(graphene.ObjectType):
     kick_user_by_agent = KickUserByAgent.Field()
     ban_user_by_agent = BanUserByAgent.Field()
     unban_user_by_agent = UnbanUserByAgent.Field()
+    create_debate_chat_request = CreateDebateChatRequest.Field()
+    respond_debate_chat_request = RespondDebateChatRequest.Field()
+    register_debate_chat_turn = RegisterDebateChatTurn.Field()
+    expire_debate_chat_session = ExpireDebateChatSession.Field()

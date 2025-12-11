@@ -141,7 +141,8 @@ class Opportunity(DjangoNode, StructuredNode):
     share = RelationshipFrom('post.models.PostShare', 'HAS_OPPORTUNITY')
     view = RelationshipFrom('post.models.PostView', 'HAS_OPPORTUNITY')
     saved = RelationshipFrom('post.models.SavedPost', 'HAS_OPPORTUNITY')
-    
+    applications = RelationshipTo('OpportunityApplication', 'HAS_APPLICATION')
+
     # Future: Application tracking
     # applications = RelationshipFrom('opportunity.models.Application', 'APPLIED_TO')
     
@@ -197,25 +198,26 @@ class Opportunity(DjangoNode, StructuredNode):
         score = (likes * 1.0) + (comments * 2.0) + (shares * 3.0) + (views * 0.1)
         return score
 
+# ADD THIS NEW CLASS after the Opportunity class:
 
-# ========== FUTURE MODELS ==========
-# Uncomment and implement when adding applicant tracking features
-
-# class Application(DjangoNode, StructuredNode):
-#     """
-#     Application model for tracking job applications to opportunities.
-#     
-#     Future implementation for applicant tracking system.
-#     """
-#     uid = UniqueIdProperty()
-#     status = StringProperty(default='pending')  # pending, reviewed, shortlisted, rejected, hired
-#     cover_letter = StringProperty()
-#     resume_id = StringProperty()
-#     applied_at = DateTimeProperty(default_now=True)
-#     
-#     # Relationships
-#     applicant = RelationshipTo('auth_manager.models.Users', 'APPLICANT')
-#     opportunity = RelationshipTo('Opportunity', 'APPLIED_TO')
-#     
-#     class Meta:
-#         app_label = 'opportunity'
+class OpportunityApplication(StructuredNode):
+    """
+    Tracks user applications to opportunities.
+    Each application represents a user's interest in an opportunity.
+    
+    Used in: Application tracking, applicant lists, application history
+    """
+    uid = UniqueIdProperty()
+    applied_at = DateTimeProperty(default_now=True)
+    status = StringProperty(default='pending')  # pending, reviewed, accepted, rejected
+    is_active = BooleanProperty(default=True)
+    
+    # Relationships
+    applicant = RelationshipFrom('auth_manager.models.Users', 'APPLIED_TO')
+    opportunity = RelationshipFrom('Opportunity', 'HAS_APPLICATION')
+    
+    def save(self, *args, **kwargs):
+        """Update timestamp on save"""
+        if not self.uid:
+            self.applied_at = datetime.now()
+        super().save(*args, **kwargs)
